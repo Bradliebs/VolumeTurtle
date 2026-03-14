@@ -56,10 +56,51 @@ export default function SettingsPage() {
 
   const [dangerConfirm, setDangerConfirm] = useState("");
   const [dangerResult, setDangerResult] = useState<string | null>(null);
+  const [backupRunning, setBackupRunning] = useState(false);
+  const [backupResult, setBackupResult] = useState<string | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [backupDir, setBackupDir] = useState<string | null>(null);
 
   useEffect(() => {
     fetchSettings();
+    fetchBackupStatus();
   }, []);
+
+  async function fetchBackupStatus() {
+    try {
+      const res = await fetch("/api/backup");
+      if (res.ok) {
+        const json = await res.json();
+        setLastBackupAt(json.lastBackupAt);
+        setBackupDir(json.backupDir);
+      }
+    } catch {
+      // silent
+    }
+  }
+
+  async function triggerBackup() {
+    setBackupRunning(true);
+    setBackupResult(null);
+    try {
+      const res = await fetch("/api/backup", { method: "POST" });
+      const json = await res.json();
+      if (json.success) {
+        setBackupResult(`✓ Backup saved — ${json.tradeCount} trades, ${json.signalCount} signals`);
+        setLastBackupAt(new Date().toISOString());
+      } else {
+        setBackupResult(`✗ ${json.error}`);
+      }
+    } catch {
+      setBackupResult("✗ Backup failed");
+    } finally {
+      setBackupRunning(false);
+    }
+  }
+
+  function downloadExport(endpoint: string) {
+    window.open(`/api/export/${endpoint}`, "_blank");
+  }
 
   async function fetchSettings() {
     try {
@@ -372,6 +413,33 @@ export default function SettingsPage() {
           <div className="flex gap-4"><span className="text-[var(--dim)] w-28">Last scan</span><span>{fmtTime(data?.system.lastScan ?? null)}</span></div>
           <div className="flex gap-4"><span className="text-[var(--dim)] w-28">Database</span><span className="text-[var(--green)]">Connected</span></div>
           <div className="flex gap-4"><span className="text-[var(--dim)] w-28">Yahoo Finance</span><span className="text-[var(--green)]">Active</span></div>
+        </div>
+
+        <div className="mt-6 pt-4 border-t border-[var(--border)]">
+          <p className="text-[10px] text-[var(--dim)] font-semibold mb-3 tracking-widest uppercase">Data Export & Backup</p>
+          <div className="space-y-3 text-xs" style={mono}>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => downloadExport("trades")} className="px-3 py-1.5 border border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[var(--green)] transition-colors text-[10px] uppercase tracking-wider">
+                Export Trades CSV
+              </button>
+              <button onClick={() => downloadExport("signals")} className="px-3 py-1.5 border border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[var(--green)] transition-colors text-[10px] uppercase tracking-wider">
+                Export Signals CSV
+              </button>
+              <button onClick={() => downloadExport("full")} className="px-3 py-1.5 border border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[var(--green)] transition-colors text-[10px] uppercase tracking-wider">
+                Download Full Backup
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-4 text-[var(--dim)]">
+              <span>Last backup: <span className="text-white">{lastBackupAt ? fmtTime(lastBackupAt) : "Never"}</span></span>
+              {backupDir && <span>Folder: <span className="text-white">{backupDir}</span></span>}
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={triggerBackup} disabled={backupRunning} className="px-3 py-1.5 border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors text-[10px] uppercase tracking-wider disabled:opacity-40">
+                {backupRunning ? "BACKING UP…" : "RUN BACKUP NOW"}
+              </button>
+              {backupResult && <span className={backupResult.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{backupResult}</span>}
+            </div>
+          </div>
         </div>
 
         <div className="mt-6 pt-4 border-t border-[var(--red)]/30">

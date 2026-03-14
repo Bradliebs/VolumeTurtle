@@ -94,6 +94,7 @@ interface DashboardData {
   regime: RegimeData | null;
   equityCurve: EquityCurveData | null;
   sparklineSnapshots: SnapshotForSparkline[];
+  lastBackupAt: string | null;
 }
 
 interface EquityCurveData {
@@ -1171,6 +1172,21 @@ export default function Home() {
         <span className="text-[var(--border)]">|</span>
         <span className="text-sm text-[var(--dim)]">
           Last scan: <span className="text-white" style={mono}>{fmtTime(data?.lastScanTime ?? null)}</span>
+        </span>
+        <span className="text-[var(--border)]">|</span>
+        <span className="text-sm text-[var(--dim)]">
+          Backup:{" "}
+          {data?.lastBackupAt ? (
+            <span className={
+              Date.now() - new Date(data.lastBackupAt).getTime() > 25 * 3600_000
+                ? "text-[var(--amber)]"
+                : "text-white"
+            } style={mono}>
+              {fmtTime(data.lastBackupAt)} {Date.now() - new Date(data.lastBackupAt).getTime() > 25 * 3600_000 ? "⚠" : "✓"}
+            </span>
+          ) : (
+            <span className="text-[var(--red)]" style={mono}>Never ✗</span>
+          )}
         </span>
         {data?.scheduledScans && (
           <>

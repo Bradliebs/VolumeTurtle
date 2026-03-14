@@ -30,7 +30,7 @@ export async function GET() {
   const sixtyDaysAgo = new Date();
   sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
-  const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan] =
+  const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
     await Promise.all([
       prisma.accountSnapshot.findFirst({ orderBy: { date: "desc" } }),
       prisma.trade.findMany({
@@ -63,6 +63,7 @@ export async function GET() {
         where: { market: "US", status: "COMPLETED" },
         orderBy: { startedAt: "desc" },
       }),
+      prisma.settings.findUnique({ where: { key: "last_backup_at" } }),
     ]);
 
   // Fetch current market regime (QQQ + VIX)
@@ -230,6 +231,7 @@ export async function GET() {
     actions,
     instructions,
     scheduledScans,
+    lastBackupAt: lastBackupSetting?.value ?? null,
     regime: regime
       ? {
           marketRegime: regime.marketRegime,

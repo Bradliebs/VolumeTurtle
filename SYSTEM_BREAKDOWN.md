@@ -364,7 +364,7 @@ in the header if the scan didn't fire.
 
 ---
 
-## API Routes (14 Endpoints)
+## API Routes (18 Endpoints)
 
 | Route | Method | Purpose |
 |-------|--------|---------|
@@ -382,6 +382,10 @@ in the header if the scan didn't fire.
 | `/api/t212/test` | POST | Test Trading 212 connection |
 | `/api/t212/positions` | GET | Fetch live T212 positions |
 | `/api/t212/sync` | POST | Sync T212 data |
+| `/api/export/trades` | GET | Download trades CSV |
+| `/api/export/signals` | GET | Download signals CSV |
+| `/api/export/full` | GET | Download full JSON backup |
+| `/api/backup` | GET/POST | Backup status / trigger backup |
 
 ### Dashboard Response Structure
 
@@ -521,6 +525,8 @@ All settings configurable via environment variables:
 | `schedule:setup` | `setupScheduler.bat` | Create Windows scheduled tasks |
 | `schedule:remove` | `schtasks /delete ...` | Remove scheduled tasks |
 | `schedule:status` | `schtasks /query ...` | Check task status |
+| `backup` | `tsx scripts/backup.ts` | Manual backup to local folder |
+| `restore` | `tsx scripts/restore.ts` | Restore from JSON backup |
 
 ---
 
@@ -531,8 +537,10 @@ volume-turtle/
 ├── prisma/
 │   └── schema.prisma              # Database schema (11 models)
 ├── scripts/
-│   ├── nightlyScan.ts             # Core nightly scan script
+│   ├── nightlyScan.ts             # Core nightly scan script (with auto-backup)
 │   ├── validateUniverse.ts        # Ticker validation against Yahoo
+│   ├── backup.ts                  # Backup script (JSON + CSV)
+│   ├── restore.ts                 # Restore from JSON backup
 │   ├── setupScheduler.bat         # Windows Task Scheduler setup
 │   ├── start.bat                  # App startup script
 │   └── checkTrades.ts             # Trade checking utility
@@ -592,6 +600,36 @@ volume-turtle/
 ├── package.json                   # Dependencies and scripts
 ├── docker-compose.yml             # PostgreSQL container
 └── tailwind.config.ts             # Tailwind configuration
+```
+
+---
+
+## CSV Export & Backup
+
+### Manual Exports (Settings Page)
+
+| Button | Endpoint | Format |
+|--------|----------|--------|
+| Export Trades CSV | `GET /api/export/trades` | CSV download |
+| Export Signals CSV | `GET /api/export/signals` | CSV download |
+| Download Full Backup | `GET /api/export/full` | JSON download |
+| Run Backup Now | `POST /api/backup` | Saves to local folder |
+
+### Automatic Backup
+
+- Runs automatically after every nightly scan
+- Saves full JSON + trades CSV to `%USERPROFILE%\VolumeTurtle\backups\`
+- Keeps 30 days of rolling backups, deletes older
+- Backup status visible in dashboard header (✓ / ⚠ overdue / ✗ never)
+
+### Restore
+
+```bash
+# Preview what will be restored
+npx tsx scripts/restore.ts --file="path/to/backup.json" --dry-run
+
+# Restore (replaces all existing data)
+npx tsx scripts/restore.ts --file="path/to/backup.json"
 ```
 
 ---

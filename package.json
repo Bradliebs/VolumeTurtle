@@ -16,7 +16,9 @@
     "validate": "npx tsx scripts/validateUniverse.ts",
     "schedule:setup": "scripts\\setupScheduler.bat",
     "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
-    "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan"
+    "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",
+    "backup": "npx tsx scripts/backup.ts",
+    "restore": "npx tsx scripts/restore.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.5.0",

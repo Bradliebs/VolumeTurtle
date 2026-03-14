@@ -380,6 +380,17 @@ async function main() {
 
   // 9. Print summary
   printSummary();
+
+  // 10. Auto-backup
+  if (!DRY_RUN) {
+    try {
+      const { runBackup } = await import("./backup");
+      const backupResult = await runBackup();
+      console.log(`✓ Auto-backup: ${backupResult.backupPath}`);
+    } catch (err) {
+      console.error("⚠ Auto-backup failed (scan completed successfully):", err);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
