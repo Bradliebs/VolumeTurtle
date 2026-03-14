@@ -10,6 +10,7 @@ import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculatePositionSize } from "@/lib/risk/positionSizer";
 import { getCurrencySymbol } from "@/lib/currency";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -36,6 +37,10 @@ export async function GET(request: NextRequest) {
 
     // 1. Load balance
     const accountBalance = await loadAccountBalance();
+
+    // 1a. Calculate equity curve state
+    const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
+    const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
 
     // 1b. Calculate market regime (once per scan)
     const marketRegime = await calculateMarketRegime();
@@ -216,7 +221,7 @@ export async function GET(request: NextRequest) {
         exited: tradesExited.length,
       },
       signalsFired: signals.map((s) => {
-        const pos = calculatePositionSize(s, accountBalance);
+        const pos = calculatePositionSize(s, accountBalance, equityCurveState);
         return {
           ticker: s.ticker,
           currency: getCurrencySymbol(s.ticker),
@@ -269,6 +274,18 @@ export async function GET(request: NextRequest) {
         qqqPctAboveMA: marketRegime.qqqPctAboveMA,
         volatilityRegime: marketRegime.volatilityRegime,
         vixLevel: marketRegime.vixLevel,
+      },
+      equityCurve: {
+        systemState: equityCurveState.systemState,
+        currentBalance: equityCurveState.currentBalance,
+        peakBalance: equityCurveState.peakBalance,
+        drawdownPct: equityCurveState.drawdownPct,
+        drawdownAbs: equityCurveState.drawdownAbs,
+        equityMA20: equityCurveState.equityMA20,
+        aboveEquityMA: equityCurveState.aboveEquityMA,
+        riskPctPerTrade: equityCurveState.riskPctPerTrade,
+        maxPositions: equityCurveState.maxPositions,
+        reason: equityCurveState.reason,
       },
     });
   } catch (err) {

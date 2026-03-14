@@ -54,6 +54,102 @@ Both conditions must be true for a signal to fire:
 
 ---
 
+## Regime Filter (Advisory)
+
+Three-layer filter that gates whether a signal is actionable based on market conditions.
+**Purely advisory** — never blocks trades, only warns. Human retains final decision.
+
+### Layer 1 — Market Regime (QQQ Trend)
+
+| Condition | Result |
+|-----------|--------|
+| QQQ close ≥ 200-day SMA | **BULLISH** |
+| QQQ close < 200-day SMA | **BEARISH** |
+
+QQQ is used as the benchmark (better proxy for the tech/AI/crypto-heavy universe than SPY).
+Fetched with 280-day lookback to calculate the 200-day SMA.
+
+### Layer 2 — Volatility Regime (VIX)
+
+| VIX Level | Result |
+|-----------|--------|
+| < 25 | **NORMAL** |
+| 25–35 | **ELEVATED** — increased false signal risk |
+| > 35 | **PANIC** — high false signal risk |
+
+### Layer 3 — Ticker Trend (50-day MA)
+
+| Condition | Result |
+|-----------|--------|
+| Ticker close ≥ 50-day SMA | **UPTREND** — signal valid |
+| Ticker close < 50-day SMA | **DOWNTREND** — signal flagged |
+| < 50 days of data | **INSUFFICIENT_DATA** |
+
+### Overall Assessment
+
+| Score | Layers Green | Assessment | Signal Card Border |
+|-------|-------------|------------|-------------------|
+| 3 | All three | **STRONG** | Green |
+| 2 | Two of three | **CAUTION** | Amber |
+| 0–1 | One or none | **AVOID** | Red |
+
+### Implementation
+
+- Market regime (QQQ + VIX) calculated **once per scan** — not per ticker
+- Ticker trend calculated per signal
+- Regime state stored in `ScanRun` table (`marketRegime`, `vixLevel`, `qqqVs200MA`)
+- `RegimeAssessment` attached to each `VolumeSignal`
+- Dashboard shows persistent **Regime Banner** below header with QQQ/VIX status
+- Signal cards show full regime breakdown with colour-coded warnings
+- Scan history table includes REGIME column
+
+---
+
+## Equity Curve Circuit Breaker
+
+Automatically reduces risk when the account is in a drawdown and restores it when conditions improve.
+
+### System States
+
+| State | Trigger | Risk/Trade | Max Positions | Effect |
+|-------|---------|-----------|--------------|--------|
+| **NORMAL** | Drawdown < 10% AND above equity MA20 | 2.0% | 5 | Full operation |
+| **CAUTION** | Drawdown ≥ 10% OR below equity MA20 | 1.0% | 3 | Reduced risk |
+| **PAUSE** | Drawdown ≥ 20% | 0% | 0 | No new entries, exits only |
+
+### Drawdown Tracking
+
+- **Peak balance** = highest `AccountSnapshot.balance` ever recorded
+- **Drawdown %** = `(peak - current) / peak × 100`
+- **Equity MA20** = 20-period SMA of daily balances (needs ≥ 5 snapshots)
+
+### Recovery Logic
+
+Recovery requires the qualifying condition to hold for **3 consecutive AccountSnapshots**:
+- PAUSE → CAUTION: drawdown drops below 20%
+- CAUTION → NORMAL: drawdown drops below 10% AND balance above equity MA20
+
+### Dashboard
+
+- **NORMAL**: single-line summary (balance, peak, drawdown, sparkline)
+- **CAUTION**: amber-bordered panel with reduced risk details and recovery conditions
+- **PAUSE**: red-bordered panel, no new entries, recovery amount shown
+- **Sparkline**: SVG chart of last 30 snapshots with peak line and MA20 line
+
+### Signal Card
+
+Each signal card shows system state:
+- NORMAL: "✅ NORMAL — full 2% risk active"
+- CAUTION: shows reduced shares/exposure, drawdown details
+- PAUSE: "MARK AS PLACED" button disabled, shows recovery requirement
+
+### Key Principle
+
+Existing open trades are **never affected** — stops and exits continue normally.
+Only new position sizing and entry decisions are gated by the circuit breaker.
+
+---
+
 ## Risk Management
 
 | Parameter | Default | Env Variable |
@@ -134,22 +230,23 @@ Calculated from last 20 bars: `avg(close × volume)`
 
 ```
 1. Load account balance (DB snapshot or env var)
-2. Fetch 60 days OHLCV for universe (Yahoo Finance)
+2. Calculate market regime (QQQ 200MA + VIX)
+3. Fetch 60 days OHLCV for universe (Yahoo Finance)
    ├─ Batched: 10 tickers per batch
    ├─ 500ms delay between batches
    └─ Skip tickers with < 25 days of data
-3. Filter by liquidity threshold
-4. Generate signals (volume spike + price confirmation)
-5. Sort signals by volumeRatio descending (strongest first)
-6. Check open positions < maxPositions (5)
-7. Enter new trades → write to DB
-8. Process exits on open trades
+4. Filter by liquidity threshold
+5. Generate signals (volume spike + price confirmation + regime assessment)
+6. Sort signals by volumeRatio descending (strongest first)
+7. Check open positions < maxPositions (5)
+8. Enter new trades → write to DB
+9. Process exits on open trades
    ├─ Hard stop check
    ├─ Trailing stop check
    └─ Update trailing stop (ratchet up)
-9. Write StopHistory records
-10. Save AccountSnapshot
-11. Log ScanRun (trigger, market, duration)
+10. Write StopHistory records
+11. Save AccountSnapshot
+12. Log ScanRun (trigger, market, duration, regime)
 ```
 
 ### Scan Modes
@@ -214,7 +311,7 @@ in the header if the scan didn't fire.
 | **DailyQuote** | OHLCV bars from Yahoo | `tickerId`, `date`, OHLC, `volume` (BigInt) |
 | **Signal** | Generated volume spike signals | `tickerId`, `date`, `type`, `strength` (0–1) |
 | **RiskCalc** | Position sizing calc | `signalId`, `entryPrice`, `stopPrice`, `positionSize` |
-| **ScanRun** | Scan run metadata | `status`, `trigger`, `market`, `durationMs`, `signalsFound` |
+| **ScanRun** | Scan run metadata | `status`, `trigger`, `market`, `durationMs`, `signalsFound`, `marketRegime`, `vixLevel`, `qqqVs200MA` |
 | **Trade** | Open/closed trades | `ticker`, entry/exit, stops, `rMultiple`, `status` |
 | **StopHistory** | Daily stop level per trade | `stopLevel`, `stopType`, `changed`, `actioned` |
 | **ScanResult** | Per-ticker scan result | `ticker`, `scanDate`, `signalFired`, `actionTaken` |
@@ -228,7 +325,7 @@ in the header if the scan didn't fire.
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/dashboard` | GET | Full dashboard data: balance, trades, signals, instructions, schedule status, scan history |
+| `/api/dashboard` | GET | Full dashboard data: balance, trades, signals, instructions, schedule status, scan history, regime |
 | `/api/scan` | GET | Run scan (`?dry=true\|false`) — signals, near misses, entries, exits |
 | `/api/scan/scheduled` | GET | Scheduled scan (`?market=LSE\|US&token=SECRET`) |
 | `/api/trades` | POST | Create a new trade |
@@ -258,7 +355,8 @@ in the header if the scan didn't fire.
     lse: { nextRun, lastRun, lastRunSignals, missed }
     us:  { nextRun, lastRun, lastRunSignals, missed }
   }
-  scanHistory: ScanHistoryEntry[]  // last 20 scans
+  regime: RegimeData | null     // QQQ/VIX market regime
+  scanHistory: ScanHistoryEntry[]  // last 20 scans (with regime)
 }
 ```
 
@@ -315,13 +413,15 @@ Instruments are cached per session.
 | Section | Description |
 |---------|-------------|
 | **Header** | Balance (editable), open positions, exposure %, last scan, schedule status (LSE/US countdowns), sync button |
+| **Regime Banner** | Persistent QQQ/VIX status: BULLISH/BEARISH, NORMAL/ELEVATED/PANIC, overall assessment (FAVOURABLE/CAUTION/HOSTILE) with colour-coded background |
+| **Equity Curve** | System state panel: NORMAL (one-line), CAUTION (amber, reduced risk details), PAUSE (red, no entries). SVG sparkline of last 30 snapshots |
 | **Action Required** | EXIT (red) / STOP_UPDATE (amber) / NEW_SIGNAL alerts |
 | **Daily Instructions** | Per-trade instructions: HOLD / UPDATE_STOP / EXIT with specific prices and actions |
 | **Open Positions** | Table with entry, current price, stops, T212 stop comparison, P&L, sync button, mark exited |
 | **Signal Log + Scan Panel** | Two-column: recent signals (14 days) and scan controls (dry run / live scan with confirmation modal) |
-| **Signal Cards** | Entry, stop, shares, exposure %, volume ratio bar, range position bar |
+| **Signal Cards** | Entry, stop, shares, exposure %, volume ratio bar, range position bar, regime assessment (3 layers + overall), system state (NORMAL/CAUTION/PAUSE) |
 | **Trade History** | Closed trades with R-multiple, win rate, avg R |
-| **Scan History** | Collapsible table: date, time, market, signals, tickers scanned, trigger (SCHEDULED/MANUAL), duration, status |
+| **Scan History** | Collapsible table: date, time, market, regime, signals, tickers scanned, trigger (SCHEDULED/MANUAL), duration, status |
 
 ### Design System
 
@@ -431,10 +531,12 @@ volume-turtle/
 │       ├── risk/
 │       │   ├── atr.ts             # ATR calculation (Wilder's smoothing)
 │       │   ├── positionSizer.ts   # Position size calculator
+│       │   ├── equityCurve.ts     # Equity curve circuit breaker
 │       │   └── index.ts           # Risk exports
 │       ├── signals/
 │       │   ├── volumeSignal.ts    # Volume spike signal generator
 │       │   ├── exitSignal.ts      # Trailing stop / exit logic
+│       │   ├── regimeFilter.ts    # Three-layer regime filter (QQQ, VIX, ticker MA)
 │       │   └── index.ts           # Signal exports
 │       ├── t212/
 │       │   └── client.ts          # Trading 212 API client
@@ -493,6 +595,8 @@ npm run schedule:setup
 6. **Market-specific scheduling** — LSE and US scanned separately at their respective close times.
 7. **Pence normalisation** — All LSE prices stored and displayed in pounds, not pence.
 8. **Fractional shares** — Position sizer outputs fractional quantities for T212 compatibility.
+9. **Advisory regime filter** — Three-layer market/volatility/trend filter warns but never blocks. Human always decides.
+10. **Equity curve circuit breaker** — Automatic risk reduction at 10% drawdown, full pause at 20%. Recovery requires 3 consecutive qualifying snapshots.
 
 ---
 

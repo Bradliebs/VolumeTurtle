@@ -1,5 +1,6 @@
 import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { config } from "@/lib/config";
+import type { EquityCurveState } from "./equityCurve";
 
 export interface PositionSize {
   ticker: string;
@@ -10,18 +11,31 @@ export interface PositionSize {
   totalExposure: number;
   exposurePercent: number;
   exposureWarning: string | null;
+  equityState: string | null;
+  effectiveRiskPct: number;
 }
 
 /**
  * Size a position based on configured risk % and the signal's riskPerShare.
- * Returns null if the total exposure is less than £1.
+ * If an equityCurveState is provided, uses adjusted risk parameters.
+ * Returns null if the total exposure is less than £1 or system is PAUSED.
  * Supports fractional shares (Trading 212).
  */
 export function calculatePositionSize(
   signal: VolumeSignal,
   accountBalance: number,
+  equityCurveState?: EquityCurveState,
 ): PositionSize | null {
-  const dollarRisk = accountBalance * config.riskPctPerTrade;
+  // If PAUSE state — no new positions
+  if (equityCurveState?.systemState === "PAUSE") {
+    return null;
+  }
+
+  const effectiveRiskPct = equityCurveState
+    ? equityCurveState.riskPctPerTrade / 100
+    : config.riskPctPerTrade;
+
+  const dollarRisk = accountBalance * effectiveRiskPct;
   const shares = Math.round((dollarRisk / signal.riskPerShare) * 10000) / 10000;
 
   const totalExposure = shares * signal.suggestedEntry;
@@ -43,6 +57,8 @@ export function calculatePositionSize(
     totalExposure,
     exposurePercent,
     exposureWarning,
+    equityState: equityCurveState?.systemState ?? null,
+    effectiveRiskPct: (equityCurveState?.riskPctPerTrade ?? config.riskPctPerTrade * 100),
   };
 }
 

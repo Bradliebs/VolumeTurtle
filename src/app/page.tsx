@@ -92,6 +92,26 @@ interface DashboardData {
   };
   scanHistory: ScanHistoryEntry[];
   regime: RegimeData | null;
+  equityCurve: EquityCurveData | null;
+  sparklineSnapshots: SnapshotForSparkline[];
+}
+
+interface EquityCurveData {
+  systemState: "NORMAL" | "CAUTION" | "PAUSE";
+  currentBalance: number;
+  peakBalance: number;
+  drawdownPct: number;
+  drawdownAbs: number;
+  equityMA20: number | null;
+  aboveEquityMA: boolean;
+  riskPctPerTrade: number;
+  maxPositions: number;
+  reason: string;
+}
+
+interface SnapshotForSparkline {
+  date: string;
+  balance: number;
 }
 
 interface RegimeData {
@@ -166,6 +186,8 @@ interface SignalFired {
     dollarRisk: number;
     exposurePercent: number;
     exposureWarning: string | null;
+    equityState: string | null;
+    effectiveRiskPct: number;
   } | null;
   regimeAssessment: RegimeAssessmentData | null;
 }
@@ -188,6 +210,7 @@ interface ScanResponse {
   openPositions: number;
   balance: number;
   regime?: RegimeData;
+  equityCurve?: EquityCurveData;
   error?: string;
 }
 
@@ -321,6 +344,134 @@ function ConfirmModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Equity Sparkline (SVG)
+// ---------------------------------------------------------------------------
+
+function EquitySparkline({ snapshots, peak, ma20 }: { snapshots: SnapshotForSparkline[]; peak: number; ma20: number | null }) {
+  if (snapshots.length < 2) return null;
+
+  const W = 400;
+  const H = 80;
+  const PAD = 4;
+
+  const balances = snapshots.map((s) => s.balance);
+  const minBal = Math.min(...balances) * 0.98;
+  const maxBal = Math.max(peak, ...balances) * 1.02;
+  const range = maxBal - minBal || 1;
+
+  const toX = (i: number) => PAD + (i / (snapshots.length - 1)) * (W - 2 * PAD);
+  const toY = (v: number) => H - PAD - ((v - minBal) / range) * (H - 2 * PAD);
+
+  const linePoints = snapshots.map((s, i) => `${toX(i)},${toY(s.balance)}`).join(" ");
+  const last = snapshots[snapshots.length - 1]!;
+  const trending = last.balance >= snapshots[0]!.balance;
+  const lineColor = trending ? "var(--green)" : "var(--red)";
+
+  return (
+    <svg width={W} height={H} className="block" style={{ maxWidth: "100%" }}>
+      {/* Peak line */}
+      <line x1={PAD} y1={toY(peak)} x2={W - PAD} y2={toY(peak)} stroke="var(--dim)" strokeWidth={1} strokeDasharray="4 3" opacity={0.5} />
+      {/* MA20 line */}
+      {ma20 !== null && (
+        <line x1={PAD} y1={toY(ma20)} x2={W - PAD} y2={toY(ma20)} stroke="var(--amber)" strokeWidth={1} strokeDasharray="4 3" opacity={0.5} />
+      )}
+      {/* Equity line */}
+      <polyline points={linePoints} fill="none" stroke={lineColor} strokeWidth={1.5} />
+      {/* Current dot */}
+      <circle cx={toX(snapshots.length - 1)} cy={toY(last.balance)} r={3} fill={lineColor} />
+    </svg>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Equity Curve Panel
+// ---------------------------------------------------------------------------
+
+function EquityCurvePanel({ data, snapshots }: { data: EquityCurveData | null; snapshots: SnapshotForSparkline[] }) {
+  if (!data) return null;
+
+  const isNormal = data.systemState === "NORMAL";
+  const isCaution = data.systemState === "CAUTION";
+  const isPause = data.systemState === "PAUSE";
+
+  if (isNormal) {
+    return (
+      <section className="mb-6">
+        <div className="border border-[var(--border)] bg-[var(--card)] p-4 flex flex-wrap items-center gap-4" style={mono}>
+          <span className="text-xs font-semibold text-[var(--dim)] tracking-widest">EQUITY CURVE</span>
+          <span className="text-sm text-[var(--dim)]">
+            Balance <span className="text-white">{fmtMoney(data.currentBalance)}</span>
+          </span>
+          <span className="text-[var(--border)]">|</span>
+          <span className="text-sm text-[var(--dim)]">
+            Peak <span className="text-white">{fmtMoney(data.peakBalance)}</span>
+          </span>
+          <span className="text-[var(--border)]">|</span>
+          <span className="text-sm text-[var(--dim)]">
+            Drawdown <span className="text-white">{data.drawdownPct.toFixed(1)}%</span>
+          </span>
+          <span className="text-[var(--border)]">|</span>
+          <span className="text-sm text-[var(--green)]">✅ NORMAL — full risk active</span>
+          {snapshots.length >= 2 && (
+            <div className="ml-auto">
+              <EquitySparkline snapshots={snapshots} peak={data.peakBalance} ma20={data.equityMA20} />
+            </div>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  const borderColor = isCaution ? "var(--amber)" : "var(--red)";
+  const bgTint = isCaution ? "#1a1400" : "#1a0000";
+  const icon = isCaution ? "⚠" : "🔴";
+  const label = isCaution ? "CAUTION MODE ACTIVE" : "SYSTEM PAUSED — NO NEW ENTRIES";
+
+  return (
+    <section className="mb-6">
+      <div className="p-4" style={{ border: `1px solid ${borderColor}`, background: bgTint, ...mono }}>
+        <p className="text-sm font-bold mb-3" style={{ color: borderColor }}>
+          {icon} {label}
+        </p>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs mb-3">
+          <span className="text-[var(--dim)]">Current balance</span>
+          <span className="text-white">{fmtMoney(data.currentBalance)}</span>
+          <span className="text-[var(--dim)]">Peak balance</span>
+          <span className="text-white">{fmtMoney(data.peakBalance)}</span>
+          <span className="text-[var(--dim)]">Drawdown</span>
+          <span style={{ color: borderColor }}>{fmtMoney(data.drawdownAbs)} ({data.drawdownPct.toFixed(1)}% from peak)</span>
+          {data.equityMA20 !== null && (
+            <>
+              <span className="text-[var(--dim)]">Equity MA20</span>
+              <span className={data.aboveEquityMA ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                {fmtMoney(data.equityMA20)} — currently {data.aboveEquityMA ? "ABOVE" : "BELOW"} MA
+              </span>
+            </>
+          )}
+          {isCaution && (
+            <>
+              <span className="text-[var(--dim)]">Risk per trade</span>
+              <span style={{ color: borderColor }}>{data.riskPctPerTrade.toFixed(1)}% (reduced from 2.0%)</span>
+              <span className="text-[var(--dim)]">Max positions</span>
+              <span style={{ color: borderColor }}>{data.maxPositions} (reduced from 5)</span>
+            </>
+          )}
+          {isPause && (
+            <>
+              <span className="text-[var(--dim)]">Recovery needed</span>
+              <span className="text-[var(--dim)]">{fmtMoney(data.drawdownAbs)} to return to NORMAL</span>
+            </>
+          )}
+        </div>
+        {snapshots.length >= 2 && (
+          <EquitySparkline snapshots={snapshots} peak={data.peakBalance} ma20={data.equityMA20} />
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -485,11 +636,13 @@ function SignalCard({
   dryRun,
   onMarkPlaced,
   placing,
+  equityCurve,
 }: {
   signal: SignalFired;
   dryRun: boolean;
   onMarkPlaced: (signal: SignalFired) => void;
   placing: boolean;
+  equityCurve?: EquityCurveData | null;
 }) {
   const stopPct = pctChange(signal.suggestedEntry, signal.hardStop);
   const pos = signal.positionSize;
@@ -582,17 +735,38 @@ function SignalCard({
           </div>
         </div>
       )}
+      {equityCurve && (
+        <div className="border-t border-[var(--border)] pt-3 mb-4 text-xs" style={mono}>
+          <p className="text-[var(--dim)] font-semibold tracking-widest mb-2">─── SYSTEM STATE ───</p>
+          {equityCurve.systemState === "NORMAL" ? (
+            <p className="text-[var(--green)]">✅ NORMAL — full {equityCurve.riskPctPerTrade.toFixed(1)}% risk active</p>
+          ) : equityCurve.systemState === "CAUTION" ? (
+            <div>
+              <p className="text-[var(--amber)] mb-1">⚠ CAUTION — risk reduced to {equityCurve.riskPctPerTrade.toFixed(1)}%</p>
+              <p className="text-[var(--dim)]">Peak: {fmtMoney(equityCurve.peakBalance)} | Current: {fmtMoney(equityCurve.currentBalance)} | Drawdown: {equityCurve.drawdownPct.toFixed(1)}%</p>
+              <p className="text-[var(--dim)]">Max positions: {equityCurve.maxPositions} (reduced from 5)</p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-[var(--red)] mb-1">🔴 PAUSED — account down {equityCurve.drawdownPct.toFixed(1)}% from peak</p>
+              <p className="text-[var(--dim)]">No new entries until recovery. Manage existing positions only.</p>
+              <p className="text-[var(--dim)]">Peak: {fmtMoney(equityCurve.peakBalance)} | Current: {fmtMoney(equityCurve.currentBalance)}</p>
+            </div>
+          )}
+        </div>
+      )}
       <button
         onClick={() => onMarkPlaced(signal)}
-        disabled={dryRun || placing || !pos}
+        disabled={dryRun || placing || !pos || equityCurve?.systemState === "PAUSE"}
         className={`w-full px-4 py-2 text-xs border font-semibold transition-colors ${
-          dryRun
+          dryRun || equityCurve?.systemState === "PAUSE"
             ? "border-[#333] text-[#555] cursor-not-allowed"
             : "border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black"
         }`}
         style={mono}
+        title={equityCurve?.systemState === "PAUSE" ? "System paused — manage exits only" : undefined}
       >
-        {placing ? "SAVING…" : dryRun ? "DRY RUN — not written" : "MARK AS PLACED"}
+        {placing ? "SAVING…" : dryRun ? "DRY RUN — not written" : equityCurve?.systemState === "PAUSE" ? "PAUSED — exits only" : "MARK AS PLACED"}
       </button>
     </div>
   );
@@ -975,6 +1149,9 @@ export default function Home() {
 
       {/* ── REGIME BANNER ── */}
       <RegimeBanner regime={data?.regime ?? null} />
+
+      {/* ── EQUITY CURVE ── */}
+      <EquityCurvePanel data={data?.equityCurve ?? null} snapshots={data?.sparklineSnapshots ?? []} />
 
       {/* ── ACTION REQUIRED ── */}
       {actionItems.length > 0 && (
@@ -1427,6 +1604,7 @@ export default function Home() {
                       dryRun={scanResult.dryRun}
                       onMarkPlaced={markPlaced}
                       placing={placingTicker === s.ticker}
+                      equityCurve={scanResult.equityCurve}
                     />
                   ))}
 

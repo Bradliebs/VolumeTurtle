@@ -9,6 +9,7 @@ import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
 import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -45,6 +46,10 @@ export async function GET(req: NextRequest) {
   try {
     // 1. Load balance
     const accountBalance = await loadAccountBalance();
+
+    // 1a. Calculate equity curve state
+    const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
+    const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
 
     // 1b. Calculate market regime
     const marketRegime = await calculateMarketRegime();
@@ -188,6 +193,7 @@ export async function GET(req: NextRequest) {
       tickersScanned: liquidTickers.length,
       signalsFound: signals.length,
       tradesExited: tradesExited.length,
+      systemState: equityCurveState.systemState,
       durationMs,
       signals: signals.map((s) => ({
         ticker: s.ticker,

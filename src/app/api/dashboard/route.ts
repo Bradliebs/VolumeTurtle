@@ -4,6 +4,8 @@ import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { getCurrencySymbol } from "@/lib/currency";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import type { RegimeState } from "@/lib/signals/regimeFilter";
+import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
+import { config } from "@/lib/config";
 
 function getNextScheduledRun(hour: number, minute: number): { label: string; iso: string } {
   const now = new Date();
@@ -70,6 +72,14 @@ export async function GET() {
   } catch {
     // If regime fetch fails, dashboard still loads
   }
+
+  // Calculate equity curve state
+  const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
+  const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
+  const sparklineSnapshots = allSnapshots.slice(-30).map((s) => ({
+    date: s.date.toISOString().slice(0, 10),
+    balance: s.balance,
+  }));
 
   // Compute actions and daily instructions for open trades
   const actions: Array<{
@@ -231,6 +241,19 @@ export async function GET() {
           asOf: regime.asOf,
         }
       : null,
+    equityCurve: {
+      systemState: equityCurveState.systemState,
+      currentBalance: equityCurveState.currentBalance,
+      peakBalance: equityCurveState.peakBalance,
+      drawdownPct: equityCurveState.drawdownPct,
+      drawdownAbs: equityCurveState.drawdownAbs,
+      equityMA20: equityCurveState.equityMA20,
+      aboveEquityMA: equityCurveState.aboveEquityMA,
+      riskPctPerTrade: equityCurveState.riskPctPerTrade,
+      maxPositions: equityCurveState.maxPositions,
+      reason: equityCurveState.reason,
+    },
+    sparklineSnapshots,
     scanHistory: scanHistory.map((s) => ({
       id: s.id,
       startedAt: s.startedAt.toISOString(),

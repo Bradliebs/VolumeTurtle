@@ -22,6 +22,8 @@ import type { PositionSize } from "../src/lib/risk/positionSizer";
 import { config } from "../src/lib/config";
 import { calculateMarketRegime } from "../src/lib/signals/regimeFilter";
 import type { RegimeState } from "../src/lib/signals/regimeFilter";
+import { calculateEquityCurveState } from "../src/lib/risk/equityCurve";
+import type { EquityCurveState } from "../src/lib/risk/equityCurve";
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -70,6 +72,14 @@ async function main() {
   const accountBalance = await loadAccountBalance();
   summary.accountBalance = accountBalance;
   console.log(`[nightlyScan] Account balance: $${accountBalance.toLocaleString()}`);
+
+  // 1a. Calculate equity curve state
+  const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
+  const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
+  console.log(`[nightlyScan] System state: ${equityCurveState.systemState}`);
+  console.log(`[nightlyScan] Risk per trade: ${equityCurveState.riskPctPerTrade}%`);
+  console.log(`[nightlyScan] Max positions: ${equityCurveState.maxPositions}`);
+  console.log(`[nightlyScan] Reason: ${equityCurveState.reason}`);
 
   // 2. Fetch EOD quotes for universe
   const universe = getUniverse();
@@ -179,8 +189,8 @@ async function main() {
   });
   let openCount = openTrades.length;
 
-  if (!checkMaxPositions(openCount)) {
-    console.log("[nightlyScan] MAX POSITIONS REACHED — no new entries today");
+  if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) {
+    console.log(`[nightlyScan] MAX POSITIONS REACHED (${equityCurveState.maxPositions} allowed in ${equityCurveState.systemState} state) — no new entries today`);
     // Mark all fired signals as skipped
     if (!DRY_RUN) {
       for (const signal of signals) {
@@ -193,9 +203,9 @@ async function main() {
   } else {
     // 6. Enter new trades
     for (const signal of signals) {
-      if (!checkMaxPositions(openCount)) break;
+      if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) break;
 
-      const position = calculatePositionSize(signal, accountBalance);
+      const position = calculatePositionSize(signal, accountBalance, equityCurveState);
       if (!position) {
         console.log(`  [SKIP] ${signal.ticker} — position too small`);
         continue;
