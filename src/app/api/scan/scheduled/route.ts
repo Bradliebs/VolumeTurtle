@@ -8,6 +8,7 @@ import { generateSignal } from "@/lib/signals/volumeSignal";
 import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
 import type { OpenPosition } from "@/lib/signals/exitSignal";
+import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -45,6 +46,9 @@ export async function GET(req: NextRequest) {
     // 1. Load balance
     const accountBalance = await loadAccountBalance();
 
+    // 1b. Calculate market regime
+    const marketRegime = await calculateMarketRegime();
+
     // 2. Fetch EOD quotes — filtered by market
     const fullUniverse = getUniverse();
     const universe = filterUniverseByMarket(fullUniverse, market);
@@ -60,7 +64,7 @@ export async function GET(req: NextRequest) {
     const signals: VolumeSignal[] = [];
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
-      const signal = generateSignal(ticker, quotes);
+      const signal = generateSignal(ticker, quotes, marketRegime);
 
       const scanData = {
         scanDate: today,
@@ -171,6 +175,9 @@ export async function GET(req: NextRequest) {
         signalsFound: signals.length,
         status: "COMPLETED",
         durationMs,
+        marketRegime: marketRegime.marketRegime,
+        vixLevel: marketRegime.vixLevel,
+        qqqVs200MA: marketRegime.qqqPctAboveMA,
       },
     });
 

@@ -20,6 +20,8 @@ import type { OpenPosition } from "../src/lib/signals/exitSignal";
 import { calculatePositionSize, checkMaxPositions } from "../src/lib/risk/positionSizer";
 import type { PositionSize } from "../src/lib/risk/positionSizer";
 import { config } from "../src/lib/config";
+import { calculateMarketRegime } from "../src/lib/signals/regimeFilter";
+import type { RegimeState } from "../src/lib/signals/regimeFilter";
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -84,6 +86,13 @@ async function main() {
   });
   console.log(`[nightlyScan] ${liquidTickers.length} tickers pass liquidity filter`);
 
+  // 3b. Calculate market regime
+  console.log(`[nightlyScan] Calculating market regime (QQQ + VIX)…`);
+  const marketRegime = await calculateMarketRegime();
+  console.log(`[nightlyScan] Market regime: ${marketRegime.marketRegime}`);
+  console.log(`[nightlyScan] QQQ: ${marketRegime.qqqClose.toFixed(2)} vs 200MA: ${marketRegime.qqq200MA.toFixed(2)} (${marketRegime.qqqPctAboveMA >= 0 ? "+" : ""}${marketRegime.qqqPctAboveMA.toFixed(1)}%)`);
+  console.log(`[nightlyScan] VIX: ${marketRegime.vixLevel?.toFixed(1) ?? "unavailable"} (${marketRegime.volatilityRegime})`);
+
   // Debug logging (dry-run only)
   if (DRY_RUN) {
     console.log(`\n[DEBUG] ── Data Fetch Summary ──`);
@@ -108,7 +117,7 @@ async function main() {
   const signals: VolumeSignal[] = [];
   for (const ticker of liquidTickers) {
     const quotes = quoteMap[ticker]!;
-    const signal = generateSignal(ticker, quotes);
+    const signal = generateSignal(ticker, quotes, marketRegime);
 
     // Record scan result for every ticker
     const scanResult = {

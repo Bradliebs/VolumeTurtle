@@ -9,6 +9,7 @@ import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
 import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculatePositionSize } from "@/lib/risk/positionSizer";
 import { getCurrencySymbol } from "@/lib/currency";
+import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -36,6 +37,9 @@ export async function GET(request: NextRequest) {
     // 1. Load balance
     const accountBalance = await loadAccountBalance();
 
+    // 1b. Calculate market regime (once per scan)
+    const marketRegime = await calculateMarketRegime();
+
     // 2. Fetch EOD quotes
     const universe = getUniverse();
     const quoteMap = await fetchEODQuotes(universe);
@@ -52,7 +56,7 @@ export async function GET(request: NextRequest) {
 
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
-      const signal = generateSignal(ticker, quotes);
+      const signal = generateSignal(ticker, quotes, marketRegime);
 
       const scanData = {
         scanDate: today,
@@ -196,6 +200,9 @@ export async function GET(request: NextRequest) {
           signalsFound: signals.length,
           status: "COMPLETED",
           durationMs,
+          marketRegime: marketRegime.marketRegime,
+          vixLevel: marketRegime.vixLevel,
+          qqqVs200MA: marketRegime.qqqPctAboveMA,
         },
       });
     }
@@ -232,6 +239,22 @@ export async function GET(request: NextRequest) {
                 exposureWarning: pos.exposureWarning,
               }
             : null,
+          regimeAssessment: s.regimeAssessment
+            ? {
+                overallSignal: s.regimeAssessment.overallSignal,
+                warnings: s.regimeAssessment.warnings,
+                score: s.regimeAssessment.score,
+                regime: {
+                  marketRegime: s.regimeAssessment.regime.marketRegime,
+                  qqqClose: s.regimeAssessment.regime.qqqClose,
+                  qqq200MA: s.regimeAssessment.regime.qqq200MA,
+                  qqqPctAboveMA: s.regimeAssessment.regime.qqqPctAboveMA,
+                  volatilityRegime: s.regimeAssessment.regime.volatilityRegime,
+                  vixLevel: s.regimeAssessment.regime.vixLevel,
+                },
+                tickerRegime: s.regimeAssessment.tickerRegime,
+              }
+            : null,
         };
       }),
       tradesEntered: [],
@@ -239,6 +262,14 @@ export async function GET(request: NextRequest) {
       nearMisses: topNearMisses,
       openPositions: finalOpenCount,
       balance: accountBalance,
+      regime: {
+        marketRegime: marketRegime.marketRegime,
+        qqqClose: marketRegime.qqqClose,
+        qqq200MA: marketRegime.qqq200MA,
+        qqqPctAboveMA: marketRegime.qqqPctAboveMA,
+        volatilityRegime: marketRegime.volatilityRegime,
+        vixLevel: marketRegime.vixLevel,
+      },
     });
   } catch (err) {
     if (scanRunId != null) {

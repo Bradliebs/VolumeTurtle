@@ -1,6 +1,8 @@
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
 import { calculateATR } from "@/lib/risk/atr";
 import { config } from "@/lib/config";
+import { calculateTickerRegime, assessRegime } from "./regimeFilter";
+import type { RegimeState, RegimeAssessment } from "./regimeFilter";
 
 export interface VolumeSignal {
   ticker: string;
@@ -14,6 +16,7 @@ export interface VolumeSignal {
   suggestedEntry: number;
   hardStop: number;
   riskPerShare: number;
+  regimeAssessment: RegimeAssessment | null;
 }
 
 /**
@@ -51,10 +54,12 @@ export function isPriceConfirmed(quote: DailyQuote): boolean {
 
 /**
  * Generate a VolumeSignal if both volume spike and price confirmation are met.
+ * If a marketRegime is provided, attaches a regime assessment to the signal.
  */
 export function generateSignal(
   ticker: string,
   quotes: DailyQuote[],
+  marketRegime?: RegimeState,
 ): VolumeSignal | null {
   const today = quotes[quotes.length - 1];
   if (!today) return null;
@@ -68,6 +73,12 @@ export function generateSignal(
   const suggestedEntry = today.close;
   const hardStop = suggestedEntry - config.hardStopAtrMultiple * atr20;
 
+  let regimeAssessment: RegimeAssessment | null = null;
+  if (marketRegime) {
+    const tickerRegime = calculateTickerRegime(ticker, quotes);
+    regimeAssessment = assessRegime(marketRegime, tickerRegime);
+  }
+
   return {
     ticker,
     date: today.date,
@@ -80,5 +91,6 @@ export function generateSignal(
     suggestedEntry,
     hardStop,
     riskPerShare: suggestedEntry - hardStop,
+    regimeAssessment,
   };
 }

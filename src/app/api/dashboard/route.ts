@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { getCurrencySymbol } from "@/lib/currency";
+import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import type { RegimeState } from "@/lib/signals/regimeFilter";
 
 function getNextScheduledRun(hour: number, minute: number): { label: string; iso: string } {
   const now = new Date();
@@ -60,6 +62,14 @@ export async function GET() {
         orderBy: { startedAt: "desc" },
       }),
     ]);
+
+  // Fetch current market regime (QQQ + VIX)
+  let regime: RegimeState | null = null;
+  try {
+    regime = await calculateMarketRegime();
+  } catch {
+    // If regime fetch fails, dashboard still loads
+  }
 
   // Compute actions and daily instructions for open trades
   const actions: Array<{
@@ -210,6 +220,17 @@ export async function GET() {
     actions,
     instructions,
     scheduledScans,
+    regime: regime
+      ? {
+          marketRegime: regime.marketRegime,
+          qqqClose: regime.qqqClose,
+          qqq200MA: regime.qqq200MA,
+          qqqPctAboveMA: regime.qqqPctAboveMA,
+          volatilityRegime: regime.volatilityRegime,
+          vixLevel: regime.vixLevel,
+          asOf: regime.asOf,
+        }
+      : null,
     scanHistory: scanHistory.map((s) => ({
       id: s.id,
       startedAt: s.startedAt.toISOString(),
@@ -220,6 +241,8 @@ export async function GET() {
       trigger: s.trigger,
       market: s.market,
       durationMs: s.durationMs,
+      marketRegime: s.marketRegime,
+      vixLevel: s.vixLevel,
     })),
   });
 }

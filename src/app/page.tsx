@@ -91,6 +91,38 @@ interface DashboardData {
     us: ScheduledScanStatus;
   };
   scanHistory: ScanHistoryEntry[];
+  regime: RegimeData | null;
+}
+
+interface RegimeData {
+  marketRegime: "BULLISH" | "BEARISH";
+  qqqClose: number;
+  qqq200MA: number;
+  qqqPctAboveMA: number;
+  volatilityRegime: "NORMAL" | "ELEVATED" | "PANIC";
+  vixLevel: number | null;
+  asOf: string;
+}
+
+interface RegimeAssessmentData {
+  overallSignal: "STRONG" | "CAUTION" | "AVOID";
+  warnings: string[];
+  score: number;
+  regime: {
+    marketRegime: string;
+    qqqClose: number;
+    qqq200MA: number;
+    qqqPctAboveMA: number;
+    volatilityRegime: string;
+    vixLevel: number | null;
+  };
+  tickerRegime: {
+    ticker: string;
+    tickerTrend: string;
+    close: number;
+    ma50: number | null;
+    pctAboveMA50: number | null;
+  };
 }
 
 interface ScheduledScanStatus {
@@ -111,6 +143,8 @@ interface ScanHistoryEntry {
   trigger: string;
   market: string;
   durationMs: number | null;
+  marketRegime: string | null;
+  vixLevel: number | null;
 }
 
 interface SignalFired {
@@ -133,6 +167,7 @@ interface SignalFired {
     exposurePercent: number;
     exposureWarning: string | null;
   } | null;
+  regimeAssessment: RegimeAssessmentData | null;
 }
 
 interface NearMiss {
@@ -152,6 +187,7 @@ interface ScanResponse {
   nearMisses: NearMiss[];
   openPositions: number;
   balance: number;
+  regime?: RegimeData;
   error?: string;
 }
 
@@ -289,6 +325,66 @@ function ConfirmModal({
 }
 
 // ---------------------------------------------------------------------------
+// Regime Banner
+// ---------------------------------------------------------------------------
+
+function RegimeBanner({ regime }: { regime: RegimeData | null }) {
+  if (!regime) return null;
+
+  const isBullish = regime.marketRegime === "BULLISH";
+  const isNormalVol = regime.volatilityRegime === "NORMAL";
+  const isPanic = regime.volatilityRegime === "PANIC";
+
+  let overall: string;
+  let overallColor: string;
+  let bgTint: string;
+  if (isBullish && isNormalVol) {
+    overall = "FAVOURABLE — conditions support new entries";
+    overallColor = "var(--green)";
+    bgTint = "#001a00";
+  } else if (isPanic || (!isBullish && !isNormalVol)) {
+    overall = "HOSTILE — consider pausing new entries";
+    overallColor = "var(--red)";
+    bgTint = "#1a0000";
+  } else {
+    overall = "CAUTION — raise standards, reduce size";
+    overallColor = "var(--amber)";
+    bgTint = "#1a1400";
+  }
+
+  const pctStr = `${regime.qqqPctAboveMA >= 0 ? "+" : ""}${regime.qqqPctAboveMA.toFixed(1)}%`;
+  const qqqIcon = isBullish ? "✓" : "✗";
+  const qqqColor = isBullish ? "var(--green)" : "var(--red)";
+  const volIcon = isNormalVol ? "✓" : isPanic ? "✗" : "⚠";
+  const volColor = isNormalVol ? "var(--green)" : isPanic ? "var(--red)" : "var(--amber)";
+
+  return (
+    <section className="mb-6 border border-[var(--border)] p-4" style={{ background: bgTint, ...mono }}>
+      <p className="text-xs font-semibold text-[var(--dim)] tracking-widest mb-3">
+        MARKET REGIME — {regime.asOf}
+      </p>
+      <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-4 gap-y-1 text-sm mb-3">
+        <span className="text-[var(--dim)]">QQQ</span>
+        <span className="text-white">${regime.qqqClose.toFixed(2)}</span>
+        <span className={isBullish ? "text-[var(--green)]" : "text-[var(--red)]"}>
+          {isBullish ? "▲" : "▼"} {pctStr} {isBullish ? "above" : "below"} 200MA
+        </span>
+        <span style={{ color: qqqColor }}>{qqqIcon} {regime.marketRegime}</span>
+
+        <span className="text-[var(--dim)]">VIX</span>
+        <span className="text-white">{regime.vixLevel?.toFixed(1) ?? "—"}</span>
+        <span />
+        <span style={{ color: volColor }}>{volIcon} {regime.volatilityRegime}</span>
+      </div>
+      <div className="border-t border-[var(--border)] pt-2 text-sm">
+        <span className="text-[var(--dim)]">Overall regime: </span>
+        <span style={{ color: overallColor }}>{isBullish && isNormalVol ? "✅" : isPanic || (!isBullish && !isNormalVol) ? "🔴" : "⚠"} {overall}</span>
+      </div>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Scan History (Collapsible)
 // ---------------------------------------------------------------------------
 
@@ -315,6 +411,7 @@ function ScanHistorySection({ entries, loading }: { entries: ScanHistoryEntry[];
                 <th className="text-left px-3 py-2">DATE</th>
                 <th className="text-left px-3 py-2">TIME</th>
                 <th className="text-left px-3 py-2">MARKET</th>
+                <th className="text-center px-3 py-2">REGIME</th>
                 <th className="text-right px-3 py-2">SIGNALS</th>
                 <th className="text-right px-3 py-2">TICKERS</th>
                 <th className="text-center px-3 py-2">TRIGGER</th>
@@ -324,10 +421,10 @@ function ScanHistorySection({ entries, loading }: { entries: ScanHistoryEntry[];
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows cols={8} />
+                <SkeletonRows cols={9} />
               ) : entries.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                  <td colSpan={9} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
                     No scan history yet
                   </td>
                 </tr>
@@ -345,6 +442,15 @@ function ScanHistorySection({ entries, loading }: { entries: ScanHistoryEntry[];
                       <td className="px-3 py-2 text-[var(--dim)]">{dateStr}</td>
                       <td className="px-3 py-2 text-[var(--dim)]">{timeStr}</td>
                       <td className="px-3 py-2">{s.market}</td>
+                      <td className="px-3 py-2 text-center">
+                        {s.marketRegime ? (
+                          <span style={{ color: s.marketRegime === "BULLISH" ? "var(--green)" : "var(--red)" }}>
+                            {s.marketRegime === "BULLISH" ? "✅" : "🔴"} {s.marketRegime.slice(0, 4)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-right">
                         <span className={s.signalsFound > 0 ? "text-[var(--green)]" : "text-[var(--dim)]"}>
                           {s.signalsFound}
@@ -388,9 +494,13 @@ function SignalCard({
   const stopPct = pctChange(signal.suggestedEntry, signal.hardStop);
   const pos = signal.positionSize;
   const c = signal.currency ?? tickerCurrency(signal.ticker);
+  const ra = signal.regimeAssessment;
+  const borderColor = ra
+    ? ra.overallSignal === "STRONG" ? "var(--green)" : ra.overallSignal === "CAUTION" ? "var(--amber)" : "var(--red)"
+    : "var(--green)";
   return (
-    <div className="border border-[var(--green)] bg-[#111] p-4 mb-3">
-      <p className="text-lg font-bold text-[var(--green)] mb-3" style={mono}>
+    <div className="bg-[#111] p-4 mb-3" style={{ border: `1px solid ${borderColor}` }}>
+      <p className="text-lg font-bold mb-3" style={{ ...mono, color: borderColor }}>
         🟢 SIGNAL — {signal.ticker}
       </p>
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs mb-3" style={mono}>
@@ -440,6 +550,38 @@ function SignalCard({
         <span className="text-[var(--green)]">{(signal.rangePosition * 100).toFixed(0)}%</span>
         <MiniBar value={signal.rangePosition} max={1} color="var(--green)" />
       </div>
+      {ra && (
+        <div className="border-t border-[var(--border)] pt-3 mb-4 text-xs" style={mono}>
+          <p className="text-[var(--dim)] font-semibold tracking-widest mb-2">─── REGIME ASSESSMENT ───</p>
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+            <span className="text-[var(--dim)]">Market</span>
+            <span style={{ color: ra.regime.marketRegime === "BULLISH" ? "var(--green)" : "var(--red)" }}>
+              {ra.regime.marketRegime === "BULLISH" ? "✓" : "✗"} {ra.regime.marketRegime}  QQQ {ra.regime.qqqPctAboveMA >= 0 ? "+" : ""}{ra.regime.qqqPctAboveMA.toFixed(1)}% {ra.regime.qqqPctAboveMA >= 0 ? "above" : "below"} 200MA
+            </span>
+            <span className="text-[var(--dim)]">Volatility</span>
+            <span style={{ color: ra.regime.volatilityRegime === "NORMAL" ? "var(--green)" : ra.regime.volatilityRegime === "PANIC" ? "var(--red)" : "var(--amber)" }}>
+              {ra.regime.volatilityRegime === "NORMAL" ? "✓" : ra.regime.volatilityRegime === "PANIC" ? "✗" : "⚠"} {ra.regime.volatilityRegime}  VIX {ra.regime.vixLevel?.toFixed(1) ?? "—"}
+            </span>
+            <span className="text-[var(--dim)]">Ticker trend</span>
+            <span style={{ color: ra.tickerRegime.tickerTrend === "UPTREND" ? "var(--green)" : ra.tickerRegime.tickerTrend === "DOWNTREND" ? "var(--red)" : "var(--dim)" }}>
+              {ra.tickerRegime.tickerTrend === "UPTREND" ? "✓" : ra.tickerRegime.tickerTrend === "DOWNTREND" ? "✗" : "?"} {ra.tickerRegime.tickerTrend}  {ra.tickerRegime.ticker} {ra.tickerRegime.pctAboveMA50 != null ? `${ra.tickerRegime.pctAboveMA50 >= 0 ? "+" : ""}${ra.tickerRegime.pctAboveMA50.toFixed(1)}% ${ra.tickerRegime.pctAboveMA50 >= 0 ? "above" : "below"} 50MA` : ""}
+            </span>
+          </div>
+          <div className="mt-2 pt-1">
+            <span className="text-[var(--dim)]">Overall  </span>
+            <span style={{ color: borderColor }}>
+              {ra.overallSignal === "STRONG" ? "✅" : ra.overallSignal === "CAUTION" ? "⚠" : "🔴"} {ra.overallSignal} — {ra.score === 3 ? "all three layers green" : ra.score === 2 ? "1 of 3 regime layers flagged" : `${3 - ra.score} of 3 regime layers flagged`}
+            </span>
+            {ra.warnings.length > 0 && (
+              <div className="mt-1 text-[10px]">
+                {ra.warnings.map((w, i) => (
+                  <p key={i} className="text-[var(--dim)]">↳ {w}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <button
         onClick={() => onMarkPlaced(signal)}
         disabled={dryRun || placing || !pos}
@@ -830,6 +972,9 @@ export default function Home() {
         )}
         {refreshing && !syncingAll && <span className="text-xs text-[var(--dim)]">Refreshing…</span>}
       </header>
+
+      {/* ── REGIME BANNER ── */}
+      <RegimeBanner regime={data?.regime ?? null} />
 
       {/* ── ACTION REQUIRED ── */}
       {actionItems.length > 0 && (

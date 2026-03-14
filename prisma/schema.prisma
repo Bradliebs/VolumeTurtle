@@ -86,6 +86,9 @@ model ScanRun {
   trigger     String   @default("MANUAL") // MANUAL | SCHEDULED
   market      String   @default("ALL")    // ALL | LSE | US | EU
   durationMs  Int?                        // scan duration in milliseconds
+  marketRegime String?                    // BULLISH | BEARISH
+  vixLevel     Float?                     // VIX close value
+  qqqVs200MA   Float?                     // % above/below 200MA
 }
 
 /// A trade opened (and possibly closed) by VolumeTurtle
