@@ -27,13 +27,13 @@ export function calculateATR(
   // Initial ATR: simple average of the first `period` true ranges
   let atr = 0;
   for (let i = 1; i <= period; i++) {
-    atr += calculateTrueRange(quotes[i - 1], quotes[i]);
+    atr += calculateTrueRange(quotes[i - 1]!, quotes[i]!);
   }
   atr /= period;
 
   // Wilder's smoothing for remaining bars
   for (let i = period + 1; i < quotes.length; i++) {
-    const tr = calculateTrueRange(quotes[i - 1], quotes[i]);
+    const tr = calculateTrueRange(quotes[i - 1]!, quotes[i]!);
     atr = (atr * (period - 1) + tr) / period;
   }
 

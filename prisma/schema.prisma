@@ -83,6 +83,9 @@ model ScanRun {
   signalsFound   Int   @default(0)
   status      String   @default("RUNNING") // RUNNING | COMPLETED | FAILED
   error       String?
+  trigger     String   @default("MANUAL") // MANUAL | SCHEDULED
+  market      String   @default("ALL")    // ALL | LSE | US | EU
+  durationMs  Int?                        // scan duration in milliseconds
 }
 
 /// A trade opened (and possibly closed) by VolumeTurtle

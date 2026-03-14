@@ -86,6 +86,31 @@ interface DashboardData {
   lastScanTime: string | null;
   actions: ActionItem[];
   instructions: Instruction[];
+  scheduledScans: {
+    lse: ScheduledScanStatus;
+    us: ScheduledScanStatus;
+  };
+  scanHistory: ScanHistoryEntry[];
+}
+
+interface ScheduledScanStatus {
+  nextRun: string;
+  nextRunIso: string;
+  lastRun: string | null;
+  lastRunSignals: number | null;
+  missed: boolean;
+}
+
+interface ScanHistoryEntry {
+  id: number;
+  startedAt: string;
+  completedAt: string | null;
+  tickersScanned: number;
+  signalsFound: number;
+  status: string;
+  trigger: string;
+  market: string;
+  durationMs: number | null;
 }
 
 interface SignalFired {
@@ -260,6 +285,88 @@ function ConfirmModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Scan History (Collapsible)
+// ---------------------------------------------------------------------------
+
+function ScanHistorySection({ entries, loading }: { entries: ScanHistoryEntry[]; loading: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <section className="mb-6">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-sm font-semibold text-[var(--dim)] mb-2 tracking-widest hover:text-white transition-colors"
+      >
+        <span>{expanded ? "▼" : "▶"}</span>
+        SCAN HISTORY
+        {entries.length > 0 && (
+          <span className="text-xs font-normal text-[#555]">({entries.length} recent)</span>
+        )}
+      </button>
+      {expanded && (
+        <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
+          <table className="w-full text-sm" style={mono}>
+            <thead>
+              <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                <th className="text-left px-3 py-2">DATE</th>
+                <th className="text-left px-3 py-2">TIME</th>
+                <th className="text-left px-3 py-2">MARKET</th>
+                <th className="text-right px-3 py-2">SIGNALS</th>
+                <th className="text-right px-3 py-2">TICKERS</th>
+                <th className="text-center px-3 py-2">TRIGGER</th>
+                <th className="text-right px-3 py-2">DURATION</th>
+                <th className="text-center px-3 py-2">STATUS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <SkeletonRows cols={8} />
+              ) : entries.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                    No scan history yet
+                  </td>
+                </tr>
+              ) : (
+                entries.map((s) => {
+                  const d = new Date(s.startedAt);
+                  const dateStr = d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+                  const timeStr = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+                  const durationStr = s.durationMs != null ? (s.durationMs < 1000 ? `${s.durationMs}ms` : `${(s.durationMs / 1000).toFixed(0)}s`) : "—";
+                  const triggerColor = s.trigger === "SCHEDULED" ? "var(--green)" : "var(--dim)";
+                  const statusColor = s.status === "COMPLETED" ? "var(--green)" : s.status === "FAILED" ? "var(--red)" : "var(--amber)";
+
+                  return (
+                    <tr key={s.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                      <td className="px-3 py-2 text-[var(--dim)]">{dateStr}</td>
+                      <td className="px-3 py-2 text-[var(--dim)]">{timeStr}</td>
+                      <td className="px-3 py-2">{s.market}</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={s.signalsFound > 0 ? "text-[var(--green)]" : "text-[var(--dim)]"}>
+                          {s.signalsFound}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-[var(--dim)]">{s.tickersScanned}</td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge label={s.trigger} color={triggerColor} />
+                      </td>
+                      <td className="px-3 py-2 text-right text-[var(--dim)]">{durationStr}</td>
+                      <td className="px-3 py-2 text-center">
+                        <Badge label={s.status} color={statusColor} />
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -689,6 +796,27 @@ export default function Home() {
         <span className="text-sm text-[var(--dim)]">
           Last scan: <span className="text-white" style={mono}>{fmtTime(data?.lastScanTime ?? null)}</span>
         </span>
+        {data?.scheduledScans && (
+          <>
+            <span className="text-[var(--border)]">|</span>
+            <span className="text-sm text-[var(--dim)]">
+              LSE:{" "}
+              {data.scheduledScans.lse.missed ? (
+                <span className="text-[var(--red)]" style={mono}>missed</span>
+              ) : (
+                <span className="text-white" style={mono}>{data.scheduledScans.lse.nextRun}</span>
+              )}
+            </span>
+            <span className="text-sm text-[var(--dim)]">
+              US:{" "}
+              {data.scheduledScans.us.missed ? (
+                <span className="text-[var(--red)]" style={mono}>missed</span>
+              ) : (
+                <span className="text-white" style={mono}>{data.scheduledScans.us.nextRun}</span>
+              )}
+            </span>
+          </>
+        )}
         {syncingAll && <span className="text-xs text-[var(--amber)] ml-auto">↻ Refreshing positions…</span>}
         {!syncingAll && openCount > 0 && (
           <button
@@ -1246,6 +1374,9 @@ export default function Home() {
           </table>
         </div>
       </section>
+
+      {/* ── SCAN HISTORY ── */}
+      <ScanHistorySection entries={data?.scanHistory ?? []} loading={loading} />
 
       {/* ── CONFIRM MODAL ── */}
       {showConfirm && (

@@ -3,6 +3,22 @@ import { prisma } from "@/db/client";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { getCurrencySymbol } from "@/lib/currency";
 
+function getNextScheduledRun(hour: number, minute: number): { label: string; iso: string } {
+  const now = new Date();
+  const target = new Date(now);
+  target.setHours(hour, minute, 0, 0);
+  if (target <= now) {
+    target.setDate(target.getDate() + 1);
+  }
+  const isToday = target.getDate() === now.getDate();
+  const hh = String(hour).padStart(2, "0");
+  const mm = String(minute).padStart(2, "0");
+  return {
+    label: `${isToday ? "Today" : "Tomorrow"} ${hh}:${mm}`,
+    iso: target.toISOString(),
+  };
+}
+
 export async function GET() {
   const fourteenDaysAgo = new Date();
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
@@ -10,7 +26,7 @@ export async function GET() {
   const sixtyDaysAgo = new Date();
   sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
-  const [account, openTrades, recentSignals, closedTrades, lastScan] =
+  const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan] =
     await Promise.all([
       prisma.accountSnapshot.findFirst({ orderBy: { date: "desc" } }),
       prisma.trade.findMany({
@@ -30,6 +46,18 @@ export async function GET() {
       prisma.scanResult.findFirst({
         orderBy: { createdAt: "desc" },
         select: { createdAt: true },
+      }),
+      prisma.scanRun.findMany({
+        orderBy: { startedAt: "desc" },
+        take: 20,
+      }),
+      prisma.scanRun.findFirst({
+        where: { market: "LSE", status: "COMPLETED" },
+        orderBy: { startedAt: "desc" },
+      }),
+      prisma.scanRun.findFirst({
+        where: { market: "US", status: "COMPLETED" },
+        orderBy: { startedAt: "desc" },
       }),
     ]);
 
@@ -144,6 +172,35 @@ export async function GET() {
   // Sort actions: EXIT first, then STOP_UPDATE
   actions.sort((a, b) => (a.type === "EXIT" ? -1 : 1) - (b.type === "EXIT" ? -1 : 1));
 
+  // Build schedule status
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+
+  function isScanToday(scan: { startedAt: Date } | null): boolean {
+    if (!scan) return false;
+    return scan.startedAt.toISOString().slice(0, 10) === todayStr;
+  }
+
+  const lseNext = getNextScheduledRun(17, 30);
+  const usNext = getNextScheduledRun(22, 0);
+
+  const scheduledScans = {
+    lse: {
+      nextRun: lseNext.label,
+      nextRunIso: lseNext.iso,
+      lastRun: lastLseScan?.startedAt?.toISOString() ?? null,
+      lastRunSignals: lastLseScan?.signalsFound ?? null,
+      missed: !isScanToday(lastLseScan) && today.getHours() >= 18,
+    },
+    us: {
+      nextRun: usNext.label,
+      nextRunIso: usNext.iso,
+      lastRun: lastUsScan?.startedAt?.toISOString() ?? null,
+      lastRunSignals: lastUsScan?.signalsFound ?? null,
+      missed: !isScanToday(lastUsScan) && today.getHours() >= 22,
+    },
+  };
+
   return NextResponse.json({
     account,
     openTrades,
@@ -152,5 +209,17 @@ export async function GET() {
     lastScanTime: lastScan?.createdAt?.toISOString() ?? null,
     actions,
     instructions,
+    scheduledScans,
+    scanHistory: scanHistory.map((s) => ({
+      id: s.id,
+      startedAt: s.startedAt.toISOString(),
+      completedAt: s.completedAt?.toISOString() ?? null,
+      tickersScanned: s.tickersScanned,
+      signalsFound: s.signalsFound,
+      status: s.status,
+      trigger: s.trigger,
+      market: s.market,
+      durationMs: s.durationMs,
+    })),
   });
 }

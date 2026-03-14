@@ -324,6 +324,38 @@ export function getUniverse(): string[] {
   return Array.from(new Set(HIGH_RISK_UNIVERSE));
 }
 
+export type MarketFilter = "LSE" | "US" | "EU" | "ALL";
+
+const NON_US_SUFFIXES = [".L", ".AS", ".ST", ".HE", ".CO"];
+
+/**
+ * Filter universe by market region.
+ */
+export function filterUniverseByMarket(
+  tickers: string[],
+  market: MarketFilter,
+): string[] {
+  switch (market) {
+    case "LSE":
+      return tickers.filter((t) => t.endsWith(".L"));
+    case "EU":
+      return tickers.filter(
+        (t) =>
+          t.endsWith(".AS") ||
+          t.endsWith(".ST") ||
+          t.endsWith(".HE") ||
+          t.endsWith(".CO"),
+      );
+    case "US":
+      return tickers.filter(
+        (t) => !NON_US_SUFFIXES.some((s) => t.endsWith(s)),
+      );
+    case "ALL":
+    default:
+      return tickers;
+  }
+}
+
 /**
  * Return true if the ticker's average daily dollar volume exceeds
  * the minimum threshold. Non-US tickers use a lower threshold

@@ -21,8 +21,18 @@ async function loadAccountBalance(): Promise<number> {
 export async function GET(request: NextRequest) {
   const dryRun = request.nextUrl.searchParams.get("dry") !== "false";
   const today = new Date();
+  const startTime = Date.now();
+  let scanRunId: number | null = null;
 
   try {
+    // Create ScanRun record (unless dry run)
+    if (!dryRun) {
+      const scanRun = await prisma.scanRun.create({
+        data: { startedAt: today, status: "RUNNING", trigger: "MANUAL", market: "ALL" },
+      });
+      scanRunId = scanRun.id;
+    }
+
     // 1. Load balance
     const accountBalance = await loadAccountBalance();
 
@@ -175,6 +185,21 @@ export async function GET(request: NextRequest) {
     nearMisses.sort((a, b) => b.volumeRatio - a.volumeRatio);
     const topNearMisses = nearMisses.slice(0, 5);
 
+    // Update ScanRun record
+    if (scanRunId != null) {
+      const durationMs = Date.now() - startTime;
+      await prisma.scanRun.update({
+        where: { id: scanRunId },
+        data: {
+          completedAt: new Date(),
+          tickersScanned: liquidTickers.length,
+          signalsFound: signals.length,
+          status: "COMPLETED",
+          durationMs,
+        },
+      });
+    }
+
     return NextResponse.json({
       date: today.toISOString().slice(0, 10),
       dryRun,
@@ -216,6 +241,18 @@ export async function GET(request: NextRequest) {
       balance: accountBalance,
     });
   } catch (err) {
+    if (scanRunId != null) {
+      const durationMs = Date.now() - startTime;
+      await prisma.scanRun.update({
+        where: { id: scanRunId },
+        data: {
+          completedAt: new Date(),
+          status: "FAILED",
+          error: err instanceof Error ? err.message : "Unknown error",
+          durationMs,
+        },
+      });
+    }
     console.error("[/api/scan] Error:", err);
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Scan failed" },

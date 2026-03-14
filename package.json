@@ -13,7 +13,10 @@
     "db:studio": "npx prisma studio",
     "scan": "npx tsx scripts/nightlyScan.ts",
     "scan:dry": "npx tsx scripts/nightlyScan.ts --dry-run",
-    "validate": "npx tsx scripts/validateUniverse.ts"
+    "validate": "npx tsx scripts/validateUniverse.ts",
+    "schedule:setup": "scripts\\setupScheduler.bat",
+    "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
+    "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.5.0",
