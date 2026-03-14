@@ -190,6 +190,20 @@ interface SignalFired {
     effectiveRiskPct: number;
   } | null;
   regimeAssessment: RegimeAssessmentData | null;
+  compositeScore: CompositeScoreData | null;
+  avgDollarVolume20: number;
+}
+
+interface CompositeScoreData {
+  total: number;
+  components: {
+    regimeScore: number;
+    trendScore: number;
+    volumeScore: number;
+    liquidityScore: number;
+  };
+  grade: "A" | "B" | "C" | "D";
+  gradeReason: string;
 }
 
 interface NearMiss {
@@ -197,6 +211,8 @@ interface NearMiss {
   volumeRatio: number;
   rangePosition: number;
   failedOn: "VOLUME" | "RANGE" | "LIQUIDITY";
+  potentialScore?: number;
+  potentialGrade?: string;
 }
 
 interface ScanResponse {
@@ -648,14 +664,28 @@ function SignalCard({
   const pos = signal.positionSize;
   const c = signal.currency ?? tickerCurrency(signal.ticker);
   const ra = signal.regimeAssessment;
+  const cs = signal.compositeScore;
   const borderColor = ra
     ? ra.overallSignal === "STRONG" ? "var(--green)" : ra.overallSignal === "CAUTION" ? "var(--amber)" : "var(--red)"
     : "var(--green)";
+  const gradeColor = cs
+    ? cs.grade === "A" ? "#00ff88" : cs.grade === "B" ? "var(--green)" : cs.grade === "C" ? "var(--amber)" : "var(--red)"
+    : "var(--dim)";
   return (
     <div className="bg-[#111] p-4 mb-3" style={{ border: `1px solid ${borderColor}` }}>
-      <p className="text-lg font-bold mb-3" style={{ ...mono, color: borderColor }}>
-        🟢 SIGNAL — {signal.ticker}
-      </p>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-lg font-bold" style={{ ...mono, color: borderColor }}>
+          🟢 SIGNAL — {signal.ticker}
+        </p>
+        {cs && (
+          <span
+            className="text-sm font-bold px-2 py-0.5 border rounded"
+            style={{ ...mono, color: gradeColor, borderColor: gradeColor }}
+          >
+            GRADE: {cs.grade}
+          </span>
+        )}
+      </div>
       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs mb-3" style={mono}>
         <span className="text-[var(--dim)]">Entry</span>
         <span>{fmtPrice(signal.suggestedEntry, c)}</span>
@@ -703,6 +733,36 @@ function SignalCard({
         <span className="text-[var(--green)]">{(signal.rangePosition * 100).toFixed(0)}%</span>
         <MiniBar value={signal.rangePosition} max={1} color="var(--green)" />
       </div>
+      {cs && (
+        <div className="border-t border-[var(--border)] pt-3 mb-4 text-xs" style={mono}>
+          <p className="text-[var(--dim)] font-semibold tracking-widest mb-2">─── COMPOSITE SCORE ───</p>
+          <div className="flex items-center gap-3 mb-2">
+            <span className="text-[var(--dim)]">Overall</span>
+            <span style={{ color: gradeColor }} className="font-bold">{cs.total.toFixed(2)} / 1.00</span>
+            <MiniBar value={cs.total} max={1} color={gradeColor} />
+            <span style={{ color: gradeColor }}>Grade {cs.grade}</span>
+          </div>
+          <div className="grid grid-cols-[auto_auto_1fr_auto] gap-x-3 gap-y-1 text-[11px]">
+            <span className="text-[var(--dim)]">Regime</span>
+            <span>{cs.components.regimeScore.toFixed(2)} / 0.40</span>
+            <MiniBar value={cs.components.regimeScore} max={0.40} color="var(--green)" />
+            <span className="text-[var(--dim)]">{ra ? `${ra.score}/3` : ""}</span>
+            <span className="text-[var(--dim)]">Trend</span>
+            <span>{cs.components.trendScore.toFixed(2)} / 0.30</span>
+            <MiniBar value={cs.components.trendScore} max={0.30} color="var(--green)" />
+            <span className="text-[var(--dim)]">{ra?.tickerRegime.pctAboveMA50 != null ? `${ra.tickerRegime.pctAboveMA50 >= 0 ? "+" : ""}${ra.tickerRegime.pctAboveMA50.toFixed(0)}% MA` : ""}</span>
+            <span className="text-[var(--dim)]">Volume</span>
+            <span>{cs.components.volumeScore.toFixed(2)} / 0.20</span>
+            <MiniBar value={cs.components.volumeScore} max={0.20} color="var(--green)" />
+            <span className="text-[var(--dim)]">{signal.volumeRatio.toFixed(1)}x</span>
+            <span className="text-[var(--dim)]">Liquidity</span>
+            <span>{cs.components.liquidityScore.toFixed(2)} / 0.10</span>
+            <MiniBar value={cs.components.liquidityScore} max={0.10} color="var(--green)" />
+            <span className="text-[var(--dim)]">${(signal.avgDollarVolume20 / 1_000_000).toFixed(1)}M/day</span>
+          </div>
+          <p className="text-[var(--dim)] text-[10px] mt-2">{cs.gradeReason}</p>
+        </div>
+      )}
       {ra && (
         <div className="border-t border-[var(--border)] pt-3 mb-4 text-xs" style={mono}>
           <p className="text-[var(--dim)] font-semibold tracking-widest mb-2">─── REGIME ASSESSMENT ───</p>
@@ -1616,6 +1676,11 @@ export default function Home() {
                         <p key={i} className="text-[#555]">
                           {nm.ticker.padEnd(8)} vol {nm.volumeRatio.toFixed(1)}x{" "}
                           range {nm.rangePosition.toFixed(2)}{" "}
+                          {nm.potentialScore != null && (
+                            <span className="text-[#666]">
+                              potential {nm.potentialScore.toFixed(2)} {nm.potentialGrade}{" "}
+                            </span>
+                          )}
                           — {nm.failedOn === "VOLUME" ? "needs more volume" : "needs higher close"}
                         </p>
                       ))}

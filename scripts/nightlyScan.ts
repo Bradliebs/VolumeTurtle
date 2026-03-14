@@ -158,7 +158,7 @@ async function main() {
   }
 
   // Sort by volumeRatio descending — strongest spike first
-  signals.sort((a, b) => b.volumeRatio - a.volumeRatio);
+  signals.sort((a, b) => (b.compositeScore?.total ?? 0) - (a.compositeScore?.total ?? 0));
   console.log(`[nightlyScan] ${signals.length} signals fired`);
 
   // Debug logging (dry-run only)

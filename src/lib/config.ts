@@ -21,6 +21,10 @@ export interface VolumeTurtleConfig {
   atrPeriod: number;
   trailingStopDays: number;
   hardStopAtrMultiple: number;
+  scoreWeightRegime: number;
+  scoreWeightTrend: number;
+  scoreWeightVolume: number;
+  scoreWeightLiquidity: number;
 }
 
 export const config: VolumeTurtleConfig = {
@@ -32,4 +36,8 @@ export const config: VolumeTurtleConfig = {
   atrPeriod: envInt("ATR_PERIOD", 20),
   trailingStopDays: envInt("TRAILING_STOP_DAYS", 10),
   hardStopAtrMultiple: envFloat("HARD_STOP_ATR_MULTIPLE", 2),
+  scoreWeightRegime: envFloat("SCORE_WEIGHT_REGIME", 0.40),
+  scoreWeightTrend: envFloat("SCORE_WEIGHT_TREND", 0.30),
+  scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.20),
+  scoreWeightLiquidity: envFloat("SCORE_WEIGHT_LIQUIDITY", 0.10),
 };

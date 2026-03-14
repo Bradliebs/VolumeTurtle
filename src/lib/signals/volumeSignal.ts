@@ -3,6 +3,8 @@ import { calculateATR } from "@/lib/risk/atr";
 import { config } from "@/lib/config";
 import { calculateTickerRegime, assessRegime } from "./regimeFilter";
 import type { RegimeState, RegimeAssessment } from "./regimeFilter";
+import { calculateCompositeScore } from "./compositeScore";
+import type { CompositeScore } from "./compositeScore";
 
 export interface VolumeSignal {
   ticker: string;
@@ -17,6 +19,8 @@ export interface VolumeSignal {
   hardStop: number;
   riskPerShare: number;
   regimeAssessment: RegimeAssessment | null;
+  compositeScore: CompositeScore | null;
+  avgDollarVolume20: number;
 }
 
 /**
@@ -79,18 +83,30 @@ export function generateSignal(
     regimeAssessment = assessRegime(marketRegime, tickerRegime);
   }
 
+  const volumeRatio = today.volume / avgVolume20;
+
+  // Average daily dollar volume for liquidity scoring
+  const dollarVolWindow = quotes.slice(-(config.atrPeriod + 1), -1);
+  const avgDollarVolume20 = dollarVolWindow.length > 0
+    ? dollarVolWindow.reduce((sum, q) => sum + q.close * q.volume, 0) / dollarVolWindow.length
+    : 0;
+
+  const compositeScore = calculateCompositeScore(regimeAssessment, volumeRatio, avgDollarVolume20);
+
   return {
     ticker,
     date: today.date,
     close: today.close,
     volume: today.volume,
     avgVolume20,
-    volumeRatio: today.volume / avgVolume20,
+    volumeRatio,
     rangePosition: (today.close - today.low) / (today.high - today.low),
     atr20,
     suggestedEntry,
     hardStop,
     riskPerShare: suggestedEntry - hardStop,
     regimeAssessment,
+    compositeScore,
+    avgDollarVolume20,
   };
 }

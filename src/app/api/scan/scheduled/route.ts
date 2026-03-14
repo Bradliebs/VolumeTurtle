@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
       if (signal) signals.push(signal);
     }
 
-    signals.sort((a, b) => b.volumeRatio - a.volumeRatio);
+    signals.sort((a, b) => (b.compositeScore?.total ?? 0) - (a.compositeScore?.total ?? 0));
 
     // 5. Check open positions
     const openTrades = await prisma.trade.findMany({

@@ -10,7 +10,9 @@ import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculatePositionSize } from "@/lib/risk/positionSizer";
 import { getCurrencySymbol } from "@/lib/currency";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { calculateTickerRegime, assessRegime } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
+import { calculateCompositeScore } from "@/lib/signals/compositeScore";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -57,7 +59,7 @@ export async function GET(request: NextRequest) {
 
     // 4. Generate signals + collect near misses
     const signals: VolumeSignal[] = [];
-    const nearMisses: Array<{ ticker: string; volumeRatio: number; rangePosition: number; failedOn: "VOLUME" | "RANGE" | "LIQUIDITY" }> = [];
+    const nearMisses: Array<{ ticker: string; volumeRatio: number; rangePosition: number; failedOn: "VOLUME" | "RANGE" | "LIQUIDITY"; potentialScore: number; potentialGrade: string }> = [];
 
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
@@ -93,18 +95,29 @@ export async function GET(request: NextRequest) {
           const confirmed = isPriceConfirmed(last);
 
           if ((volRatio >= 1.5 || rangePos >= 0.75) && !(spiked && confirmed)) {
+            // Calculate potential composite score
+            const tickerRegime = calculateTickerRegime(ticker, quotes);
+            const regimeAssess = assessRegime(marketRegime, tickerRegime);
+            const dollarVolWindow = quotes.slice(-(config.atrPeriod + 1), -1);
+            const avgDollarVol = dollarVolWindow.length > 0
+              ? dollarVolWindow.reduce((sum, q) => sum + q.close * q.volume, 0) / dollarVolWindow.length
+              : 0;
+            const potentialScore = calculateCompositeScore(regimeAssess, Math.max(volRatio, 2.0), avgDollarVol);
+
             nearMisses.push({
               ticker,
               volumeRatio: volRatio,
               rangePosition: rangePos,
               failedOn: !spiked ? "VOLUME" : "RANGE",
+              potentialScore: potentialScore.total,
+              potentialGrade: potentialScore.grade,
             });
           }
         }
       }
     }
 
-    signals.sort((a, b) => b.volumeRatio - a.volumeRatio);
+    signals.sort((a, b) => (b.compositeScore?.total ?? 0) - (a.compositeScore?.total ?? 0));
 
     // 5. Check open positions
     const openTrades = await prisma.trade.findMany({
@@ -260,6 +273,8 @@ export async function GET(request: NextRequest) {
                 tickerRegime: s.regimeAssessment.tickerRegime,
               }
             : null,
+          compositeScore: s.compositeScore,
+          avgDollarVolume20: s.avgDollarVolume20,
         };
       }),
       tradesEntered: [],

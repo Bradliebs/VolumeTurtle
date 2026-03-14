@@ -105,6 +105,49 @@ Fetched with 280-day lookback to calculate the 200-day SMA.
 
 ---
 
+## Composite Signal Ranking
+
+Signals are ranked by a weighted composite score instead of raw volume ratio.
+
+### Score Components
+
+| Component | Weight | What It Measures | Score Range |
+|-----------|--------|-----------------|-------------|
+| **Regime** | 40% | Market + volatility + ticker trend (0–3 layers green) | 0.00–0.40 |
+| **Trend** | 30% | How far above/below 50-day MA the stock is | 0.00–0.30 |
+| **Volume** | 20% | Strength of the spike (2x–5x, capped) | 0.00–0.20 |
+| **Liquidity** | 10% | Average daily dollar volume quality | 0.00–0.10 |
+
+### Grades
+
+| Grade | Score | Meaning |
+|-------|-------|---------|
+| **A** | ≥ 0.75 | Strong conditions across all factors |
+| **B** | ≥ 0.55 | Good signal, minor weaknesses |
+| **C** | ≥ 0.35 | Marginal — consider passing |
+| **D** | < 0.35 | Weak conditions — high false signal risk |
+
+### Configurable Weights
+
+Weights are configurable via environment variables:
+
+| Variable | Default |
+|----------|---------|
+| `SCORE_WEIGHT_REGIME` | 0.40 |
+| `SCORE_WEIGHT_TREND` | 0.30 |
+| `SCORE_WEIGHT_VOLUME` | 0.20 |
+| `SCORE_WEIGHT_LIQUIDITY` | 0.10 |
+
+### Implementation
+
+- Composite score attached to every `VolumeSignal`
+- Signals sorted by `compositeScore.total` descending (best first)
+- Signal cards show grade badge (A/B/C/D with colour) and full component breakdown with mini-bars
+- Near misses show potential score if they were to fire
+- When multiple signals fire, the system enters them in score order until max positions reached
+
+---
+
 ## Equity Curve Circuit Breaker
 
 Automatically reduces risk when the account is in a drawdown and restores it when conditions improve.
@@ -537,6 +580,7 @@ volume-turtle/
 │       │   ├── volumeSignal.ts    # Volume spike signal generator
 │       │   ├── exitSignal.ts      # Trailing stop / exit logic
 │       │   ├── regimeFilter.ts    # Three-layer regime filter (QQQ, VIX, ticker MA)
+│       │   ├── compositeScore.ts  # Weighted composite signal ranking
 │       │   └── index.ts           # Signal exports
 │       ├── t212/
 │       │   └── client.ts          # Trading 212 API client
