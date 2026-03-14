@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: volumeturtle-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: volume_turtle
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - volume_turtle_db:/var/lib/postgresql/data
+
+volumes:
+  volume_turtle_db:

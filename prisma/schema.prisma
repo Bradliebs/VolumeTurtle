@@ -1,0 +1,179 @@
+// VolumeTurtle — Prisma Schema (independent from HybridTurtle)
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A ticker in the scan universe
+model Ticker {
+  id        Int      @id @default(autoincrement())
+  symbol    String   @unique
+  name      String?
+  sector    String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  quotes  DailyQuote[]
+  signals Signal[]
+
+  @@index([symbol])
+}
+
+/// OHLCV daily bar from Yahoo Finance
+model DailyQuote {
+  id        Int      @id @default(autoincrement())
+  tickerId  Int
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  adjClose  Float
+  volume    BigInt
+
+  ticker Ticker @relation(fields: [tickerId], references: [id])
+
+  @@unique([tickerId, date])
+  @@index([date])
+}
+
+/// A generated signal (volume spike, breakout, etc.)
+model Signal {
+  id         Int      @id @default(autoincrement())
+  tickerId   Int
+  date       DateTime
+  type       String   // e.g. "VOLUME_SPIKE", "BREAKOUT"
+  strength   Float    // 0-1 confidence
+  metadata   Json?    // extra detail
+  createdAt  DateTime @default(now())
+
+  ticker Ticker @relation(fields: [tickerId], references: [id])
+
+  @@index([date])
+  @@index([type])
+}
+
+/// Position-sizing & risk parameters for a signal
+model RiskCalc {
+  id            Int      @id @default(autoincrement())
+  signalId      Int
+  entryPrice    Float
+  stopPrice     Float
+  targetPrice   Float?
+  positionSize  Float
+  riskAmount    Float
+  riskReward    Float?
+  createdAt     DateTime @default(now())
+
+  @@index([signalId])
+}
+
+/// Nightly scan run metadata
+model ScanRun {
+  id          Int      @id @default(autoincrement())
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  tickersScanned Int   @default(0)
+  signalsFound   Int   @default(0)
+  status      String   @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  error       String?
+}
+
+/// A trade opened (and possibly closed) by VolumeTurtle
+model Trade {
+  id            String    @id @default(cuid())
+  ticker        String
+  entryDate     DateTime
+  entryPrice    Float
+  shares        Float
+  hardStop      Float
+  trailingStop  Float
+  exitDate      DateTime?
+  exitPrice     Float?
+  exitReason    String?   // "TRAILING_STOP" | "HARD_STOP" | "MANUAL"
+  rMultiple     Float?    // (exitPrice - entryPrice) / riskPerShare
+  status        String    // "OPEN" | "CLOSED"
+  volumeRatio   Float     // volume spike ratio at entry
+  rangePosition Float     // price range position at entry
+  atr20         Float     // ATR at entry
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  stopHistory   StopHistory[]
+
+  @@index([ticker])
+  @@index([status])
+}
+
+/// Stop level history for a trade
+model StopHistory {
+  id            String    @id @default(cuid())
+  tradeId       String
+  trade         Trade     @relation(fields: [tradeId], references: [id])
+  date          DateTime
+  stopLevel     Float
+  stopType      String    // "HARD" | "TRAILING"
+  changed       Boolean   // true if stop moved up vs previous day
+  changeAmount  Float?    // positive number, only set if changed = true
+  actioned      Boolean   @default(false)
+  actionedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([tradeId])
+}
+
+/// Result of a nightly scan for a single ticker
+model ScanResult {
+  id            String   @id @default(cuid())
+  scanDate      DateTime
+  ticker        String
+  signalFired   Boolean
+  volumeRatio   Float?
+  rangePosition Float?
+  atr20         Float?
+  actionTaken   String?  // "ENTERED" | "SKIPPED_MAX_POSITIONS" | "SKIPPED_LIQUIDITY" | "NO_SIGNAL"
+  createdAt     DateTime @default(now())
+
+  @@unique([ticker, scanDate])
+  @@index([scanDate])
+  @@index([ticker])
+}
+
+/// Daily account balance snapshot
+model AccountSnapshot {
+  id         String   @id @default(cuid())
+  date       DateTime
+  balance    Float
+  openTrades Int
+  createdAt  DateTime @default(now())
+
+  @@index([date])
+}
+
+/// Key-value settings store
+model Settings {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Trading 212 connection configuration
+model T212Connection {
+  id              String    @id @default(cuid())
+  environment     String    // "demo" | "live"
+  apiKey          String    // env var reference e.g. "ENV:T212_API_KEY"
+  accountType     String    // "invest" | "isa" | "both"
+  connected       Boolean   @default(false)
+  lastSyncAt      DateTime?
+  lastSyncStatus  String?   // "success" | "error"
+  lastSyncError   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}

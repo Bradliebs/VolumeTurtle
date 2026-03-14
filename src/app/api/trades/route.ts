@@ -1,0 +1,49 @@
+import { NextRequest, NextResponse } from "next/server";
+import { prisma } from "@/db/client";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+
+    const {
+      ticker,
+      suggestedEntry,
+      hardStop,
+      riskPerShare,
+      volumeRatio,
+      rangePosition,
+      atr20,
+      shares,
+    } = body;
+
+    if (!ticker || !suggestedEntry || !hardStop || !shares) {
+      return NextResponse.json(
+        { error: "Missing required fields: ticker, suggestedEntry, hardStop, shares" },
+        { status: 400 },
+      );
+    }
+
+    const trade = await prisma.trade.create({
+      data: {
+        ticker,
+        entryDate: new Date(),
+        entryPrice: suggestedEntry,
+        shares,
+        hardStop,
+        trailingStop: hardStop,
+        status: "OPEN",
+        volumeRatio: volumeRatio ?? 0,
+        rangePosition: rangePosition ?? 0,
+        atr20: atr20 ?? 0,
+      },
+    });
+
+    return NextResponse.json(trade, { status: 201 });
+  } catch (err) {
+    console.error("[POST /api/trades] Error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to create trade" },
+      { status: 500 },
+    );
+  }
+}
