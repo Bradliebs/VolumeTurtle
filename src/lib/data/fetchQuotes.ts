@@ -1,7 +1,9 @@
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
 import { getCachedQuotes, cacheQuotes, getLatestCachedDate } from "@/lib/data/quoteCache";
+import { createLogger } from "@/lib/logger";
 
+const log = createLogger("fetchQuotes");
 const yahooFinance = new YahooFinance();
 
 export interface DailyQuote {
@@ -53,7 +55,7 @@ async function fetchSingle(ticker: string): Promise<DailyQuote[] | null> {
         maxAttempts: 3,
         baseDelayMs: 1000,
         onRetry: (err, attempt, delay) => {
-          console.warn(`[fetchEODQuotes] Retry ${attempt} for ${ticker} in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+          log.warn({ ticker, attempt, delayMs: Math.round(delay) }, "Retrying Yahoo Finance fetch");
         },
       },
     );
@@ -85,7 +87,7 @@ async function fetchSingle(ticker: string): Promise<DailyQuote[] | null> {
     }
     return mapped.length > 0 ? mapped : null;
   } catch (err) {
-    console.error(`[fetchEODQuotes] Failed to fetch ${ticker} after retries:`, err);
+    log.error({ ticker, err }, "Failed to fetch after retries");
     return null;
   }
 }
@@ -140,7 +142,7 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
 
         // Store in cache (fire-and-forget to avoid blocking)
         cacheQuotes(ticker, quotes).catch((err) => {
-          console.warn(`[fetchEODQuotes] Failed to cache ${ticker}:`, err instanceof Error ? err.message : err);
+          log.warn({ ticker, err: err instanceof Error ? err.message : err }, "Failed to cache quotes");
         });
       }
     }

@@ -1,6 +1,9 @@
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("regimeFilter");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -71,7 +74,7 @@ async function fetchLongHistory(ticker: string, days: number): Promise<DailyQuot
         maxAttempts: 3,
         baseDelayMs: 1000,
         onRetry: (err, attempt, delay) => {
-          console.warn(`[regimeFilter] Retry ${attempt} for ${ticker} in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+          log.warn({ ticker, attempt, delayMs: Math.round(delay) }, "Retrying long history fetch");
         },
       },
     );
@@ -93,7 +96,7 @@ async function fetchLongHistory(ticker: string, days: number): Promise<DailyQuot
     }
     return mapped;
   } catch (err) {
-    console.error(`[regimeFilter] Failed to fetch ${ticker}:`, err);
+    log.error({ ticker, err }, "Failed to fetch long history");
     return [];
   }
 }
@@ -107,7 +110,7 @@ export async function calculateMarketRegime(): Promise<RegimeState> {
 
   // QQQ regime
   if (qqqQuotes.length === 0) {
-    console.warn("[regimeFilter] QQQ data unavailable — defaulting to BEARISH regime");
+    log.warn("QQQ data unavailable — defaulting to BEARISH regime");
   }
   const qqqClose = qqqQuotes.length > 0 ? qqqQuotes[qqqQuotes.length - 1]!.close : 0;
   const qqq200MA = calculateSMA(qqqQuotes, 200) ?? 0;
@@ -117,7 +120,7 @@ export async function calculateMarketRegime(): Promise<RegimeState> {
 
   // VIX regime
   if (vixQuotes.length === 0) {
-    console.warn("[regimeFilter] VIX data unavailable — defaulting to NORMAL volatility");
+    log.warn("VIX data unavailable — defaulting to NORMAL volatility");
   }
   const vixLevel = vixQuotes.length > 0 ? vixQuotes[vixQuotes.length - 1]!.close : null;
 

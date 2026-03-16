@@ -4,7 +4,9 @@
  */
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
+import { createLogger } from "@/lib/logger";
 
+const log = createLogger("yahoo");
 const yahooFinance = new YahooFinance();
 
 export interface HistoricalBar {
@@ -37,7 +39,7 @@ export async function fetchHistory(
         maxAttempts: 3,
         baseDelayMs: 1000,
         onRetry: (err, attempt, delay) => {
-          console.warn(`[yahoo] Retry ${attempt} for ${symbol} history in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+          log.warn({ symbol, attempt, delayMs: Math.round(delay) }, "Retrying history fetch");
         },
       },
     );
@@ -52,7 +54,7 @@ export async function fetchHistory(
       volume: bar.volume,
     }));
   } catch (err) {
-    console.error(`[yahoo] Failed to fetch history for ${symbol} after retries:`, err);
+    log.error({ symbol, err }, "Failed to fetch history after retries");
     return [];
   }
 }
@@ -68,12 +70,12 @@ export async function fetchQuote(symbol: string) {
         maxAttempts: 3,
         baseDelayMs: 1000,
         onRetry: (err, attempt, delay) => {
-          console.warn(`[yahoo] Retry ${attempt} for ${symbol} quote in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+          log.warn({ symbol, attempt, delayMs: Math.round(delay) }, "Retrying quote fetch");
         },
       },
     );
   } catch (err) {
-    console.error(`[yahoo] Failed to fetch quote for ${symbol} after retries:`, err);
+    log.error({ symbol, err }, "Failed to fetch quote after retries");
     return null;
   }
 }

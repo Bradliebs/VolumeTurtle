@@ -41,3 +41,21 @@ export const config: VolumeTurtleConfig = {
   scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.20),
   scoreWeightLiquidity: envFloat("SCORE_WEIGHT_LIQUIDITY", 0.10),
 };
+
+// Validate config at load time
+if (config.balance <= 0) throw new Error("VOLUME_TURTLE_BALANCE must be positive");
+if (config.maxPositions < 1) throw new Error("MAX_POSITIONS must be >= 1");
+if (config.riskPctPerTrade <= 0 || config.riskPctPerTrade > 0.1) {
+  throw new Error("RISK_PER_TRADE_PCT must be between 0 and 10 (parsed as 0–0.1)");
+}
+if (config.atrPeriod < 5) throw new Error("ATR_PERIOD must be >= 5");
+if (config.trailingStopDays < 1) throw new Error("TRAILING_STOP_DAYS must be >= 1");
+
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("config");
+
+const weightSum = config.scoreWeightRegime + config.scoreWeightTrend + config.scoreWeightVolume + config.scoreWeightLiquidity;
+if (Math.abs(weightSum - 1.0) > 0.01) {
+  log.warn({ weightSum: weightSum.toFixed(3) }, "Score weights do not sum to ~1.0");
+}
