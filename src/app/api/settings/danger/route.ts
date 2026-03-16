@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { dangerActionSchema, validateBody } from "@/lib/validation";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { action, confirm } = body;
-
-    if (confirm !== "CONFIRM") {
-      return NextResponse.json({ error: "Type CONFIRM to proceed" }, { status: 400 });
+    const parsed = await validateBody(request, dangerActionSchema);
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
+    const { action } = parsed.data;
 
     if (action === "clear-scans") {
       const result = await prisma.scanResult.deleteMany();

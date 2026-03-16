@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { updateSettingsSchema, validateBody } from "@/lib/validation";
 
 export async function GET() {
   try {
@@ -51,12 +52,25 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { settings, t212 } = body;
+    const parsed = await validateBody(request, updateSettingsSchema);
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    }
+    const { settings, t212 } = parsed.data;
+
+    // Whitelist of allowed setting keys
+    const ALLOWED_KEYS = new Set([
+      "riskPctPerTrade", "maxPositions", "maxExposurePct",
+      "balanceSource", "manualBalance",
+      "last_backup_at", "theme", "notifications",
+    ]);
 
     // Save key-value settings
     if (settings && typeof settings === "object") {
       for (const [key, value] of Object.entries(settings)) {
+        if (!ALLOWED_KEYS.has(key)) {
+          return NextResponse.json({ error: `Invalid setting key: ${key}` }, { status: 400 });
+        }
         if (typeof key === "string" && typeof value === "string") {
           await prisma.settings.upsert({
             where: { key },

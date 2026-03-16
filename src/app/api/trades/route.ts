@@ -1,25 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { createTradeSchema, validateBody } from "@/lib/validation";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const parsed = await validateBody(request, createTradeSchema);
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+    }
+    const { ticker, suggestedEntry, hardStop, shares, volumeRatio, rangePosition, atr20 } = parsed.data;
 
-    const {
-      ticker,
-      suggestedEntry,
-      hardStop,
-      riskPerShare,
-      volumeRatio,
-      rangePosition,
-      atr20,
-      shares,
-    } = body;
-
-    if (!ticker || !suggestedEntry || !hardStop || !shares) {
+    // Prevent duplicate open trades for the same ticker
+    const existingOpen = await prisma.trade.findFirst({
+      where: { ticker, status: "OPEN" },
+    });
+    if (existingOpen) {
       return NextResponse.json(
-        { error: "Missing required fields: ticker, suggestedEntry, hardStop, shares" },
-        { status: 400 },
+        { error: `An open trade already exists for ${ticker}` },
+        { status: 409 },
       );
     }
 

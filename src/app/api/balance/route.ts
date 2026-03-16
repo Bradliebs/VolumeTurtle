@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { updateBalanceSchema, validateBody } from "@/lib/validation";
 
 export async function PATCH(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { balance } = body;
-
-    if (balance == null || typeof balance !== "number" || balance <= 0) {
-      return NextResponse.json(
-        { error: "balance is required and must be a positive number" },
-        { status: 400 },
-      );
+    const parsed = await validateBody(request, updateBalanceSchema);
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
+    const { balance } = parsed.data;
 
     const latest = await prisma.accountSnapshot.findFirst({
       orderBy: { date: "desc" },

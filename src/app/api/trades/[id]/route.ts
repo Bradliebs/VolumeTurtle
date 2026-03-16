@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { closeTradeSchema, validateBody } from "@/lib/validation";
 
 export async function PATCH(
   request: NextRequest,
@@ -7,15 +8,11 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json();
-    const { exitPrice } = body;
-
-    if (exitPrice == null || typeof exitPrice !== "number") {
-      return NextResponse.json(
-        { error: "exitPrice is required and must be a number" },
-        { status: 400 },
-      );
+    const parsed = await validateBody(request, closeTradeSchema);
+    if (parsed.error) {
+      return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
+    const { exitPrice } = parsed.data;
 
     const trade = await prisma.trade.findUnique({ where: { id } });
     if (!trade) {
