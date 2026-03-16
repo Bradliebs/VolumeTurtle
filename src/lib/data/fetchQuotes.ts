@@ -1,5 +1,6 @@
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
+import { getCachedQuotes, cacheQuotes, getLatestCachedDate } from "@/lib/data/quoteCache";
 
 const yahooFinance = new YahooFinance();
 
@@ -90,15 +91,41 @@ async function fetchSingle(ticker: string): Promise<DailyQuote[] | null> {
 }
 
 /**
- * Fetch 60 days of daily OHLCV data for each ticker via yahoo-finance2 chart().
- * Batches requests in groups of 10 with a 500ms delay between batches.
+ * Fetch 60 days of daily OHLCV data for each ticker.
+ * Uses the database cache first, only fetching missing dates from Yahoo Finance.
+ * Batches API requests in groups of 10 with a 500ms delay between batches.
  * Skips tickers that fail or return fewer than 25 days of data.
  */
 export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
   const result: QuoteMap = {};
+  const tickersToFetch: string[] = [];
 
-  for (let i = 0; i < tickers.length; i += BATCH_SIZE) {
-    const batch = tickers.slice(i, i + BATCH_SIZE);
+  const since = new Date();
+  since.setDate(since.getDate() - LOOKBACK_DAYS);
+
+  // Phase 1: Check cache for each ticker
+  for (const ticker of tickers) {
+    try {
+      const latestCached = await getLatestCachedDate(ticker);
+      const today = new Date().toISOString().slice(0, 10);
+
+      if (latestCached && latestCached.toISOString().slice(0, 10) === today) {
+        // Cache is fresh — use it directly
+        const cached = await getCachedQuotes(ticker, since);
+        if (cached.length >= MIN_DAYS) {
+          result[ticker] = cached;
+          continue;
+        }
+      }
+    } catch {
+      // Cache miss — fetch from API
+    }
+    tickersToFetch.push(ticker);
+  }
+
+  // Phase 2: Fetch missing tickers from Yahoo Finance in batches
+  for (let i = 0; i < tickersToFetch.length; i += BATCH_SIZE) {
+    const batch = tickersToFetch.slice(i, i + BATCH_SIZE);
 
     const settled = await Promise.all(
       batch.map(async (ticker) => ({
@@ -110,10 +137,15 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
     for (const { ticker, quotes } of settled) {
       if (quotes && quotes.length >= MIN_DAYS) {
         result[ticker] = quotes;
+
+        // Store in cache (fire-and-forget to avoid blocking)
+        cacheQuotes(ticker, quotes).catch((err) => {
+          console.warn(`[fetchEODQuotes] Failed to cache ${ticker}:`, err instanceof Error ? err.message : err);
+        });
       }
     }
 
-    const hasMore = i + BATCH_SIZE < tickers.length;
+    const hasMore = i + BATCH_SIZE < tickersToFetch.length;
     if (hasMore) {
       await sleep(BATCH_DELAY_MS);
     }
