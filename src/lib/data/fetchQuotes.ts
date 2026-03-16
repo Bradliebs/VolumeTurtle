@@ -1,4 +1,5 @@
 import YahooFinance from "yahoo-finance2";
+import { withRetry } from "@/lib/retry";
 
 const yahooFinance = new YahooFinance();
 
@@ -36,15 +37,25 @@ function isPenceQuoted(ticker: string): boolean {
 
 async function fetchSingle(ticker: string): Promise<DailyQuote[] | null> {
   try {
-    const now = new Date();
-    const start = new Date();
-    start.setDate(now.getDate() - LOOKBACK_DAYS);
-
-    const result = await yahooFinance.chart(ticker, {
-      period1: start,
-      period2: now,
-      interval: "1d",
-    });
+    const result = await withRetry(
+      async () => {
+        const now = new Date();
+        const start = new Date();
+        start.setDate(now.getDate() - LOOKBACK_DAYS);
+        return yahooFinance.chart(ticker, {
+          period1: start,
+          period2: now,
+          interval: "1d",
+        });
+      },
+      {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        onRetry: (err, attempt, delay) => {
+          console.warn(`[fetchEODQuotes] Retry ${attempt} for ${ticker} in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+        },
+      },
+    );
 
     const quotes = result.quotes;
     if (!quotes || quotes.length === 0) return null;
@@ -73,7 +84,7 @@ async function fetchSingle(ticker: string): Promise<DailyQuote[] | null> {
     }
     return mapped.length > 0 ? mapped : null;
   } catch (err) {
-    console.error(`[fetchEODQuotes] Failed to fetch ${ticker}:`, err);
+    console.error(`[fetchEODQuotes] Failed to fetch ${ticker} after retries:`, err);
     return null;
   }
 }

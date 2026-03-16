@@ -1,5 +1,6 @@
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
 import YahooFinance from "yahoo-finance2";
+import { withRetry } from "@/lib/retry";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,11 +61,20 @@ async function fetchLongHistory(ticker: string, days: number): Promise<DailyQuot
     const start = new Date();
     start.setDate(now.getDate() - days);
 
-    const result = await yahooFinance.chart(ticker, {
-      period1: start,
-      period2: now,
-      interval: "1d",
-    });
+    const result = await withRetry(
+      () => yahooFinance.chart(ticker, {
+        period1: start,
+        period2: now,
+        interval: "1d",
+      }),
+      {
+        maxAttempts: 3,
+        baseDelayMs: 1000,
+        onRetry: (err, attempt, delay) => {
+          console.warn(`[regimeFilter] Retry ${attempt} for ${ticker} in ${Math.round(delay)}ms:`, err instanceof Error ? err.message : err);
+        },
+      },
+    );
 
     const quotes = result.quotes;
     if (!quotes || quotes.length === 0) return [];
@@ -96,6 +106,9 @@ export async function calculateMarketRegime(): Promise<RegimeState> {
   ]);
 
   // QQQ regime
+  if (qqqQuotes.length === 0) {
+    console.warn("[regimeFilter] QQQ data unavailable — defaulting to BEARISH regime");
+  }
   const qqqClose = qqqQuotes.length > 0 ? qqqQuotes[qqqQuotes.length - 1]!.close : 0;
   const qqq200MA = calculateSMA(qqqQuotes, 200) ?? 0;
   const qqqPctAboveMA = qqq200MA > 0 ? ((qqqClose - qqq200MA) / qqq200MA) * 100 : 0;
@@ -103,6 +116,9 @@ export async function calculateMarketRegime(): Promise<RegimeState> {
   const marketRegime: MarketRegime = qqqClose >= qqq200MA ? "BULLISH" : "BEARISH";
 
   // VIX regime
+  if (vixQuotes.length === 0) {
+    console.warn("[regimeFilter] VIX data unavailable — defaulting to NORMAL volatility");
+  }
   const vixLevel = vixQuotes.length > 0 ? vixQuotes[vixQuotes.length - 1]!.close : null;
 
   let volatilityRegime: VolatilityRegime = "NORMAL";
