@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { createTradeSchema, validateBody } from "@/lib/validation";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit: max 10 trade creations per minute
+    const limited = rateLimit(getRateLimitKey(request), 10, 60_000);
+    if (limited) return limited;
+
     const parsed = await validateBody(request, createTradeSchema);
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });

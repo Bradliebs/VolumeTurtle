@@ -13,6 +13,7 @@ import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { calculateTickerRegime, assessRegime } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { calculateCompositeScore } from "@/lib/signals/compositeScore";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -23,7 +24,11 @@ async function loadAccountBalance(): Promise<number> {
 }
 
 export async function GET(request: NextRequest) {
-  const dryRun = request.nextUrl.searchParams.get("dry") !== "false";
+  // Rate limit: max 5 scans per minute
+  const limited = rateLimit(getRateLimitKey(request), 5, 60_000);
+  if (limited) return limited;
+
+  const dryRun = request.nextUrl.searchParams.get("dry") === "true";
   const today = new Date();
   const startTime = Date.now();
   let scanRunId: number | null = null;
@@ -54,7 +59,7 @@ export async function GET(request: NextRequest) {
 
     // 3. Filter liquidity
     const liquidTickers = fetchedTickers.filter((ticker) =>
-      hasMinimumLiquidity(ticker, quoteMap[ticker]! as any),
+      hasMinimumLiquidity(ticker, quoteMap[ticker]!),
     );
 
     // 4. Generate signals + collect near misses
@@ -195,35 +200,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // 7. Save snapshot
+    // 7. Save snapshot + finalize scan in a transaction for consistency
     const finalOpenCount = openCount - tradesExited.length;
     if (!dryRun) {
-      await prisma.accountSnapshot.create({
-        data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
+      await prisma.$transaction(async (tx) => {
+        await tx.accountSnapshot.create({
+          data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
+        });
+
+        if (scanRunId != null) {
+          const durationMs = Date.now() - startTime;
+          await tx.scanRun.update({
+            where: { id: scanRunId },
+            data: {
+              completedAt: new Date(),
+              tickersScanned: liquidTickers.length,
+              signalsFound: signals.length,
+              status: "COMPLETED",
+              durationMs,
+              marketRegime: marketRegime.marketRegime,
+              vixLevel: marketRegime.vixLevel,
+              qqqVs200MA: marketRegime.qqqPctAboveMA,
+            },
+          });
+        }
       });
     }
 
     // Sort near misses by volumeRatio desc, cap at 5
     nearMisses.sort((a, b) => b.volumeRatio - a.volumeRatio);
     const topNearMisses = nearMisses.slice(0, 5);
-
-    // Update ScanRun record
-    if (scanRunId != null) {
-      const durationMs = Date.now() - startTime;
-      await prisma.scanRun.update({
-        where: { id: scanRunId },
-        data: {
-          completedAt: new Date(),
-          tickersScanned: liquidTickers.length,
-          signalsFound: signals.length,
-          status: "COMPLETED",
-          durationMs,
-          marketRegime: marketRegime.marketRegime,
-          vixLevel: marketRegime.vixLevel,
-          qqqVs200MA: marketRegime.qqqPctAboveMA,
-        },
-      });
-    }
 
     return NextResponse.json({
       date: today.toISOString().slice(0, 10),
