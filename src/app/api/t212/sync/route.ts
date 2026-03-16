@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
-import { loadT212Settings, getAccountCash, getOpenPositions } from "@/lib/t212/client";
+import { loadT212Settings, getAccountCash, getPositionsWithStopsMapped } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 
 export async function POST() {
@@ -10,10 +10,10 @@ export async function POST() {
       return NextResponse.json({ error: "T212 not configured — set T212_API_KEY in .env" }, { status: 400 });
     }
 
-    // Fetch T212 data
+    // Fetch T212 data (with stop orders matched to positions)
     const [accountSummary, t212Positions] = await Promise.all([
       getAccountCash(settings),
-      getOpenPositions(settings),
+      getPositionsWithStopsMapped(settings),
     ]);
 
     const balance = accountSummary.total ?? accountSummary.cash ?? 0;

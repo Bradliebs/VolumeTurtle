@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { loadT212Settings, getOpenPositions } from "@/lib/t212/client";
+import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
 
 export async function GET() {
   try {
@@ -8,7 +8,7 @@ export async function GET() {
       return NextResponse.json({ error: "T212 not configured" }, { status: 400 });
     }
 
-    const positions = await getOpenPositions(settings);
+    const positions = await getPositionsWithStopsMapped(settings);
     return NextResponse.json({ positions });
   } catch (err) {
     console.error("[GET /api/t212/positions] Error:", err);
