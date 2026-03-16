@@ -23,12 +23,14 @@ function getNextScheduledRun(hour: number, minute: number): { label: string; iso
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const closedTradesPage = parseInt(url.searchParams.get("closedPage") ?? "1", 10);
+  const signalsPage = parseInt(url.searchParams.get("signalsPage") ?? "1", 10);
+  const pageSize = 20;
+
   const fourteenDaysAgo = new Date();
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-
-  const sixtyDaysAgo = new Date();
-  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
   const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
     await Promise.all([
@@ -42,10 +44,14 @@ export async function GET() {
         where: { scanDate: { gte: fourteenDaysAgo } },
         orderBy: { scanDate: "desc" },
         distinct: ["ticker", "scanDate"],
+        take: pageSize,
+        skip: (signalsPage - 1) * pageSize,
       }),
       prisma.trade.findMany({
-        where: { status: "CLOSED", exitDate: { gte: sixtyDaysAgo } },
+        where: { status: "CLOSED" },
         orderBy: { exitDate: "desc" },
+        take: pageSize,
+        skip: (closedTradesPage - 1) * pageSize,
       }),
       prisma.scanResult.findFirst({
         orderBy: { createdAt: "desc" },
@@ -65,6 +71,12 @@ export async function GET() {
       }),
       prisma.settings.findUnique({ where: { key: "last_backup_at" } }),
     ]);
+
+  // Get total counts for pagination
+  const [totalClosedTrades, totalSignals] = await Promise.all([
+    prisma.trade.count({ where: { status: "CLOSED" } }),
+    prisma.scanResult.count({ where: { scanDate: { gte: fourteenDaysAgo } } }),
+  ]);
 
   // Fetch current market regime (QQQ + VIX)
   let regime: RegimeState | null = null;
@@ -190,8 +202,12 @@ export async function GET() {
     }
   }
 
-  // Sort actions: EXIT first, then STOP_UPDATE
-  actions.sort((a, b) => (a.type === "EXIT" ? -1 : 1) - (b.type === "EXIT" ? -1 : 1));
+  // Sort actions: EXIT first, then STOP_UPDATE, then others
+  actions.sort((a, b) => {
+    if (a.type === "EXIT" && b.type !== "EXIT") return -1;
+    if (a.type !== "EXIT" && b.type === "EXIT") return 1;
+    return 0;
+  });
 
   // Build schedule status
   const today = new Date();
@@ -269,5 +285,19 @@ export async function GET() {
       marketRegime: s.marketRegime,
       vixLevel: s.vixLevel,
     })),
+    pagination: {
+      closedTrades: {
+        page: closedTradesPage,
+        pageSize,
+        total: totalClosedTrades,
+        totalPages: Math.ceil(totalClosedTrades / pageSize),
+      },
+      signals: {
+        page: signalsPage,
+        pageSize,
+        total: totalSignals,
+        totalPages: Math.ceil(totalSignals / pageSize),
+      },
+    },
   });
 }
