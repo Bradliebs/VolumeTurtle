@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { updateBalanceSchema, validateBody } from "@/lib/validation";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/balance");
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -24,7 +27,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json(snapshot);
   } catch (err) {
-    console.error("[PATCH /api/balance] Error:", err);
+    log.error({ err }, "Failed to update balance");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to update balance" },
       { status: 500 },

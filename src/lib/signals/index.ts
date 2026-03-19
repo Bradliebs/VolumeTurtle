@@ -1,2 +1,2 @@
-export { detectVolumeSpike } from "./volume-spike";
-export type { SignalResult } from "./types";
+export { generateSignal, calculateAverageVolume, isVolumeSpike, isPriceConfirmed } from "./volumeSignal";
+export type { VolumeSignal } from "./volumeSignal";

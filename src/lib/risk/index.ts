@@ -1,2 +1,2 @@
-export { calculatePosition } from "./position-sizer";
-export type { PositionCalc } from "./position-sizer";
+export { calculatePositionSize, checkMaxPositions } from "./positionSizer";
+export type { PositionSize } from "./positionSizer";

@@ -1,4 +1,8 @@
-import type { HistoricalBar } from "@/lib/data/yahoo";
+/** Minimal quote shape needed for liquidity checks */
+interface QuoteLike {
+  close: number;
+  volume: number;
+}
 
 export const HIGH_RISK_UNIVERSE: string[] = [
 
@@ -30,7 +34,6 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "RGTI",    // Rigetti Computing
   "QUBT",    // Quantum Computing Inc
   "QTUM",    // Defiance Quantum ETF (liquid proxy)
-  "ARQQ",    // Arqit Quantum
 
   // ========== SPACE / DEEP TECH ==========
   "RKLB",    // Rocket Lab
@@ -58,7 +61,6 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "WULF",    // TeraWulf
   "MARA",    // Marathon Digital
   "HUT",     // Hut 8
-  "BTBT",    // Bit Brother
   "CIFR",    // Cipher Mining
   "BITF",    // Bitfarms
   "HIVE",    // HIVE Digital
@@ -218,11 +220,6 @@ export const HIGH_RISK_UNIVERSE: string[] = [
 
   // ========== HEALTHCARE HIGH BETA (sector rotating in March 2026) ==========
   "CGON",    // CG Oncology
-  "VKTX",    // Viking Therapeutics
-  "RVMD",    // Revolution Medicines
-  "NUVL",    // Nuvalent
-  "KYMR",    // Kymera Therapeutics
-  "AXSM",    // Axsome Therapeutics
   "DNTH",    // Dianthus Therapeutics
   "AMPX",    // Amprius Technologies
   "ALNY",    // Alnylam Pharmaceuticals
@@ -237,13 +234,9 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "PTGX",    // Protagonist Therapeutics
 
   // ========== NUCLEAR & ENERGY COMMODITIES (geopolitical premium) ==========
-  "SMR",     // NuScale Power
-  "NNE",     // Nano Nuclear Energy
-  "LEU",     // Centrus Energy
   "UROY",    // Uranium Royalty Corp
   "EU",      // enCore Energy
   "CVV",     // CVD Equipment
-  "BWXT",    // BWX Technologies (nuclear services)
   "GEV",     // GE Vernova (grid/energy)
   "VST",     // Vistra Energy (high beta power)
   "CEG",     // Constellation Energy
@@ -285,7 +278,6 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "CAMT",    // Camtek
 
   // ========== COMMODITIES & MATERIALS HIGH BETA ==========
-  "MP",      // MP Materials (rare earth — if not already in)
   "ATEX",    // Anterios
   "ABAT",    // American Battery Technology
   "MTH",     // Meritage Homes
@@ -294,24 +286,13 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "PHM",     // PulteGroup (housing sentiment plays)
 
   // ========== FINTECH & PAYMENTS HIGH BETA ==========
-  "AFRM",    // Affirm Holdings
-  "RELY",    // Remitly Global
-  "DAVE",    // Dave Inc
-  "MQ",      // Marqeta
-  "PAYO",    // Payoneer
-  "INDI",    // indie Semiconductor
-  "PSFE",    // Paysafe
   "FLYW",    // Flywire
   "RPAY",    // Repay Holdings
   "PRAA",    // PRA Group
 
   // ========== NARRATIVE / MEME ADJACENT (retail driven) ==========
-  "BYND",    // Beyond Meat
-  "SPCE",    // Virgin Galactic
   "BBBY",    // (check if relisted post-bankruptcy)
   "IMPP",    // Imperial Petroleum
-  "GFAI",    // Guardforce AI
-  "AIXI",    // Xiao-I Corporation
   "AEYE",    // AudioEye
   "GEVI",    // GreenVision (check liquidity)
 
@@ -363,7 +344,7 @@ export function filterUniverseByMarket(
  */
 export function hasMinimumLiquidity(
   ticker: string,
-  quotes: HistoricalBar[],
+  quotes: QuoteLike[],
 ): boolean {
   const last20 = quotes.slice(-20);
   if (last20.length < 10) return false;

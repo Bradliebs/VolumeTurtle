@@ -6,6 +6,12 @@ import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import type { RegimeState } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { config } from "@/lib/config";
+import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import type { T212Position } from "@/lib/t212/client";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/dashboard");
 
 function getNextScheduledRun(hour: number, minute: number): { label: string; iso: string } {
   const now = new Date();
@@ -24,13 +30,17 @@ function getNextScheduledRun(hour: number, minute: number): { label: string; iso
 }
 
 export async function GET(req: Request) {
+  // Rate limit: max 30 requests per minute
+  const limited = rateLimit(getRateLimitKey(req), 30, 60_000);
+  if (limited) return limited;
+
   const url = new URL(req.url);
   const closedTradesPage = parseInt(url.searchParams.get("closedPage") ?? "1", 10);
   const signalsPage = parseInt(url.searchParams.get("signalsPage") ?? "1", 10);
-  const pageSize = 20;
+  const pageSize = config.dashboardPageSize;
 
   const fourteenDaysAgo = new Date();
-  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - config.dashboardLookbackDays);
 
   const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
     await Promise.all([
@@ -59,7 +69,7 @@ export async function GET(req: Request) {
       }),
       prisma.scanRun.findMany({
         orderBy: { startedAt: "desc" },
-        take: 20,
+        take: config.dashboardPageSize,
       }),
       prisma.scanRun.findFirst({
         where: { market: "LSE", status: "COMPLETED" },
@@ -82,8 +92,8 @@ export async function GET(req: Request) {
   let regime: RegimeState | null = null;
   try {
     regime = await calculateMarketRegime();
-  } catch {
-    // If regime fetch fails, dashboard still loads
+  } catch (err) {
+    log.warn({ err }, "Market regime fetch failed, continuing without");
   }
 
   // Calculate equity curve state
@@ -106,7 +116,7 @@ export async function GET(req: Request) {
   const instructions: Array<{
     ticker: string;
     currency: string;
-    type: "HOLD" | "UPDATE_STOP" | "EXIT";
+    type: "HOLD" | "UPDATE_STOP" | "EXIT" | "T212_EXIT";
     currentStop: number;
     stopSetDate: string | null;
     latestClose: number | null;
@@ -122,11 +132,27 @@ export async function GET(req: Request) {
     let quoteMap: Record<string, Array<{ close: number }>> = {};
     try {
       quoteMap = await fetchEODQuotes(openTickers);
-    } catch {
-      // If quote fetch fails, we still show instructions with what we have
+    } catch (err) {
+      log.warn({ err }, "Quote fetch failed, continuing with stale data");
+    }
+
+    // Check T212 for positions that may have been closed by broker stop
+    let t212Positions: T212Position[] = [];
+    let t212Loaded = false;
+    const t212Settings = loadT212Settings();
+    if (t212Settings) {
+      try {
+        t212Positions = await getPositionsWithStopsMapped(t212Settings);
+        t212Loaded = true;
+      } catch (err) {
+        log.warn({ err }, "T212 fetch failed, continuing without");
+      }
     }
 
     for (const trade of openTrades) {
+      // If T212 loaded and position is gone, flag it immediately
+      const t212Match = t212Loaded ? t212Positions.find((p) => p.ticker === trade.ticker) : undefined;
+      const goneFromT212 = t212Loaded && !t212Match;
       const quotes = quoteMap[trade.ticker];
       const latestClose = quotes && quotes.length > 0 ? quotes[quotes.length - 1]!.close : null;
       const currentStop = Math.max(trade.hardStop, trade.trailingStop);
@@ -138,7 +164,28 @@ export async function GET(req: Request) {
       // Find unactioned stop update
       const unactionedUpdate = stopHistory.find((sh) => sh.changed && !sh.actioned);
 
-      if (latestClose !== null && latestClose < currentStop) {
+      if (goneFromT212) {
+        // Position no longer on T212 — stop was hit intraday or manually sold
+        instructions.push({
+          ticker: trade.ticker,
+          currency: c,
+          type: "T212_EXIT",
+          currentStop,
+          stopSetDate: lastStopEntry?.date?.toISOString() ?? null,
+          latestClose,
+          oldStop: null,
+          newStop: null,
+          changeAmount: null,
+          breakAmount: null,
+          actioned: false,
+        });
+        actions.push({
+          type: "EXIT",
+          ticker: trade.ticker,
+          message: `EXIT — position no longer held on T212. Sync to close at stop ${c}${currentStop.toFixed(2)}.`,
+          urgency: "HIGH",
+        });
+      } else if (latestClose !== null && latestClose < currentStop) {
         // EXIT
         const breakAmount = currentStop - latestClose;
         instructions.push({
@@ -162,6 +209,7 @@ export async function GET(req: Request) {
         });
       } else if (stopChanged && unactionedUpdate) {
         // UPDATE STOP
+        const previousStopLevel = unactionedUpdate.stopLevel - (unactionedUpdate.changeAmount ?? 0);
         instructions.push({
           ticker: trade.ticker,
           currency: c,
@@ -169,7 +217,7 @@ export async function GET(req: Request) {
           currentStop,
           stopSetDate: lastStopEntry?.date?.toISOString() ?? null,
           latestClose,
-          oldStop: trade.hardStop,
+          oldStop: previousStopLevel,
           newStop: trade.trailingStop,
           changeAmount: unactionedUpdate.changeAmount,
           breakAmount: null,
@@ -178,7 +226,7 @@ export async function GET(req: Request) {
         actions.push({
           type: "STOP_UPDATE",
           ticker: trade.ticker,
-          message: `Move stop UP to ${c}${trade.trailingStop.toFixed(2)} (was ${c}${trade.hardStop.toFixed(2)})`,
+          message: `Move stop UP to ${c}${trade.trailingStop.toFixed(2)} (was ${c}${previousStopLevel.toFixed(2)})`,
           urgency: "MEDIUM",
           stopHistoryId: unactionedUpdate.id,
         });
@@ -218,8 +266,8 @@ export async function GET(req: Request) {
     return scan.startedAt.toISOString().slice(0, 10) === todayStr;
   }
 
-  const lseNext = getNextScheduledRun(17, 30);
-  const usNext = getNextScheduledRun(22, 0);
+  const lseNext = getNextScheduledRun(config.lseScanHour, config.lseScanMinute);
+  const usNext = getNextScheduledRun(config.usScanHour, config.usScanMinute);
 
   const scheduledScans = {
     lse: {

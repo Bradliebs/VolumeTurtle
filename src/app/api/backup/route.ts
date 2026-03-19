@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { rateLimit } from "@/lib/rateLimit";
 import fs from "fs";
 import path from "path";
 
@@ -12,6 +13,10 @@ const BACKUP_DIR = path.join(
 const KEEP_DAYS = 30;
 
 export async function POST() {
+  // Rate limit: max 5 backups per minute
+  const limited = rateLimit("backup", 5, 60_000);
+  if (limited) return limited;
+
   try {
     fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
@@ -33,7 +38,9 @@ export async function POST() {
     };
 
     const backupPath = path.join(BACKUP_DIR, `volumeturtle_backup_${today}.json`);
-    fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+    const jsonReplacer = (_key: string, value: unknown) =>
+      typeof value === "bigint" ? value.toString() : value;
+    fs.writeFileSync(backupPath, JSON.stringify(backup, jsonReplacer, 2));
 
     // Trades CSV
     const csvHeaders = ["ticker", "entryDate", "entryPrice", "shares", "hardStop", "exitDate", "exitPrice", "rMultiple", "status", "volumeRatio"];
@@ -41,7 +48,10 @@ export async function POST() {
       t.ticker, t.entryDate.toISOString().split("T")[0], t.entryPrice, t.shares, t.hardStop,
       t.exitDate?.toISOString().split("T")[0] ?? "", t.exitPrice ?? "", t.rMultiple ?? "", t.status, t.volumeRatio,
     ]);
-    const csv = [csvHeaders.join(","), ...csvRows.map((r) => r.map((v) => `"${v}"`).join(","))].join("\n");
+    const csv = [csvHeaders.join(","), ...csvRows.map((r) => r.map((v) => {
+      const str = String(v);
+      return `"${str.replace(/"/g, '""')}"`;
+    }).join(","))].join("\n");
     const csvPath = path.join(BACKUP_DIR, `volumeturtle_trades_${today}.csv`);
     fs.writeFileSync(csvPath, csv);
 

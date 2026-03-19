@@ -7,6 +7,7 @@
  */
 import "dotenv/config";
 import fs from "fs";
+import readline from "readline";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -43,6 +44,20 @@ async function restore() {
 
   if (dryRun) {
     console.log("\n--- DRY RUN — no changes written ---");
+    return;
+  }
+
+  // Prompt for confirmation before destructive operation
+  const confirmed = await new Promise<boolean>((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question("\n⚠️  WARNING: This will DELETE ALL existing data and replace it.\nType 'CONFIRM' to proceed: ", (answer) => {
+      rl.close();
+      resolve(answer.trim() === "CONFIRM");
+    });
+  });
+
+  if (!confirmed) {
+    console.log("Restore cancelled.");
     return;
   }
 

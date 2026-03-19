@@ -6,14 +6,18 @@ import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { generateSignal, calculateAverageVolume, isVolumeSpike, isPriceConfirmed } from "@/lib/signals/volumeSignal";
 import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
-import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculatePositionSize } from "@/lib/risk/positionSizer";
 import { getCurrencySymbol } from "@/lib/currency";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/scan");
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { calculateTickerRegime, assessRegime } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { calculateCompositeScore } from "@/lib/signals/compositeScore";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import type { ExitReason } from "@/lib/trades/types";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -77,7 +81,15 @@ export async function GET(request: NextRequest) {
         volumeRatio: signal?.volumeRatio ?? null,
         rangePosition: signal?.rangePosition ?? null,
         atr20: signal?.atr20 ?? null,
-        actionTaken: signal ? "SIGNAL_FIRED" : "NO_SIGNAL",
+        compositeScore: signal?.compositeScore?.total ?? null,
+        compositeGrade: signal?.compositeScore?.grade ?? null,
+        actionTaken: signal
+          ? equityCurveState.systemState === "PAUSE"
+            ? "SKIPPED_EQUITY_PAUSE"
+            : openCount >= config.maxPositions
+              ? "SKIPPED_MAX_POSITIONS"
+              : "SIGNAL_FIRED"
+          : "NO_SIGNAL",
       };
       if (!dryRun) {
         await prisma.scanResult.upsert({
@@ -131,17 +143,16 @@ export async function GET(request: NextRequest) {
     let openCount = openTrades.length;
 
     // 6. Process exits
-    const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: string; rMultiple: number }> = [];
+    const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: ExitReason; rMultiple: number }> = [];
     for (const trade of openTrades) {
       const quotes = quoteMap[trade.ticker];
       if (!quotes || quotes.length === 0) continue;
 
       const latestQuote = quotes[quotes.length - 1]!;
       const currentClose = latestQuote.close;
-      const riskPerShare = trade.entryPrice - trade.hardStop;
 
       if (currentClose < trade.hardStop) {
-        const rMultiple = riskPerShare !== 0 ? (currentClose - trade.entryPrice) / riskPerShare : 0;
+        const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "HARD_STOP", rMultiple });
         if (!dryRun) {
           await prisma.trade.update({
@@ -153,7 +164,7 @@ export async function GET(request: NextRequest) {
       }
 
       if (shouldExit(currentClose, quotes)) {
-        const rMultiple = riskPerShare !== 0 ? (currentClose - trade.entryPrice) / riskPerShare : 0;
+        const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "TRAILING_STOP", rMultiple });
         if (!dryRun) {
           await prisma.trade.update({
@@ -164,15 +175,7 @@ export async function GET(request: NextRequest) {
         continue;
       }
 
-      const openPos: OpenPosition = {
-        ticker: trade.ticker,
-        entryDate: trade.entryDate.toISOString().slice(0, 10),
-        entryPrice: trade.entryPrice,
-        shares: trade.shares,
-        hardStop: trade.hardStop,
-        trailingStop: trade.trailingStop,
-        currentStop: Math.max(trade.hardStop, trade.trailingStop),
-      };
+      const openPos = tradeToOpenPosition(trade);
       const newTrailingStop = updateTrailingStop(openPos, quotes);
       if (newTrailingStop !== trade.trailingStop && !dryRun) {
         await prisma.trade.update({
@@ -182,20 +185,10 @@ export async function GET(request: NextRequest) {
       }
 
       // Write stop history record
-      const currentStop = Math.max(trade.hardStop, trade.trailingStop);
-      const newStop = Math.max(trade.hardStop, newTrailingStop);
-      const changed = newStop > currentStop;
-
-      if (!dryRun) {
+      const stopChanged = newTrailingStop > trade.trailingStop;
+      if (stopChanged && !dryRun) {
         await prisma.stopHistory.create({
-          data: {
-            tradeId: trade.id,
-            date: today,
-            stopLevel: newStop,
-            stopType: newStop > trade.hardStop ? "TRAILING" : "HARD",
-            changed,
-            changeAmount: changed ? newStop - currentStop : null,
-          },
+          data: buildStopHistoryData(trade.id, today, trade.hardStop, trade.trailingStop, newTrailingStop),
         });
       }
     }
@@ -322,7 +315,7 @@ export async function GET(request: NextRequest) {
         },
       });
     }
-    console.error("[/api/scan] Error:", err);
+    log.error({ err }, "Scan failed");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Scan failed" },
       { status: 500 },

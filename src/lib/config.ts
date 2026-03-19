@@ -25,6 +25,18 @@ export interface VolumeTurtleConfig {
   scoreWeightTrend: number;
   scoreWeightVolume: number;
   scoreWeightLiquidity: number;
+  cautionDrawdownPct: number;
+  pauseDrawdownPct: number;
+  quoteBatchSize: number;
+  quoteBatchDelayMs: number;
+  quoteLookbackDays: number;
+  dashboardPageSize: number;
+  dashboardLookbackDays: number;
+  lseScanHour: number;
+  lseScanMinute: number;
+  usScanHour: number;
+  usScanMinute: number;
+  syncDelayMs: number;
 }
 
 export const config: VolumeTurtleConfig = {
@@ -40,6 +52,18 @@ export const config: VolumeTurtleConfig = {
   scoreWeightTrend: envFloat("SCORE_WEIGHT_TREND", 0.30),
   scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.20),
   scoreWeightLiquidity: envFloat("SCORE_WEIGHT_LIQUIDITY", 0.10),
+  cautionDrawdownPct: envFloat("CAUTION_DRAWDOWN_PCT", 10),
+  pauseDrawdownPct: envFloat("PAUSE_DRAWDOWN_PCT", 20),
+  quoteBatchSize: envInt("QUOTE_BATCH_SIZE", 10),
+  quoteBatchDelayMs: envInt("QUOTE_BATCH_DELAY_MS", 500),
+  quoteLookbackDays: envInt("QUOTE_LOOKBACK_DAYS", 60),
+  dashboardPageSize: envInt("DASHBOARD_PAGE_SIZE", 20),
+  dashboardLookbackDays: envInt("DASHBOARD_LOOKBACK_DAYS", 14),
+  lseScanHour: envInt("LSE_SCAN_HOUR", 17),
+  lseScanMinute: envInt("LSE_SCAN_MINUTE", 30),
+  usScanHour: envInt("US_SCAN_HOUR", 22),
+  usScanMinute: envInt("US_SCAN_MINUTE", 0),
+  syncDelayMs: envInt("SYNC_DELAY_MS", 500),
 };
 
 // Validate config at load time

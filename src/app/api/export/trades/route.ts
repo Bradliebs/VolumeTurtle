@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/export/trades");
 
 export async function GET() {
+  try {
   const trades = await prisma.trade.findMany({
     orderBy: { entryDate: "desc" },
     include: { stopHistory: { orderBy: { date: "asc" } } },
@@ -60,4 +64,11 @@ export async function GET() {
       "Content-Disposition": `attachment; filename="volumeturtle_trades_${today}.csv"`,
     },
   });
+  } catch (err) {
+    log.error({ err }, "Export trades failed");
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Export failed" },
+      { status: 500 },
+    );
+  }
 }

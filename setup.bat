@@ -18,7 +18,14 @@ if %errorlevel% neq 0 (
 )
 
 echo [3/4] Waiting for Postgres to be ready...
-timeout /t 5 /nobreak >nul
+echo       Waiting for healthcheck...
+:wait_loop
+docker inspect --format="{{.State.Health.Status}}" volumeturtle-db 2>nul | findstr "healthy" >nul
+if %errorlevel% neq 0 (
+    timeout /t 2 /nobreak >nul
+    goto wait_loop
+)
+echo       Postgres is ready.
 
 echo [4/4] Pushing schema to database...
 call npx prisma db push

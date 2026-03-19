@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { updateTrailingStop } from "@/lib/signals/exitSignal";
-import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import type { ExitReason } from "@/lib/trades/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/positions/:id/sync");
 
 export async function POST(
   _request: NextRequest,
@@ -37,15 +41,7 @@ export async function POST(
     const atr20 = calculateATR(quotes, 20) ?? trade.atr20;
 
     // Recalculate trailing stop (ratchet only)
-    const openPos: OpenPosition = {
-      ticker: trade.ticker,
-      entryDate: trade.entryDate.toISOString().slice(0, 10),
-      entryPrice: trade.entryPrice,
-      shares: trade.shares,
-      hardStop: trade.hardStop,
-      trailingStop: trade.trailingStop,
-      currentStop: Math.max(trade.hardStop, trade.trailingStop),
-    };
+    const openPos = tradeToOpenPosition(trade);
     const newTrailingStop = updateTrailingStop(openPos, quotes);
     const previousStop = Math.max(trade.hardStop, trade.trailingStop);
     const newCurrentStop = Math.max(trade.hardStop, newTrailingStop);
@@ -63,26 +59,90 @@ export async function POST(
     // Write StopHistory if stop changed
     if (stopChanged) {
       await prisma.stopHistory.create({
-        data: {
-          tradeId: trade.id,
-          date: now,
-          stopLevel: newCurrentStop,
-          stopType: newCurrentStop > trade.hardStop ? "TRAILING" : "HARD",
-          changed: true,
-          changeAmount: newCurrentStop - previousStop,
-        },
+        data: buildStopHistoryData(trade.id, now, trade.hardStop, trade.trailingStop, newTrailingStop),
       });
     }
 
     // Determine instruction
-    const exitTriggered = latestClose < newCurrentStop;
+    let exitTriggered = latestClose < newCurrentStop || latestQuote.low < newCurrentStop;
+
+    // Also check prior days — if stop was breached on a day we didn't sync
+    const tradeWithHistory = await prisma.trade.findUnique({
+      where: { id },
+      include: { stopHistory: { orderBy: { date: "desc" }, take: 1 } },
+    });
+    let breachQuote = exitTriggered ? latestQuote : null;
+    if (!exitTriggered) {
+      const lastSyncDate = tradeWithHistory?.stopHistory[0]
+        ? new Date(tradeWithHistory.stopHistory[0].date)
+        : trade.entryDate;
+      for (const q of quotes) {
+        const qDate = new Date(q.date);
+        if (qDate <= lastSyncDate) continue;
+        if (q.low < newCurrentStop || q.close < newCurrentStop) {
+          breachQuote = q;
+          exitTriggered = true;
+          break;
+        }
+      }
+    }
+
     const c = getCurrencySymbol(trade.ticker);
     let instruction: { type: string; message: string; urgent: boolean };
 
+    // Try to match with T212 position
+    let t212Data = null;
+    let t212Loaded = false;
+    const t212Settings = loadT212Settings();
+    if (t212Settings) {
+      try {
+        const t212Positions = await getPositionsWithStopsMapped(t212Settings);
+        const t212Match = t212Positions.find((p) => p.ticker === trade.ticker);
+        t212Loaded = true;
+        if (t212Match) {
+          t212Data = {
+            currentPrice: t212Match.currentPrice,
+            quantity: t212Match.quantity,
+            averagePrice: t212Match.averagePrice,
+            ppl: t212Match.ppl,
+            stopLoss: t212Match.stopLoss ?? null,
+            confirmed: true,
+          };
+        }
+      } catch {
+        // T212 fetch failed — continue without
+      }
+    }
+
+    const goneFromT212 = t212Loaded && !exitTriggered && !t212Data;
+
     if (exitTriggered) {
+      // Auto-close the trade with the exit price
+      const bq = breachQuote ?? latestQuote;
+      const exitPrice = bq.close < newCurrentStop ? bq.close : newCurrentStop;
+      const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
+      const exitReason: ExitReason = exitPrice < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
+      const exitDate = new Date(bq.date);
+      await prisma.trade.update({
+        where: { id },
+        data: { status: "CLOSED", exitDate, exitPrice, exitReason, rMultiple },
+      });
       instruction = {
         type: "EXIT",
-        message: `EXIT — close ${c}${latestClose.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)}. Sell at market open on Trading 212.`,
+        message: `EXITED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${bq.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
+        urgent: true,
+      };
+    } else if (goneFromT212) {
+      // Position no longer on T212 — stop hit intraday or manually sold
+      const exitPrice = newCurrentStop;
+      const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
+      await prisma.trade.update({
+        where: { id },
+        data: { status: "CLOSED", exitDate: now, exitPrice, exitReason: "T212_STOP", rMultiple },
+      });
+      instruction = {
+        type: "EXIT",
+        message: `EXITED — position no longer held on T212. Closed at stop ${c}${exitPrice.toFixed(2)}.`,
         urgent: true,
       };
     } else if (stopChanged) {
@@ -105,28 +165,6 @@ export async function POST(
       include: { stopHistory: { orderBy: { date: "asc" } } },
     });
 
-    // Try to match with T212 position
-    let t212Data = null;
-    const t212Settings = loadT212Settings();
-    if (t212Settings) {
-      try {
-        const t212Positions = await getPositionsWithStopsMapped(t212Settings);
-        const t212Match = t212Positions.find((p) => p.ticker === trade.ticker);
-        if (t212Match) {
-          t212Data = {
-            currentPrice: t212Match.currentPrice,
-            quantity: t212Match.quantity,
-            averagePrice: t212Match.averagePrice,
-            ppl: t212Match.ppl,
-            stopLoss: t212Match.stopLoss ?? null,
-            confirmed: true,
-          };
-        }
-      } catch {
-        // T212 fetch failed — continue without
-      }
-    }
-
     return NextResponse.json({
       trade: updatedTrade,
       tradeId: id,
@@ -140,7 +178,7 @@ export async function POST(
       t212: t212Data,
     });
   } catch (err) {
-    console.error("[POST /api/positions/:id/sync] Error:", err);
+    log.error({ err }, "Single position sync failed");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Sync failed" },
       { status: 500 },

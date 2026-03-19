@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { loadT212Settings, getAccountCash, getPositionsWithStopsMapped } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/t212/sync");
 
 export async function POST() {
   try {
@@ -122,7 +125,7 @@ export async function POST() {
       // silent
     }
 
-    console.error("[POST /api/t212/sync] Error:", err);
+    log.error({ err }, "T212 sync failed");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "T212 sync failed" },
       { status: 500 },

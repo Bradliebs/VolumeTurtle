@@ -23,9 +23,11 @@ export interface EquityCurveState {
   triggeredAt: string | null;
 }
 
+import { config } from "@/lib/config";
+
 // Thresholds
-const CAUTION_DRAWDOWN_PCT = 10;
-const PAUSE_DRAWDOWN_PCT = 20;
+const CAUTION_DRAWDOWN_PCT = config.cautionDrawdownPct;
+const PAUSE_DRAWDOWN_PCT = config.pauseDrawdownPct;
 const RECOVERY_SNAPSHOTS = 3;
 
 /**

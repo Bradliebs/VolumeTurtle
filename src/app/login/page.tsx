@@ -68,12 +68,17 @@ export default function LoginPage() {
           </p>
         </div>
 
+        <label htmlFor="dashboard-token" style={{ color: "#888", fontSize: "0.875rem" }}>
+          Dashboard token
+        </label>
         <input
+          id="dashboard-token"
           type="password"
           value={token}
           onChange={(e) => setToken(e.target.value)}
           placeholder="Dashboard token"
           autoFocus
+          aria-describedby={error ? "login-error" : undefined}
           style={{
             background: "#1a1a1a",
             border: "1px solid #333",
@@ -86,7 +91,7 @@ export default function LoginPage() {
         />
 
         {error && (
-          <p style={{ color: "var(--red, #ef4444)", fontSize: "0.875rem", margin: 0 }}>
+          <p id="login-error" role="alert" style={{ color: "var(--red, #ef4444)", fontSize: "0.875rem", margin: 0 }}>
             {error}
           </p>
         )}

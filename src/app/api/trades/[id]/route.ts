@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { closeTradeSchema, validateBody } from "@/lib/validation";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/trades/:id");
 
 export async function PATCH(
   request: NextRequest,
@@ -41,7 +44,7 @@ export async function PATCH(
 
     return NextResponse.json(updated);
   } catch (err) {
-    console.error("[PATCH /api/trades/:id] Error:", err);
+    log.error({ err }, "Failed to update trade");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to update trade" },
       { status: 500 },

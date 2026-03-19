@@ -38,7 +38,7 @@ export async function t212Fetch(path: string, settings: T212Settings): Promise<u
 export interface T212AccountSummary {
   cash: number;
   total: number;
-  pipilesult: number;
+  ppl: number; // profit/loss
   open: number;
   id?: string;
   currencyCode?: string;
@@ -121,8 +121,8 @@ export async function getInstruments(settings: T212Settings): Promise<T212Instru
   return t212Fetch("/equity/metadata/instruments", settings) as Promise<T212Instrument[]>;
 }
 
-// Cache instruments to avoid repeated API calls
-let instrumentCache: T212Instrument[] | null = null;
+// Cache instruments to avoid repeated API calls (promise-based to prevent races)
+let instrumentCachePromise: Promise<T212Instrument[]> | null = null;
 
 /**
  * Map a T212 internal ticker to a Yahoo-style ticker.
@@ -163,22 +163,26 @@ function isT212Pence(t212Ticker: string, instruments: T212Instrument[]): boolean
  * Converts GBX (pence) prices to GBP (pounds).
  */
 export async function getPositionsWithStopsMapped(settings: T212Settings): Promise<T212Position[]> {
-  // Load instruments (cached)
-  if (!instrumentCache) {
-    instrumentCache = await getInstruments(settings);
+  // Load instruments (cached, race-safe)
+  if (!instrumentCachePromise) {
+    instrumentCachePromise = getInstruments(settings);
   }
+  const instrumentCache = await instrumentCachePromise;
 
-  const [positions, orders] = await Promise.all([
+  const [rawPositions, orders] = await Promise.all([
     getOpenPositions(settings),
     getPendingOrders(settings).catch(() => [] as T212Order[]),
   ]);
 
-  for (const pos of positions) {
+  // Return new objects instead of mutating originals
+  const positions: T212Position[] = rawPositions.map((original) => {
+    const pos = { ...original };
     const pence = isT212Pence(pos.ticker, instrumentCache);
     const divisor = pence ? 100 : 1;
 
     // Map ticker
-    pos.ticker = t212ToYahooTicker(pos.ticker, instrumentCache);
+    const originalT212Ticker = pos.ticker;
+    pos.ticker = t212ToYahooTicker(originalT212Ticker, instrumentCache);
 
     // Convert pence to pounds
     if (pence) {
@@ -188,10 +192,7 @@ export async function getPositionsWithStopsMapped(settings: T212Settings): Promi
     }
 
     // Match stop-loss from pending orders
-    // Note: check original T212 ticker in orders
     if (pos.stopLoss == null) {
-      // Orders still use T212 tickers, but we already mapped pos.ticker
-      // So search by matching any order for positions
       for (const o of orders) {
         const orderYahoo = t212ToYahooTicker(o.ticker, instrumentCache);
         if (orderYahoo === pos.ticker && (o.type === "STOP" || o.type === "STOP_LIMIT")) {
@@ -202,7 +203,9 @@ export async function getPositionsWithStopsMapped(settings: T212Settings): Promi
     } else if (pence && pos.stopLoss != null) {
       pos.stopLoss = pos.stopLoss / divisor;
     }
-  }
+
+    return pos;
+  });
 
   return positions;
 }

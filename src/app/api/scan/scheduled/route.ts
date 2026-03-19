@@ -7,9 +7,13 @@ import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { generateSignal } from "@/lib/signals/volumeSignal";
 import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
-import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/scan/scheduled");
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import type { ExitReason } from "@/lib/trades/types";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -22,8 +26,11 @@ async function loadAccountBalance(): Promise<number> {
 }
 
 export async function GET(req: NextRequest) {
-  // Validate secret token
-  const token = req.nextUrl.searchParams.get("token");
+  // Validate secret token (prefer Authorization header, fall back to query param)
+  const authHeader = req.headers.get("authorization");
+  const headerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const queryToken = req.nextUrl.searchParams.get("token");
+  const token = headerToken ?? queryToken;
   if (!SCHEDULED_SCAN_TOKEN || !token || token !== SCHEDULED_SCAN_TOKEN) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
@@ -62,11 +69,12 @@ export async function GET(req: NextRequest) {
 
     // 3. Filter liquidity
     const liquidTickers = fetchedTickers.filter((ticker) =>
-      hasMinimumLiquidity(ticker, quoteMap[ticker]! as any),
+      hasMinimumLiquidity(ticker, quoteMap[ticker]!),
     );
 
     // 4. Generate signals
     const signals: VolumeSignal[] = [];
+    const openCountForAction = await prisma.trade.count({ where: { status: "OPEN" } });
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
       const signal = generateSignal(ticker, quotes, marketRegime);
@@ -78,7 +86,15 @@ export async function GET(req: NextRequest) {
         volumeRatio: signal?.volumeRatio ?? null,
         rangePosition: signal?.rangePosition ?? null,
         atr20: signal?.atr20 ?? null,
-        actionTaken: signal ? "SIGNAL_FIRED" : "NO_SIGNAL",
+        compositeScore: signal?.compositeScore?.total ?? null,
+        compositeGrade: signal?.compositeScore?.grade ?? null,
+        actionTaken: signal
+          ? equityCurveState.systemState === "PAUSE"
+            ? "SKIPPED_EQUITY_PAUSE"
+            : openCountForAction >= config.maxPositions
+              ? "SKIPPED_MAX_POSITIONS"
+              : "SIGNAL_FIRED"
+          : "NO_SIGNAL",
       };
       await prisma.scanResult.upsert({
         where: { ticker_scanDate: { ticker, scanDate: today } },
@@ -97,7 +113,7 @@ export async function GET(req: NextRequest) {
     });
 
     // 6. Process exits on open trades in this market
-    const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: string; rMultiple: number }> = [];
+    const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: ExitReason; rMultiple: number }> = [];
     const marketOpenTrades = openTrades.filter((t) =>
       filterUniverseByMarket([t.ticker], market).length > 0,
     );
@@ -108,10 +124,9 @@ export async function GET(req: NextRequest) {
 
       const latestQuote = quotes[quotes.length - 1]!;
       const currentClose = latestQuote.close;
-      const riskPerShare = trade.entryPrice - trade.hardStop;
 
       if (currentClose < trade.hardStop) {
-        const rMultiple = riskPerShare !== 0 ? (currentClose - trade.entryPrice) / riskPerShare : 0;
+        const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "HARD_STOP", rMultiple });
         await prisma.trade.update({
           where: { id: trade.id },
@@ -121,7 +136,7 @@ export async function GET(req: NextRequest) {
       }
 
       if (shouldExit(currentClose, quotes)) {
-        const rMultiple = riskPerShare !== 0 ? (currentClose - trade.entryPrice) / riskPerShare : 0;
+        const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "TRAILING_STOP", rMultiple });
         await prisma.trade.update({
           where: { id: trade.id },
@@ -131,15 +146,7 @@ export async function GET(req: NextRequest) {
       }
 
       // Update trailing stop
-      const openPos: OpenPosition = {
-        ticker: trade.ticker,
-        entryDate: trade.entryDate.toISOString().slice(0, 10),
-        entryPrice: trade.entryPrice,
-        shares: trade.shares,
-        hardStop: trade.hardStop,
-        trailingStop: trade.trailingStop,
-        currentStop: Math.max(trade.hardStop, trade.trailingStop),
-      };
+      const openPos = tradeToOpenPosition(trade);
       const newTrailingStop = updateTrailingStop(openPos, quotes);
       if (newTrailingStop !== trade.trailingStop) {
         await prisma.trade.update({
@@ -148,19 +155,12 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      const currentStop = Math.max(trade.hardStop, trade.trailingStop);
-      const newStop = Math.max(trade.hardStop, newTrailingStop);
-      const changed = newStop > currentStop;
-      await prisma.stopHistory.create({
-        data: {
-          tradeId: trade.id,
-          date: today,
-          stopLevel: newStop,
-          stopType: newStop > trade.hardStop ? "TRAILING" : "HARD",
-          changed,
-          changeAmount: changed ? newStop - currentStop : null,
-        },
-      });
+      const stopChanged = newTrailingStop > trade.trailingStop;
+      if (stopChanged) {
+        await prisma.stopHistory.create({
+          data: buildStopHistoryData(trade.id, today, trade.hardStop, trade.trailingStop, newTrailingStop),
+        });
+      }
     }
 
     // 7. Save snapshot
@@ -212,7 +212,7 @@ export async function GET(req: NextRequest) {
         durationMs,
       },
     });
-    console.error("[/api/scan/scheduled] Error:", err);
+    log.error({ err }, "Scheduled scan failed");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Scheduled scan failed" },
       { status: 500 },

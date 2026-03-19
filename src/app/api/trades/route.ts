@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { createTradeSchema, validateBody } from "@/lib/validation";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/trades");
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,7 +46,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(trade, { status: 201 });
   } catch (err) {
-    console.error("[POST /api/trades] Error:", err);
+    log.error({ err }, "Failed to create trade");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to create trade" },
       { status: 500 },

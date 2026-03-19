@@ -1,15 +1,9 @@
 ﻿"use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React from "react";
 import Link from "next/link";
 
-import type {
-  DashboardData,
-  TradeWithHistory,
-  ScanResponse,
-  SignalFired,
-  SyncResult,
-} from "./components/types";
+import type { TradeWithHistory } from "./components/types";
 import { mono, fmtDate, fmtMoney, fmtPrice, tickerCurrency, fmtTime } from "./components/helpers";
 import { SkeletonRows } from "./components/SkeletonRows";
 import { Badge } from "./components/Badge";
@@ -18,258 +12,49 @@ import { EquityCurvePanel } from "./components/EquityCurvePanel";
 import { RegimeBanner } from "./components/RegimeBanner";
 import { ScanHistorySection } from "./components/ScanHistorySection";
 import { SignalCard } from "./components/SignalCard";
+import { GradeLegend } from "./components/GradeLegend";
+import { useDashboard } from "./hooks/useDashboard";
 
 // ---------------------------------------------------------------------------
 // Main Page
 // ---------------------------------------------------------------------------
 
 export default function Home() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [scanRunning, setScanRunning] = useState(false);
-  const [scanResult, setScanResult] = useState<ScanResponse | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [placingTicker, setPlacingTicker] = useState<string | null>(null);
-  const [exitingTradeId, setExitingTradeId] = useState<string | null>(null);
-  const [exitPrice, setExitPrice] = useState("");
-  const [editingBalance, setEditingBalance] = useState(false);
-  const [balanceInput, setBalanceInput] = useState("");
-  const [expandedTradeId, setExpandedTradeId] = useState<string | null>(null);
-  const [syncingTradeId, setSyncingTradeId] = useState<string | null>(null);
-  const [syncingAll, setSyncingAll] = useState(false);
-  const [syncProgress, setSyncProgress] = useState("");
-  const [syncData, setSyncData] = useState<Record<string, SyncResult>>({});
-  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
-  const [exitFlash, setExitFlash] = useState(false);
-
-  const fetchDashboard = useCallback(async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    try {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) {
-        setData(await res.json());
-      }
-    } catch {
-      // silent
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchDashboard();
-    const interval = setInterval(() => fetchDashboard(true), 60_000);
-    return () => clearInterval(interval);
-  }, [fetchDashboard]);
-
-  // Auto-sync on load if positions exist and last sync > 1 hour ago
-  useEffect(() => {
-    if (!data || data.openTrades.length === 0) return;
-    if (lastSyncAt) {
-      const elapsed = Date.now() - new Date(lastSyncAt).getTime();
-      if (elapsed < 3600_000) return; // Less than 1 hour
-    }
-    // Only auto-sync once
-    if (syncingAll) return;
-    syncAllPositions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.openTrades.length]);
-
-  async function syncPosition(tradeId: string) {
-    setSyncingTradeId(tradeId);
-    try {
-      const res = await fetch(`/api/positions/${tradeId}/sync`, { method: "POST" });
-      if (res.ok) {
-        const result: SyncResult = await res.json();
-        result.tradeId = tradeId;
-        setSyncData((prev) => ({ ...prev, [tradeId]: result }));
-        setLastSyncAt(new Date().toISOString());
-        // Check for exit — flash and scroll
-        if (result.instruction?.type === "EXIT") {
-          setExitFlash(true);
-          setTimeout(() => setExitFlash(false), 1500);
-          document.getElementById("daily-instructions")?.scrollIntoView({ behavior: "smooth" });
-        }
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    } finally {
-      setSyncingTradeId(null);
-    }
-  }
-
-  async function syncAllPositions() {
-    setSyncingAll(true);
-    setSyncProgress("Syncing...");
-    try {
-      const res = await fetch("/api/positions/sync-all", { method: "POST" });
-      if (res.ok) {
-        const json = await res.json();
-        const results: SyncResult[] = json.results ?? [];
-        const newSyncData: Record<string, SyncResult> = {};
-        let hasExit = false;
-        for (const r of results) {
-          newSyncData[r.tradeId] = r;
-          if (r.instruction?.type === "EXIT") hasExit = true;
-        }
-        setSyncData((prev) => ({ ...prev, ...newSyncData }));
-        setLastSyncAt(json.syncedAt ?? new Date().toISOString());
-        if (hasExit) {
-          setExitFlash(true);
-          setTimeout(() => setExitFlash(false), 1500);
-          document.getElementById("daily-instructions")?.scrollIntoView({ behavior: "smooth" });
-        }
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    } finally {
-      setSyncingAll(false);
-      setSyncProgress("");
-    }
-  }
-
-  async function runScan(dry: boolean) {
-    setScanRunning(true);
-    setScanResult(null);
-    setScanError(null);
-    try {
-      const res = await fetch(`/api/scan?dry=${dry}`);
-      const json = await res.json();
-      if (json.error) {
-        setScanError(json.error);
-      } else {
-        setScanResult(json);
-        fetchDashboard(true);
-      }
-    } catch (err) {
-      setScanError(err instanceof Error ? err.message : "Scan failed");
-    } finally {
-      setScanRunning(false);
-    }
-  }
-
-  async function markPlaced(signal: SignalFired) {
-    setPlacingTicker(signal.ticker);
-    try {
-      const res = await fetch("/api/trades", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ticker: signal.ticker,
-          suggestedEntry: signal.suggestedEntry,
-          hardStop: signal.hardStop,
-          riskPerShare: signal.riskPerShare,
-          volumeRatio: signal.volumeRatio,
-          rangePosition: signal.rangePosition,
-          atr20: signal.atr20,
-          shares: signal.positionSize?.shares ?? 0,
-        }),
-      });
-      if (res.ok) {
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    } finally {
-      setPlacingTicker(null);
-    }
-  }
-
-  async function markExited(tradeId: string) {
-    const price = parseFloat(exitPrice);
-    if (isNaN(price) || price <= 0) return;
-    try {
-      const res = await fetch(`/api/trades/${tradeId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exitPrice: price }),
-      });
-      if (res.ok) {
-        setExitingTradeId(null);
-        setExitPrice("");
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    }
-  }
-
-  async function updateBalance() {
-    const newBal = parseFloat(balanceInput);
-    if (isNaN(newBal) || newBal <= 0) return;
-    try {
-      const res = await fetch("/api/balance", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ balance: newBal }),
-      });
-      if (res.ok) {
-        setEditingBalance(false);
-        setBalanceInput("");
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    }
-  }
-
-  async function markActionDone(stopHistoryId: string) {
-    try {
-      const res = await fetch(`/api/stops/${stopHistoryId}`, {
-        method: "PATCH",
-      });
-      if (res.ok) {
-        fetchDashboard(true);
-      }
-    } catch {
-      // silent
-    }
-  }
-
-  // Derived stats
-  const account = data?.account;
-  const openTrades = data?.openTrades ?? [];
-  const recentSignals = data?.recentSignals ?? [];
-  const closedTrades = data?.closedTrades ?? [];
-  const balance = account?.balance ?? 0;
-  const openCount = openTrades.length;
-  const totalExposure = openTrades.reduce((s, t) => s + t.entryPrice * t.shares, 0);
-  const exposurePct = balance > 0 ? ((totalExposure / balance) * 100).toFixed(1) : "0.0";
-
-  const wins = closedTrades.filter((t) => (t.rMultiple ?? 0) > 0).length;
-  const winRate = closedTrades.length > 0 ? ((wins / closedTrades.length) * 100).toFixed(0) : "—";
-  const avgR =
-    closedTrades.length > 0
-      ? (closedTrades.reduce((s, t) => s + (t.rMultiple ?? 0), 0) / closedTrades.length).toFixed(2)
-      : "—";
-
-  // Action required items — from server
-  const serverActions = data?.actions ?? [];
-  const instructions = data?.instructions ?? [];
-
-  // Add new signal actions from client-side scan result
-  const actionItems = [...serverActions];
-  if (scanResult && !scanResult.dryRun) {
-    for (const s of scanResult.signalsFired) {
-      const alreadyPlaced = openTrades.some((t) => t.ticker === s.ticker);
-      if (!alreadyPlaced) {
-        actionItems.push({
-          type: "NEW_SIGNAL",
-          ticker: s.ticker,
-          message: `New signal — ${s.ticker} — see scan panel`,
-          urgency: "MEDIUM",
-        });
-      }
-    }
-  }
+  const {
+    data, loading, refreshing,
+    scanRunning, scanResult, scanError, showConfirm,
+    placingTicker, exitingTradeId, exitPrice,
+    editingBalance, balanceInput,
+    expandedTradeId,
+    syncingTradeId, syncingAll, syncData, exitFlash,
+    errorMsg,
+    // derived
+    openTrades, recentSignals, closedTrades,
+    balance, openCount, exposurePct, winRate, avgR,
+    instructions, actionItems,
+    // async actions
+    syncPosition, syncAllPositions, runScan,
+    markPlaced, markExited, updateBalance, markActionDone,
+    // UI actions
+    dismissError, openConfirm, closeConfirm,
+    startBalanceEdit, cancelBalanceEdit, setBalanceInput,
+    startExit, cancelExit, setExitPrice,
+    toggleExpand,
+  } = useDashboard();
 
   return (
     <main className="min-h-screen p-4 max-w-[1400px] mx-auto">
+      {/* ── ERROR TOAST ── */}
+      {errorMsg && (
+        <div
+          role="alert"
+          className="fixed top-4 right-4 z-50 px-4 py-2 text-sm text-white bg-red-600/90 border border-red-500 rounded shadow-lg backdrop-blur-sm animate-fade-in"
+          style={mono}
+        >
+          {errorMsg}
+          <button onClick={dismissError} className="ml-3 text-white/70 hover:text-white">✕</button>
+        </div>
+      )}
       {/* ── HEADER ── */}
       <header className="flex flex-wrap items-center gap-4 border-b border-[var(--border)] pb-3 mb-6">
         <h1 className="text-xl font-bold tracking-tight mr-2 text-[var(--green)]" style={mono}>
@@ -294,7 +79,7 @@ export default function Home() {
                 step="1"
                 value={balanceInput}
                 onChange={(e) => setBalanceInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") updateBalance(); if (e.key === "Escape") setEditingBalance(false); }}
+                onKeyDown={(e) => { if (e.key === "Enter") updateBalance(); if (e.key === "Escape") cancelBalanceEdit(); }}
                 autoFocus
                 className="w-24 px-1 py-0.5 text-xs bg-[#0a0a0a] border border-[var(--amber)] text-white"
                 style={mono}
@@ -307,7 +92,7 @@ export default function Home() {
                 ✓
               </button>
               <button
-                onClick={() => { setEditingBalance(false); setBalanceInput(""); }}
+                onClick={cancelBalanceEdit}
                 className="px-1 py-0.5 text-xs text-[var(--dim)]"
               >
                 ✕
@@ -317,7 +102,7 @@ export default function Home() {
             <span
               className="text-white cursor-pointer hover:text-[var(--amber)] transition-colors"
               style={mono}
-              onClick={() => { setEditingBalance(true); setBalanceInput(String(balance)); }}
+              onClick={() => startBalanceEdit(balance)}
               title="Click to edit balance"
             >
               {fmtMoney(balance)}
@@ -462,6 +247,27 @@ export default function Home() {
                   );
                 }
 
+                if (inst.type === "T212_EXIT") {
+                  return (
+                    <div key={inst.ticker} className={`${i > 0 ? "border-t border-[var(--border)] pt-4 mt-4" : ""}`}>
+                      <div className="border border-[var(--red)] p-4" style={{ background: "#1a0000" }}>
+                        <p className="text-base font-bold text-[var(--dim)] mb-3">─── {inst.ticker} ───</p>
+                        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                          <span className="text-[var(--red)] font-bold text-sm" style={{ gridColumn: "1 / -1" }}>
+                            🔴 POSITION CLOSED BY T212
+                          </span>
+                          <span className="text-[var(--dim)]">Stop was</span>
+                          <span className="text-[var(--dim)]">{inst.currency}{inst.currentStop.toFixed(2)}</span>
+                          <span className="text-[var(--dim)]">EOD close</span>
+                          <span className="text-[var(--dim)]">{inst.latestClose != null ? `${inst.currency}${inst.latestClose.toFixed(2)}` : "—"}</span>
+                          <span className="text-[var(--red)] font-bold mt-1">Action</span>
+                          <span className="text-[var(--red)] font-bold mt-1">Click ↻ SYNC to confirm exit and close trade</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
                 if (inst.type === "UPDATE_STOP") {
                   return (
                     <div key={inst.ticker} className={`${i > 0 ? "border-t border-[var(--border)] pt-4 mt-4" : ""}`}>
@@ -558,7 +364,7 @@ export default function Home() {
                     <React.Fragment key={t.id}>
                       <tr
                         className={`border-b border-[var(--border)] hover:bg-[#1a1a1a] cursor-pointer ${isSyncing ? "opacity-50" : ""}`}
-                        onClick={() => setExpandedTradeId(isExpanded ? null : t.id)}
+                        onClick={() => toggleExpand(t.id)}
                       >
                         <td className="px-3 py-2 font-semibold text-[var(--green)]">
                           {t.ticker}
@@ -650,7 +456,7 @@ export default function Home() {
                                 CONFIRM
                               </button>
                               <button
-                                onClick={() => { setExitingTradeId(null); setExitPrice(""); }}
+                                onClick={cancelExit}
                                 className="px-1 py-0.5 text-xs text-[var(--dim)]"
                               >
                                 ✕
@@ -658,7 +464,7 @@ export default function Home() {
                             </div>
                           ) : (
                             <button
-                              onClick={() => setExitingTradeId(t.id)}
+                              onClick={() => startExit(t.id)}
                               className="px-2 py-0.5 text-xs border border-[#333] text-[var(--dim)] hover:text-[var(--red)] hover:border-[var(--red)] transition-colors"
                               style={mono}
                             >
@@ -738,6 +544,7 @@ export default function Home() {
                 <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
                   <th className="text-left px-3 py-2">DATE</th>
                   <th className="text-left px-3 py-2">TICKER</th>
+                  <th className="text-center px-3 py-2">GRADE</th>
                   <th className="text-right px-3 py-2">VOL RATIO</th>
                   <th className="text-right px-3 py-2">RANGE POS</th>
                   <th className="text-center px-3 py-2">ACTION</th>
@@ -745,10 +552,10 @@ export default function Home() {
               </thead>
               <tbody>
                 {loading ? (
-                  <SkeletonRows cols={5} />
+                  <SkeletonRows cols={6} />
                 ) : recentSignals.filter((s) => s.signalFired).length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                    <td colSpan={6} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
                       No signals in the last 14 days
                     </td>
                   </tr>
@@ -759,13 +566,30 @@ export default function Home() {
                       const actionColor =
                         s.actionTaken === "ENTERED"
                           ? "var(--green)"
-                          : s.actionTaken === "SKIPPED_MAX_POSITIONS"
+                          : s.actionTaken === "SKIPPED_MAX_POSITIONS" || s.actionTaken === "SKIPPED_EQUITY_PAUSE"
                             ? "var(--amber)"
                             : "var(--dim)";
+                      const gradeColor =
+                        s.compositeGrade === "A" ? "#00ff88"
+                          : s.compositeGrade === "B" ? "var(--green)"
+                            : s.compositeGrade === "C" ? "var(--amber)"
+                              : s.compositeGrade === "D" ? "var(--red)"
+                                : "var(--dim)";
+                      const actionLabel =
+                        s.actionTaken === "SKIPPED_EQUITY_PAUSE" ? "PAUSED"
+                          : s.actionTaken === "SKIPPED_MAX_POSITIONS" ? "MAX POS"
+                            : s.actionTaken ?? "—";
                       return (
                         <tr key={s.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
                           <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(s.scanDate)}</td>
                           <td className="px-3 py-2 font-semibold">{s.ticker}</td>
+                          <td className="px-3 py-2 text-center">
+                            {s.compositeGrade ? (
+                              <span className="font-bold" style={{ color: gradeColor }}>{s.compositeGrade}</span>
+                            ) : (
+                              <span className="text-[var(--dim)]">—</span>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right text-[var(--green)]">
                             {s.volumeRatio != null ? s.volumeRatio.toFixed(1) + "x" : "—"}
                           </td>
@@ -781,7 +605,7 @@ export default function Home() {
                             {s.rangePosition != null ? s.rangePosition.toFixed(2) : "—"}
                           </td>
                           <td className="px-3 py-2 text-center">
-                            <Badge label={s.actionTaken ?? "—"} color={actionColor} />
+                            <Badge label={actionLabel} color={actionColor} />
                           </td>
                         </tr>
                       );
@@ -806,7 +630,7 @@ export default function Home() {
                 {scanRunning ? "SCANNING…" : "RUN DRY SCAN"}
               </button>
               <button
-                onClick={() => setShowConfirm(true)}
+                onClick={openConfirm}
                 disabled={scanRunning}
                 className="flex-1 px-4 py-2 text-sm border border-[var(--red)] text-[var(--red)] hover:bg-[var(--red)] hover:text-black transition-colors font-semibold disabled:opacity-40"
                 style={mono}
@@ -814,6 +638,8 @@ export default function Home() {
                 RUN LIVE SCAN
               </button>
             </div>
+
+            <GradeLegend />
 
             {/* Status area */}
             <div className="text-xs" style={mono}>
@@ -950,9 +776,9 @@ export default function Home() {
         <ConfirmModal
           balance={balance}
           remaining={Math.max(0, 5 - openCount)}
-          onCancel={() => setShowConfirm(false)}
+          onCancel={closeConfirm}
           onConfirm={() => {
-            setShowConfirm(false);
+            closeConfirm();
             runScan(false);
           }}
         />

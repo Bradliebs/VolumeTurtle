@@ -54,7 +54,9 @@ export async function runBackup(): Promise<{
   };
 
   const backupPath = path.join(BACKUP_DIR, `volumeturtle_backup_${today}.json`);
-  fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2));
+  const jsonReplacer = (_key: string, value: unknown) =>
+    typeof value === "bigint" ? value.toString() : value;
+  fs.writeFileSync(backupPath, JSON.stringify(backup, jsonReplacer, 2));
   console.log(`✓ Backup saved: ${backupPath}`);
 
   // Trades CSV
@@ -78,7 +80,10 @@ export async function runBackup(): Promise<{
 
   const csv = [
     csvHeaders.join(","),
-    ...csvRows.map((r) => r.map((v) => `"${v}"`).join(",")),
+    ...csvRows.map((r) => r.map((v) => {
+      const str = String(v);
+      return `"${str.replace(/"/g, '""')}"`;
+    }).join(",")),
   ].join("\n");
 
   const csvPath = path.join(BACKUP_DIR, `volumeturtle_trades_${today}.csv`);

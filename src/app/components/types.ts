@@ -1,3 +1,5 @@
+import type { ExitReason, TradeStatus } from "@/lib/trades/types";
+
 export interface AccountSnapshot {
   id: string;
   date: string;
@@ -15,9 +17,9 @@ export interface Trade {
   trailingStop: number;
   exitDate: string | null;
   exitPrice: number | null;
-  exitReason: string | null;
+  exitReason: ExitReason | null;
   rMultiple: number | null;
-  status: string;
+  status: TradeStatus;
   volumeRatio: number;
   rangePosition: number;
   atr20: number;
@@ -31,6 +33,8 @@ export interface ScanResult {
   volumeRatio: number | null;
   rangePosition: number | null;
   atr20: number | null;
+  compositeScore: number | null;
+  compositeGrade: string | null;
   actionTaken: string | null;
 }
 
@@ -54,7 +58,7 @@ export interface ActionItem {
 export interface Instruction {
   ticker: string;
   currency: string;
-  type: "HOLD" | "UPDATE_STOP" | "EXIT";
+  type: "HOLD" | "UPDATE_STOP" | "EXIT" | "T212_EXIT";
   currentStop: number;
   stopSetDate: string | null;
   latestClose: number | null;

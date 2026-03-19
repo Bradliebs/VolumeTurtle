@@ -13,4 +13,9 @@ export const config: VolumeTurtleConfig = {
   scoreWeightTrend: 0.30,
   scoreWeightVolume: 0.20,
   scoreWeightLiquidity: 0.10,
+  cautionDrawdownPct: 10,
+  pauseDrawdownPct: 20,
+  quoteBatchSize: 10,
+  quoteBatchDelayMs: 500,
+  quoteLookbackDays: 60,
 };

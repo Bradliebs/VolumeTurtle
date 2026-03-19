@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/stops");
 
 export async function PATCH(
   request: NextRequest,
@@ -13,7 +16,7 @@ export async function PATCH(
     });
     return NextResponse.json(updated);
   } catch (err) {
-    console.error("[PATCH /api/stops/:id] Error:", err);
+    log.error({ err }, "Failed to mark stop actioned");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to update" },
       { status: 500 },

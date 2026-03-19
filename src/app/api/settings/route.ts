@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { updateSettingsSchema, validateBody } from "@/lib/validation";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/settings");
 
 export async function GET() {
   try {
@@ -45,7 +48,7 @@ export async function GET() {
       t212Configured: !!process.env["T212_API_KEY"],
     });
   } catch (err) {
-    console.error("[GET /api/settings] Error:", err);
+    log.error({ err }, "Failed to load settings");
     return NextResponse.json({ error: "Failed to load settings" }, { status: 500 });
   }
 }
@@ -100,7 +103,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    console.error("[PUT /api/settings] Error:", err);
+    log.error({ err }, "Failed to save settings");
     return NextResponse.json({ error: "Failed to save settings" }, { status: 500 });
   }
 }

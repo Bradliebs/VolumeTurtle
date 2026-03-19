@@ -2,6 +2,7 @@ import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
 import { getCachedQuotes, cacheQuotes, getLatestCachedDate } from "@/lib/data/quoteCache";
 import { createLogger } from "@/lib/logger";
+import { config } from "@/lib/config";
 
 const log = createLogger("fetchQuotes");
 const yahooFinance = new YahooFinance();
@@ -17,10 +18,10 @@ export interface DailyQuote {
 
 export type QuoteMap = Record<string, DailyQuote[]>;
 
-const BATCH_SIZE = 10;
-const BATCH_DELAY_MS = 500;
+const BATCH_SIZE = config.quoteBatchSize;
+const BATCH_DELAY_MS = config.quoteBatchDelayMs;
 const MIN_DAYS = 25;
-const LOOKBACK_DAYS = 60;
+const LOOKBACK_DAYS = config.quoteLookbackDays;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -109,14 +110,33 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
   for (const ticker of tickers) {
     try {
       const latestCached = await getLatestCachedDate(ticker);
-      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
 
       if (latestCached && latestCached.toISOString().slice(0, 10) === today) {
-        // Cache is fresh — use it directly
-        const cached = await getCachedQuotes(ticker, since);
-        if (cached.length >= MIN_DAYS) {
-          result[ticker] = cached;
-          continue;
+        // Cache has today's bar — only trust it after all markets close (23:00 UTC)
+        // to avoid caching partial intraday bars from Yahoo Finance
+        const afterAllMarketsClose = now.getUTCHours() >= 23;
+        if (afterAllMarketsClose) {
+          const cached = await getCachedQuotes(ticker, since);
+          if (cached.length >= MIN_DAYS) {
+            result[ticker] = cached;
+            continue;
+          }
+        }
+      } else if (latestCached) {
+        // Cache has yesterday's (or older) bar — use if today is a non-trading day
+        // (weekends/holidays), otherwise re-fetch to check for today's bar
+        const isWeekend = now.getUTCDay() === 0 || now.getUTCDay() === 6;
+        const cachedYesterday = new Date(now);
+        cachedYesterday.setDate(cachedYesterday.getDate() - 1);
+        const latestIsFresh = latestCached.toISOString().slice(0, 10) >= cachedYesterday.toISOString().slice(0, 10);
+        if (isWeekend && latestIsFresh) {
+          const cached = await getCachedQuotes(ticker, since);
+          if (cached.length >= MIN_DAYS) {
+            result[ticker] = cached;
+            continue;
+          }
         }
       }
     } catch {

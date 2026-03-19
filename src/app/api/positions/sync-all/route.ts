@@ -1,18 +1,28 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
+import { config } from "@/lib/config";
 import { updateTrailingStop } from "@/lib/signals/exitSignal";
-import type { OpenPosition } from "@/lib/signals/exitSignal";
 import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getPositionsWithStopsMapped, getAccountCash } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import type { ExitReason } from "@/lib/trades/types";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/positions/sync-all");
+import { rateLimit } from "@/lib/rateLimit";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function POST() {
+export async function POST(request: Request) {
+  // Rate limit: max 3 sync-all per minute
+  const limited = rateLimit(`sync-all`, 3, 60_000);
+  if (limited) return limited;
+
   try {
     const openTrades = await prisma.trade.findMany({
       where: { status: "OPEN" },
@@ -25,6 +35,7 @@ export async function POST() {
 
     // Try to fetch T212 positions if configured
     let t212Positions: T212Position[] = [];
+    let t212Loaded = false;
     let t212Balance: number | null = null;
     let t212Currency: string | null = null;
     const t212Settings = loadT212Settings();
@@ -35,6 +46,7 @@ export async function POST() {
           getAccountCash(t212Settings),
         ]);
         t212Positions = positions;
+        t212Loaded = true;
         t212Balance = account.total ?? account.cash ?? null;
         t212Currency = account.currencyCode ?? "GBP";
       } catch {
@@ -48,8 +60,8 @@ export async function POST() {
     for (let i = 0; i < openTrades.length; i++) {
       const trade = openTrades[i]!;
 
-      // Rate limit: 500ms delay between tickers
-      if (i > 0) await sleep(500);
+      // Rate limit: delay between tickers
+      if (i > 0) await sleep(config.syncDelayMs);
 
       try {
         const quoteMap = await fetchEODQuotes([trade.ticker]);
@@ -64,15 +76,7 @@ export async function POST() {
 
         const atr20 = calculateATR(quotes, 20) ?? trade.atr20;
 
-        const openPos: OpenPosition = {
-          ticker: trade.ticker,
-          entryDate: trade.entryDate.toISOString().slice(0, 10),
-          entryPrice: trade.entryPrice,
-          shares: trade.shares,
-          hardStop: trade.hardStop,
-          trailingStop: trade.trailingStop,
-          currentStop: Math.max(trade.hardStop, trade.trailingStop),
-        };
+        const openPos = tradeToOpenPosition(trade);
         const newTrailingStop = updateTrailingStop(openPos, quotes);
         const previousStop = Math.max(trade.hardStop, trade.trailingStop);
         const newCurrentStop = Math.max(trade.hardStop, newTrailingStop);
@@ -85,25 +89,65 @@ export async function POST() {
 
         if (stopChanged) {
           await prisma.stopHistory.create({
-            data: {
-              tradeId: trade.id,
-              date: now,
-              stopLevel: newCurrentStop,
-              stopType: newCurrentStop > trade.hardStop ? "TRAILING" : "HARD",
-              changed: true,
-              changeAmount: newCurrentStop - previousStop,
-            },
+            data: buildStopHistoryData(trade.id, now, trade.hardStop, trade.trailingStop, newTrailingStop),
           });
         }
 
-        const exitTriggered = latestClose < newCurrentStop;
+        const exitTriggered = latestClose < newCurrentStop || latestQuote.low < newCurrentStop;
+
+        // Also check prior days — if stop was breached on a day we didn't sync,
+        // find the first breach day and use that as exit
+        let breachQuote = exitTriggered ? latestQuote : null;
+        if (!exitTriggered) {
+          // Look back through recent quotes for any day the low breached the stop
+          const lastSyncDate = trade.stopHistory.length > 0
+            ? new Date(trade.stopHistory[trade.stopHistory.length - 1]!.date)
+            : trade.entryDate;
+          for (const q of quotes) {
+            const qDate = new Date(q.date);
+            if (qDate <= lastSyncDate) continue;
+            if (q.low < newCurrentStop || q.close < newCurrentStop) {
+              breachQuote = q;
+              break; // Use the first breach day
+            }
+          }
+        }
+
+        const actuallyExited = breachQuote !== null;
         const c = getCurrencySymbol(trade.ticker);
         let instruction: { type: string; message: string; urgent: boolean };
 
-        if (exitTriggered) {
+        // Check if position is gone from T212 (stop hit intraday or manually sold)
+        const t212Match = t212Loaded ? t212Positions.find((p) => p.ticker === trade.ticker) : undefined;
+        const goneFromT212 = t212Loaded && !actuallyExited && !t212Match;
+
+        if (actuallyExited) {
+          // Auto-close the trade with the exit price
+          const breachClose = breachQuote!.close;
+          const exitPrice = breachClose < newCurrentStop ? breachClose : newCurrentStop;
+          const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
+          const exitReason: ExitReason = exitPrice < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
+          const exitDate = new Date(breachQuote!.date);
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data: { status: "CLOSED", exitDate, exitPrice, exitReason, rMultiple },
+          });
           instruction = {
             type: "EXIT",
-            message: `EXIT — close ${c}${latestClose.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)}. Sell at market open on Trading 212.`,
+            message: `EXITED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${breachQuote!.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
+            urgent: true,
+          };
+        } else if (goneFromT212) {
+          // Position no longer on T212 — stop hit intraday or manually sold
+          const exitPrice = newCurrentStop;
+          const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data: { status: "CLOSED", exitDate: now, exitPrice, exitReason: "T212_STOP", rMultiple },
+          });
+          instruction = {
+            type: "EXIT",
+            message: `EXITED — position no longer held on T212. Closed at stop ${c}${exitPrice.toFixed(2)}.`,
             urgent: true,
           };
         } else if (stopChanged) {
@@ -124,9 +168,6 @@ export async function POST() {
           where: { id: trade.id },
           include: { stopHistory: { orderBy: { date: "asc" } } },
         });
-
-        // Match with T212 position
-        const t212Match = t212Positions.find((p) => p.ticker === trade.ticker);
 
         results.push({
           tradeId: trade.id,
@@ -165,7 +206,7 @@ export async function POST() {
       } : null,
     });
   } catch (err) {
-    console.error("[POST /api/positions/sync-all] Error:", err);
+    log.error({ err }, "Sync all failed");
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Sync all failed" },
       { status: 500 },

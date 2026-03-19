@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 export const metadata: Metadata = {
   title: "VolumeTurtle",
@@ -22,7 +23,9 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased" style={{ fontFamily: "'IBM Plex Sans', sans-serif" }}>
-        {children}
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
       </body>
     </html>
   );

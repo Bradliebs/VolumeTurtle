@@ -58,7 +58,8 @@ export function calculatePositionSize(
     exposurePercent,
     exposureWarning,
     equityState: equityCurveState?.systemState ?? null,
-    effectiveRiskPct: (equityCurveState?.riskPctPerTrade ?? config.riskPctPerTrade * 100),
+    // Display value as percentage (e.g. 2.0 = 2%)
+    effectiveRiskPct: equityCurveState?.riskPctPerTrade ?? (config.riskPctPerTrade * 100),
   };
 }
 

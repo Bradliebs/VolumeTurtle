@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { dangerActionSchema, validateBody } from "@/lib/validation";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("api/settings/danger");
 
 export async function POST(request: NextRequest) {
+  // Rate limit: max 3 danger actions per minute
+  const limited = rateLimit(getRateLimitKey(request), 3, 60_000);
+  if (limited) return limited;
+
   try {
     const parsed = await validateBody(request, dangerActionSchema);
     if (parsed.error) {
@@ -23,7 +31,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    console.error("[POST /api/settings/danger] Error:", err);
+    log.error({ err }, "Danger action failed");
     return NextResponse.json({ error: "Action failed" }, { status: 500 });
   }
 }

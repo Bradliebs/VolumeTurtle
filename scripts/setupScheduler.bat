@@ -2,12 +2,21 @@
 echo Setting up VolumeTurtle scheduled scans...
 echo.
 
+REM --- Validate required env var ---
+if "%SCHEDULED_SCAN_TOKEN%"=="" (
+  echo ERROR: SCHEDULED_SCAN_TOKEN environment variable is not set.
+  echo Set it with: setx SCHEDULED_SCAN_TOKEN "your_secret_token"
+  echo Then restart your terminal and run this script again.
+  pause
+  exit /b 1
+)
+
 REM --- Create log directory ---
 mkdir "%USERPROFILE%\VolumeTurtle\logs" 2>nul
 
 REM --- LSE Scan: 17:30 daily ---
 schtasks /create /tn "VolumeTurtle_LSE_Scan" ^
-  /tr "curl -s \"http://localhost:3000/api/scan/scheduled?market=LSE&token=%SCHEDULED_SCAN_TOKEN%\" > \"%USERPROFILE%\VolumeTurtle\logs\lse_scan.log\" 2>&1" ^
+  /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=LSE\" > \"%USERPROFILE%\VolumeTurtle\logs\lse_scan.log\" 2>&1" ^
   /sc daily ^
   /st 17:30 ^
   /f
@@ -16,7 +25,7 @@ echo LSE scan scheduled at 17:30
 
 REM --- US Scan: 22:00 daily ---
 schtasks /create /tn "VolumeTurtle_US_Scan" ^
-  /tr "curl -s \"http://localhost:3000/api/scan/scheduled?market=US&token=%SCHEDULED_SCAN_TOKEN%\" > \"%USERPROFILE%\VolumeTurtle\logs\us_scan.log\" 2>&1" ^
+  /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=US\" > \"%USERPROFILE%\VolumeTurtle\logs\us_scan.log\" 2>&1" ^
   /sc daily ^
   /st 22:00 ^
   /f

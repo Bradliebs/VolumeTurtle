@@ -31,8 +31,8 @@ describe("calculateTrailingLow", () => {
     expect(calculateTrailingLow(quotes)).toBe(91);
   });
 
-  it("returns -Infinity for empty quotes", () => {
-    expect(calculateTrailingLow([])).toBe(-Infinity);
+  it("returns null for empty quotes", () => {
+    expect(calculateTrailingLow([])).toBeNull();
   });
 
   it("handles fewer quotes than trailing window", () => {

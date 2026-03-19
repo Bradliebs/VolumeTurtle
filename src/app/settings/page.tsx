@@ -60,6 +60,12 @@ export default function SettingsPage() {
   const [backupResult, setBackupResult] = useState<string | null>(null);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [backupDir, setBackupDir] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  function showError(msg: string) {
+    setErrorMsg(msg);
+    setTimeout(() => setErrorMsg(null), 6000);
+  }
 
   useEffect(() => {
     fetchSettings();
@@ -75,7 +81,7 @@ export default function SettingsPage() {
         setBackupDir(json.backupDir);
       }
     } catch {
-      // silent
+      showError("Failed to fetch backup status");
     }
   }
 
@@ -119,7 +125,7 @@ export default function SettingsPage() {
         if (json.settings.manualBalance) setManualBalance(json.settings.manualBalance);
       }
     } catch {
-      // silent
+      showError("Failed to load settings");
     } finally {
       setLoading(false);
     }
@@ -153,7 +159,7 @@ export default function SettingsPage() {
       });
       fetchSettings();
     } catch {
-      // silent
+      showError("Failed to save T212 settings");
     } finally {
       setSavingT212(false);
     }
@@ -222,6 +228,16 @@ export default function SettingsPage() {
 
   return (
     <main className="min-h-screen p-4 max-w-[900px] mx-auto">
+      {errorMsg && (
+        <div
+          role="alert"
+          className="fixed top-4 right-4 z-50 px-4 py-2 text-sm text-white bg-red-600/90 border border-red-500 rounded shadow-lg backdrop-blur-sm"
+          style={mono}
+        >
+          {errorMsg}
+          <button onClick={() => setErrorMsg(null)} className="ml-3 text-white/70 hover:text-white">✕</button>
+        </div>
+      )}
       {/* NAV */}
       <header className="flex items-center gap-4 border-b border-[var(--border)] pb-3 mb-6">
         <h1 className="text-xl font-bold tracking-tight text-[var(--green)]" style={mono}>VolumeTurtle</h1>
@@ -240,16 +256,26 @@ export default function SettingsPage() {
           <div className="flex items-center gap-4">
             <span className="text-[var(--dim)] w-28 shrink-0">Environment</span>
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer" onClick={() => setT212Env("demo")}>
-                <span className={`w-3 h-3 rounded-full border-2 inline-flex items-center justify-center ${t212Env === "demo" ? "border-[var(--green)]" : "border-[#444]"}`}>
-                  {t212Env === "demo" && <span className="w-1.5 h-1.5 rounded-full bg-[var(--green)]" />}
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="t212-env"
+                  value="demo"
+                  checked={t212Env === "demo"}
+                  onChange={() => setT212Env("demo")}
+                  className="accent-[var(--green)]"
+                />
                 Demo
               </label>
-              <label className="flex items-center gap-2 cursor-pointer" onClick={() => setT212Env("live")}>
-                <span className={`w-3 h-3 rounded-full border-2 inline-flex items-center justify-center ${t212Env === "live" ? "border-[var(--green)]" : "border-[#444]"}`}>
-                  {t212Env === "live" && <span className="w-1.5 h-1.5 rounded-full bg-[var(--green)]" />}
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="t212-env"
+                  value="live"
+                  checked={t212Env === "live"}
+                  onChange={() => setT212Env("live")}
+                  className="accent-[var(--green)]"
+                />
                 Live
               </label>
             </div>
@@ -356,11 +382,11 @@ export default function SettingsPage() {
 
           <div className="flex items-center gap-4">
             <span className="text-[var(--dim)] w-28 shrink-0">Balance source</span>
-            <label className="flex items-center gap-2 cursor-pointer" onClick={() => { if (data?.t212?.connected) setBalanceSource("t212"); }}>
+            <label className="flex items-center gap-2 cursor-pointer" onClick={() => { if (data?.t212) setBalanceSource("t212"); }}>
               <span className={`w-3 h-3 rounded-full border-2 inline-flex items-center justify-center ${balanceSource === "t212" ? "border-[var(--green)]" : "border-[#444]"}`}>
                 {balanceSource === "t212" && <span className="w-1.5 h-1.5 rounded-full bg-[var(--green)]" />}
               </span>
-              <span className={!data?.t212?.connected ? "text-[#444]" : ""}>Pull from Trading 212</span>
+              <span className={!data?.t212 ? "text-[#444]" : ""}>Pull from Trading 212</span>
             </label>
             <label className="flex items-center gap-2 cursor-pointer" onClick={() => setBalanceSource("manual")}>
               <span className={`w-3 h-3 rounded-full border-2 inline-flex items-center justify-center ${balanceSource === "manual" ? "border-[var(--green)]" : "border-[#444]"}`}>

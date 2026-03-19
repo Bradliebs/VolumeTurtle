@@ -9,6 +9,11 @@ services:
       POSTGRES_DB: volume_turtle
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d volume_turtle"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     volumes:
       - volume_turtle_db:/var/lib/postgresql/data
 

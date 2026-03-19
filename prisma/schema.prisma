@@ -20,7 +20,6 @@ model Ticker {
   updatedAt DateTime @updatedAt
 
   quotes  DailyQuote[]
-  signals Signal[]
 
   @@index([symbol])
 }
@@ -37,41 +36,10 @@ model DailyQuote {
   adjClose  Float
   volume    BigInt
 
-  ticker Ticker @relation(fields: [tickerId], references: [id])
+  ticker Ticker @relation(fields: [tickerId], references: [id], onDelete: Cascade)
 
   @@unique([tickerId, date])
   @@index([date])
-}
-
-/// A generated signal (volume spike, breakout, etc.)
-model Signal {
-  id         Int      @id @default(autoincrement())
-  tickerId   Int
-  date       DateTime
-  type       String   // e.g. "VOLUME_SPIKE", "BREAKOUT"
-  strength   Float    // 0-1 confidence
-  metadata   Json?    // extra detail
-  createdAt  DateTime @default(now())
-
-  ticker Ticker @relation(fields: [tickerId], references: [id])
-
-  @@index([date])
-  @@index([type])
-}
-
-/// Position-sizing & risk parameters for a signal
-model RiskCalc {
-  id            Int      @id @default(autoincrement())
-  signalId      Int
-  entryPrice    Float
-  stopPrice     Float
-  targetPrice   Float?
-  positionSize  Float
-  riskAmount    Float
-  riskReward    Float?
-  createdAt     DateTime @default(now())
-
-  @@index([signalId])
 }
 
 /// Nightly scan run metadata
@@ -102,7 +70,7 @@ model Trade {
   trailingStop  Float
   exitDate      DateTime?
   exitPrice     Float?
-  exitReason    String?   // "TRAILING_STOP" | "HARD_STOP" | "MANUAL"
+  exitReason    String?   // ExitReason: "HARD_STOP" | "TRAILING_STOP" | "MANUAL" | "T212_STOP"
   rMultiple     Float?    // (exitPrice - entryPrice) / riskPerShare
   status        String    // "OPEN" | "CLOSED"
   volumeRatio   Float     // volume spike ratio at entry
@@ -121,7 +89,7 @@ model Trade {
 model StopHistory {
   id            String    @id @default(cuid())
   tradeId       String
-  trade         Trade     @relation(fields: [tradeId], references: [id])
+  trade         Trade     @relation(fields: [tradeId], references: [id], onDelete: Cascade)
   date          DateTime
   stopLevel     Float
   stopType      String    // "HARD" | "TRAILING"
@@ -142,9 +110,11 @@ model ScanResult {
   signalFired   Boolean
   volumeRatio   Float?
   rangePosition Float?
-  atr20         Float?
-  actionTaken   String?  // "ENTERED" | "SKIPPED_MAX_POSITIONS" | "SKIPPED_LIQUIDITY" | "NO_SIGNAL"
-  createdAt     DateTime @default(now())
+  atr20          Float?
+  compositeScore Float?   // 0.00–1.00 composite signal quality
+  compositeGrade String?  // "A" | "B" | "C" | "D"
+  actionTaken    String?  // "ENTERED" | "SIGNAL_FIRED" | "SKIPPED_MAX_POSITIONS" | "SKIPPED_EQUITY_PAUSE" | "NO_SIGNAL"
+  createdAt      DateTime @default(now())
 
   @@unique([ticker, scanDate])
   @@index([scanDate])

@@ -24,6 +24,7 @@ import { calculateMarketRegime } from "../src/lib/signals/regimeFilter";
 import type { RegimeState } from "../src/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "../src/lib/risk/equityCurve";
 import type { EquityCurveState } from "../src/lib/risk/equityCurve";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "../src/lib/trades/utils";
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -91,8 +92,7 @@ async function main() {
   // 3. Filter by minimum liquidity
   const liquidTickers = fetchedTickers.filter((ticker) => {
     const quotes = quoteMap[ticker]!;
-    // hasMinimumLiquidity expects { close, volume } — DailyQuote satisfies this structurally
-    return hasMinimumLiquidity(ticker, quotes as any);
+    return hasMinimumLiquidity(ticker, quotes);
   });
   console.log(`[nightlyScan] ${liquidTickers.length} tickers pass liquidity filter`);
 
@@ -189,6 +189,97 @@ async function main() {
   });
   let openCount = openTrades.length;
 
+  // 6. Process exits for open trades FIRST (before entries)
+  console.log(`[nightlyScan] Checking ${openTrades.length} open trades for exits…`);
+  for (const trade of openTrades) {
+    const quotes = quoteMap[trade.ticker];
+    if (!quotes || quotes.length === 0) {
+      console.log(`  [WARN] No quote data for open trade ${trade.ticker} — skipping exit check`);
+      continue;
+    }
+
+    const latestQuote = quotes[quotes.length - 1]!;
+    const currentClose = latestQuote.close;
+
+    // Check hard stop first
+    if (currentClose < trade.hardStop) {
+      const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
+
+      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
+
+      if (!DRY_RUN) {
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data: {
+            status: "CLOSED",
+            exitDate: today,
+            exitPrice: currentClose,
+            exitReason: "HARD_STOP",
+            rMultiple,
+          },
+        });
+      }
+
+      openCount--;
+      console.log(
+        `  [EXIT] ${trade.ticker} — HARD_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
+      );
+      continue;
+    }
+
+    // Check trailing stop via 10-day low
+    if (shouldExit(currentClose, quotes)) {
+      const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
+
+      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
+
+      if (!DRY_RUN) {
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data: {
+            status: "CLOSED",
+            exitDate: today,
+            exitPrice: currentClose,
+            exitReason: "TRAILING_STOP",
+            rMultiple,
+          },
+        });
+      }
+
+      openCount--;
+      console.log(
+        `  [EXIT] ${trade.ticker} — TRAILING_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
+      );
+      continue;
+    }
+
+    // No exit — update trailing stop (ratchet up only)
+    const openPos = tradeToOpenPosition(trade);
+    const newTrailingStop = updateTrailingStop(openPos, quotes);
+
+    if (newTrailingStop !== trade.trailingStop && !DRY_RUN) {
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data: { trailingStop: newTrailingStop },
+      });
+    }
+
+    // Write stop history record only when stop changed
+    const stopChanged = newTrailingStop > trade.trailingStop;
+    if (stopChanged && !DRY_RUN) {
+      await prisma.stopHistory.create({
+        data: buildStopHistoryData(trade.id, today, trade.hardStop, trade.trailingStop, newTrailingStop),
+      });
+    }
+
+    if (newTrailingStop !== trade.trailingStop) {
+      console.log(
+        `  [STOP] ${trade.ticker} — trailing stop raised to $${newTrailingStop.toFixed(2)}`,
+      );
+    }
+  }
+
+  // 7. Enter new trades (after exits — openCount is now accurate)
   if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) {
     console.log(`[nightlyScan] MAX POSITIONS REACHED (${equityCurveState.maxPositions} allowed in ${equityCurveState.systemState} state) — no new entries today`);
     // Mark all fired signals as skipped
@@ -201,7 +292,6 @@ async function main() {
       }
     }
   } else {
-    // 6. Enter new trades
     for (const signal of signals) {
       if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) break;
 
@@ -242,120 +332,7 @@ async function main() {
     }
   }
 
-  // 7. Process exits for open trades
-  console.log(`[nightlyScan] Checking ${openTrades.length} open trades for exits…`);
-  for (const trade of openTrades) {
-    const quotes = quoteMap[trade.ticker];
-    if (!quotes || quotes.length === 0) {
-      console.log(`  [WARN] No quote data for open trade ${trade.ticker} — skipping exit check`);
-      continue;
-    }
-
-    const latestQuote = quotes[quotes.length - 1]!;
-    const currentClose = latestQuote.close;
-
-    // Check hard stop first
-    if (currentClose < trade.hardStop) {
-      const riskPerShare = trade.entryPrice - trade.hardStop;
-      const rMultiple = riskPerShare !== 0
-        ? (currentClose - trade.entryPrice) / riskPerShare
-        : 0;
-
-      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
-
-      if (!DRY_RUN) {
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: {
-            status: "CLOSED",
-            exitDate: today,
-            exitPrice: currentClose,
-            exitReason: "HARD_STOP",
-            rMultiple,
-          },
-        });
-      }
-
-      console.log(
-        `  [EXIT] ${trade.ticker} — HARD_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
-      );
-      continue;
-    }
-
-    // Check trailing stop via 10-day low
-    if (shouldExit(currentClose, quotes)) {
-      const riskPerShare = trade.entryPrice - trade.hardStop;
-      const rMultiple = riskPerShare !== 0
-        ? (currentClose - trade.entryPrice) / riskPerShare
-        : 0;
-
-      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
-
-      if (!DRY_RUN) {
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: {
-            status: "CLOSED",
-            exitDate: today,
-            exitPrice: currentClose,
-            exitReason: "TRAILING_STOP",
-            rMultiple,
-          },
-        });
-      }
-
-      console.log(
-        `  [EXIT] ${trade.ticker} — TRAILING_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
-      );
-      continue;
-    }
-
-    // No exit — update trailing stop (ratchet up only)
-    const openPos: OpenPosition = {
-      ticker: trade.ticker,
-      entryDate: trade.entryDate.toISOString().slice(0, 10),
-      entryPrice: trade.entryPrice,
-      shares: trade.shares,
-      hardStop: trade.hardStop,
-      trailingStop: trade.trailingStop,
-      currentStop: Math.max(trade.hardStop, trade.trailingStop),
-    };
-
-    const newTrailingStop = updateTrailingStop(openPos, quotes);
-
-    if (newTrailingStop !== trade.trailingStop && !DRY_RUN) {
-      await prisma.trade.update({
-        where: { id: trade.id },
-        data: { trailingStop: newTrailingStop },
-      });
-    }
-
-    // Write stop history record
-    const currentStop = Math.max(trade.hardStop, trade.trailingStop);
-    const newStop = Math.max(trade.hardStop, newTrailingStop);
-    const changed = newStop > currentStop;
-
-    if (!DRY_RUN) {
-      await prisma.stopHistory.create({
-        data: {
-          tradeId: trade.id,
-          date: today,
-          stopLevel: newStop,
-          stopType: newStop > trade.hardStop ? "TRAILING" : "HARD",
-          changed,
-          changeAmount: changed ? newStop - currentStop : null,
-        },
-      });
-    }
-
-    if (newTrailingStop !== trade.trailingStop) {
-      console.log(
-        `  [STOP] ${trade.ticker} — trailing stop raised to $${newTrailingStop.toFixed(2)}`,
-      );
-    }
-  }
-
-  // Recount open trades after exits
+  // Recount open trades after exits and entries
   const finalOpenTrades = DRY_RUN
     ? openTrades.length - summary.tradesExited.length + summary.tradesEntered.length
     : await prisma.trade.count({ where: { status: "OPEN" } });
