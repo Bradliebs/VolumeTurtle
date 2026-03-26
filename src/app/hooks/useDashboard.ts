@@ -29,6 +29,11 @@ interface DashboardState {
   syncProgress: string;
   syncData: Record<string, SyncResult>;
   lastSyncAt: string | null;
+  pushingStopTradeId: string | null;
+  pushingStopTicker: string | null;
+  importingTicker: string | null;
+  importingAll: boolean;
+  importProgress: string;
   exitFlash: boolean;
   errorMsg: string | null;
 }
@@ -52,6 +57,11 @@ const initialState: DashboardState = {
   syncProgress: "",
   syncData: {},
   lastSyncAt: null,
+  pushingStopTradeId: null,
+  pushingStopTicker: null,
+  importingTicker: null,
+  importingAll: false,
+  importProgress: "",
   exitFlash: false,
   errorMsg: null,
 };
@@ -82,6 +92,19 @@ type Action =
   | { type: "SYNC_ALL_START" }
   | { type: "SYNC_ALL_DONE"; results: SyncResult[]; syncedAt: string }
   | { type: "SYNC_ALL_FAIL" }
+  | { type: "T212_STOP_START"; tradeId: string }
+  | { type: "T212_STOP_DONE"; tradeId: string }
+  | { type: "T212_STOP_FAIL" }
+  | { type: "T212_TICKER_STOP_START"; ticker: string }
+  | { type: "T212_TICKER_STOP_DONE" }
+  | { type: "T212_TICKER_STOP_FAIL" }
+  | { type: "IMPORT_ONE_START"; ticker: string }
+  | { type: "IMPORT_ONE_DONE" }
+  | { type: "IMPORT_ONE_FAIL" }
+  | { type: "IMPORT_ALL_START" }
+  | { type: "IMPORT_ALL_PROGRESS"; msg: string }
+  | { type: "IMPORT_ALL_DONE" }
+  | { type: "IMPORT_ALL_FAIL" }
   | { type: "EXIT_FLASH"; active: boolean }
   | { type: "SET_ERROR"; msg: string }
   | { type: "CLEAR_ERROR" };
@@ -160,6 +183,36 @@ function reducer(state: DashboardState, action: Action): DashboardState {
     }
     case "SYNC_ALL_FAIL":
       return { ...state, syncingAll: false, syncProgress: "" };
+
+    case "T212_STOP_START":
+      return { ...state, pushingStopTradeId: action.tradeId };
+    case "T212_STOP_DONE":
+      return { ...state, pushingStopTradeId: null };
+    case "T212_STOP_FAIL":
+      return { ...state, pushingStopTradeId: null };
+
+    case "T212_TICKER_STOP_START":
+      return { ...state, pushingStopTicker: action.ticker };
+    case "T212_TICKER_STOP_DONE":
+      return { ...state, pushingStopTicker: null };
+    case "T212_TICKER_STOP_FAIL":
+      return { ...state, pushingStopTicker: null };
+
+    case "IMPORT_ONE_START":
+      return { ...state, importingTicker: action.ticker };
+    case "IMPORT_ONE_DONE":
+      return { ...state, importingTicker: null };
+    case "IMPORT_ONE_FAIL":
+      return { ...state, importingTicker: null };
+
+    case "IMPORT_ALL_START":
+      return { ...state, importingAll: true, importProgress: "Starting import..." };
+    case "IMPORT_ALL_PROGRESS":
+      return { ...state, importProgress: action.msg };
+    case "IMPORT_ALL_DONE":
+      return { ...state, importingAll: false, importProgress: "" };
+    case "IMPORT_ALL_FAIL":
+      return { ...state, importingAll: false, importProgress: "" };
 
     case "EXIT_FLASH":
       return { ...state, exitFlash: action.active };
@@ -361,6 +414,95 @@ export function useDashboard() {
     }
   }
 
+  async function pushStopToT212(tradeId: string) {
+    dispatch({ type: "T212_STOP_START", tradeId });
+    try {
+      const res = await fetch(`/api/t212/stops/${tradeId}`, { method: "POST" });
+      if (res.ok) {
+        dispatch({ type: "T212_STOP_DONE", tradeId });
+        fetchDashboard(true);
+      } else {
+        const json = await res.json().catch(() => ({ error: "Failed" }));
+        showError(json.error ?? "Failed to push stop to T212");
+        dispatch({ type: "T212_STOP_FAIL" });
+      }
+    } catch {
+      showError("Failed to push stop to T212");
+      dispatch({ type: "T212_STOP_FAIL" });
+    }
+  }
+
+  async function pushStopByTicker(ticker: string, stopPrice: number) {
+    dispatch({ type: "T212_TICKER_STOP_START", ticker });
+    try {
+      const res = await fetch("/api/t212/stops/ticker", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ticker, stopPrice }),
+      });
+      if (res.ok) {
+        dispatch({ type: "T212_TICKER_STOP_DONE" });
+        fetchDashboard(true);
+      } else {
+        const json = await res.json().catch(() => ({ error: "Failed" }));
+        showError(json.error ?? "Failed to push stop to T212");
+        dispatch({ type: "T212_TICKER_STOP_FAIL" });
+      }
+    } catch {
+      showError("Failed to push stop to T212");
+      dispatch({ type: "T212_TICKER_STOP_FAIL" });
+    }
+  }
+
+  async function importT212Position(position: { ticker: string; quantity: number; averagePrice: number; currentPrice: number }) {
+    dispatch({ type: "IMPORT_ONE_START", ticker: position.ticker });
+    try {
+      const res = await fetch("/api/t212/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: position.ticker,
+          quantity: position.quantity,
+          avgPrice: position.averagePrice,
+          currentPrice: position.currentPrice,
+        }),
+      });
+      if (res.ok) {
+        dispatch({ type: "IMPORT_ONE_DONE" });
+        await syncAllPositions();
+      } else {
+        const json = await res.json().catch(() => ({ error: "Failed" }));
+        showError(json.error ?? "Failed to import position");
+        dispatch({ type: "IMPORT_ONE_FAIL" });
+      }
+    } catch {
+      showError("Failed to import position");
+      dispatch({ type: "IMPORT_ONE_FAIL" });
+    }
+  }
+
+  async function importAllT212Positions() {
+    dispatch({ type: "IMPORT_ALL_START" });
+    try {
+      const res = await fetch("/api/t212/import-all", { method: "POST" });
+      if (res.ok) {
+        const json = await res.json();
+        dispatch({ type: "IMPORT_ALL_DONE" });
+        if (json.failed > 0) {
+          showError(`Imported ${json.imported}, failed ${json.failed}`);
+        }
+        await syncAllPositions();
+      } else {
+        const json = await res.json().catch(() => ({ error: "Failed" }));
+        showError(json.error ?? "Failed to import positions");
+        dispatch({ type: "IMPORT_ALL_FAIL" });
+      }
+    } catch {
+      showError("Failed to import positions");
+      dispatch({ type: "IMPORT_ALL_FAIL" });
+    }
+  }
+
   // ── Derived values ────────────────────────────────────────────────────────
 
   const openTrades = state.data?.openTrades ?? [];
@@ -423,6 +565,10 @@ export function useDashboard() {
     markExited,
     updateBalance,
     markActionDone,
+    pushStopToT212,
+    pushStopByTicker,
+    importT212Position,
+    importAllT212Positions,
 
     // UI actions
     dismissError: () => dispatch({ type: "CLEAR_ERROR" }),

@@ -59,11 +59,11 @@ export async function PUT(request: NextRequest) {
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { settings, t212 } = parsed.data;
+    const { settings, t212 } = parsed.data!;
 
     // Whitelist of allowed setting keys
     const ALLOWED_KEYS = new Set([
-      "riskPctPerTrade", "maxPositions", "maxExposurePct",
+      "riskPctPerTrade", "maxPositions", "maxExposure",
       "balanceSource", "manualBalance",
       "last_backup_at", "theme", "notifications",
     ]);

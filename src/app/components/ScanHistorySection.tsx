@@ -11,16 +11,29 @@ export function ScanHistorySection({ entries, loading }: { entries: ScanHistoryE
 
   return (
     <section className="mb-6">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm font-semibold text-[var(--dim)] mb-2 tracking-widest hover:text-white transition-colors"
-      >
-        <span>{expanded ? "▼" : "▶"}</span>
-        SCAN HISTORY
+      <div className="flex items-center gap-3 mb-2">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-2 text-sm font-semibold text-[var(--dim)] tracking-widest hover:text-white transition-colors"
+        >
+          <span>{expanded ? "▼" : "▶"}</span>
+          SCAN HISTORY
+          {entries.length > 0 && (
+            <span className="text-xs font-normal text-[#555]">({entries.length} recent)</span>
+          )}
+        </button>
         {entries.length > 0 && (
-          <span className="text-xs font-normal text-[#555]">({entries.length} recent)</span>
+          <a
+            href="/api/export/scans"
+            download
+            className="px-2 py-0.5 text-xs border border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[var(--green)] transition-colors"
+            style={mono}
+            title="Export scan history to CSV"
+          >
+            ⬇ CSV
+          </a>
         )}
-      </button>
+      </div>
       {expanded && (
         <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
           <table className="w-full text-sm" style={mono}>

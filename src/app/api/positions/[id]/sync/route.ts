@@ -5,7 +5,7 @@ import { updateTrailingStop } from "@/lib/signals/exitSignal";
 import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
-import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
 
@@ -40,21 +40,29 @@ export async function POST(
     // Recalculate ATR20
     const atr20 = calculateATR(quotes, 20) ?? trade.atr20;
 
-    // Recalculate trailing stop (ratchet only)
+    // Recalculate trailing stop (R-ladder + ATR trailing, monotonic)
     const openPos = tradeToOpenPosition(trade);
-    const newTrailingStop = updateTrailingStop(openPos, quotes);
+    const newTrailingStop = updateTrailingStop(openPos, quotes, atr20);
     const previousStop = Math.max(trade.hardStop, trade.trailingStop);
     const newCurrentStop = Math.max(trade.hardStop, newTrailingStop);
     const stopChanged = newTrailingStop > trade.trailingStop;
 
-    // Update trade in database
-    await prisma.trade.update({
-      where: { id },
-      data: {
-        trailingStop: newTrailingStop,
-        atr20,
-      },
-    });
+    // Monotonic enforcement: only write if stop moved up
+    if (stopChanged) {
+      await prisma.trade.update({
+        where: { id },
+        data: {
+          trailingStop: newTrailingStop,
+          atr20,
+        },
+      });
+    } else {
+      // ATR can still update even if stop didn't change
+      await prisma.trade.update({
+        where: { id },
+        data: { atr20 },
+      });
+    }
 
     // Write StopHistory if stop changed
     if (stopChanged) {
@@ -100,12 +108,17 @@ export async function POST(
         const t212Match = t212Positions.find((p) => p.ticker === trade.ticker);
         t212Loaded = true;
         if (t212Match) {
+          // Monotonic broker sync: if T212 stop is lower than our stored stop, discard it
+          const brokerStop = t212Match.stopLoss ?? null;
+          const effectiveBrokerStop = brokerStop !== null
+            ? enforceMonotonicStop(brokerStop, newCurrentStop)
+            : null;
           t212Data = {
             currentPrice: t212Match.currentPrice,
             quantity: t212Match.quantity,
             averagePrice: t212Match.averagePrice,
             ppl: t212Match.ppl,
-            stopLoss: t212Match.stopLoss ?? null,
+            stopLoss: effectiveBrokerStop,
             confirmed: true,
           };
         }

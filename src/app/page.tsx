@@ -27,6 +27,10 @@ export default function Home() {
     editingBalance, balanceInput,
     expandedTradeId,
     syncingTradeId, syncingAll, syncData, exitFlash,
+    pushingStopTradeId,
+    pushingStopTicker,
+    importingTicker,
+    importingAll,
     errorMsg,
     // derived
     openTrades, recentSignals, closedTrades,
@@ -35,6 +39,10 @@ export default function Home() {
     // async actions
     syncPosition, syncAllPositions, runScan,
     markPlaced, markExited, updateBalance, markActionDone,
+    pushStopToT212,
+    pushStopByTicker,
+    importT212Position,
+    importAllT212Positions,
     // UI actions
     dismissError, openConfirm, closeConfirm,
     startBalanceEdit, cancelBalanceEdit, setBalanceInput,
@@ -188,21 +196,38 @@ export default function Home() {
               <div key={i} className="flex items-center gap-2">
                 <span className="mr-1">{a.type === "EXIT" ? "🔴" : "🟡"}</span>
                 <span className={`font-semibold ${a.type === "EXIT" ? "text-[var(--red)]" : "text-[var(--amber)]"}`}>
-                  {a.type === "EXIT" ? "EXIT" : a.type === "STOP_UPDATE" ? "STOP" : "SIGNAL"}
+                  {a.type === "EXIT" ? "EXIT" : a.type === "STOP_UPDATE" ? "STOP" : a.type === "STOP_SYNC" ? "SYNC" : "SIGNAL"}
                 </span>
                 <span className={`font-semibold ${a.type === "EXIT" ? "text-[var(--red)]" : "text-[var(--amber)]"}`}>
                   {a.ticker}
                 </span>
                 <span className="text-[var(--dim)] flex-1">{a.message}</span>
-                {a.type === "STOP_UPDATE" && a.stopHistoryId && (
-                  <button
-                    onClick={() => markActionDone(a.stopHistoryId!)}
-                    className="px-2 py-0.5 text-xs border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors whitespace-nowrap"
-                    style={mono}
-                  >
-                    MARK AS DONE
-                  </button>
-                )}
+                {(a.type === "STOP_UPDATE" || a.type === "STOP_SYNC") && (() => {
+                  const matchTrade = openTrades.find((t) => t.ticker === a.ticker);
+                  return (
+                    <>
+                      {matchTrade && (
+                        <button
+                          onClick={() => pushStopToT212(matchTrade.id)}
+                          disabled={pushingStopTradeId === matchTrade.id}
+                          className="px-2 py-0.5 text-xs border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors whitespace-nowrap disabled:opacity-50"
+                          style={mono}
+                        >
+                          {pushingStopTradeId === matchTrade.id ? "PUSHING…" : "UPDATE ON T212"}
+                        </button>
+                      )}
+                      {a.stopHistoryId && (
+                        <button
+                          onClick={() => markActionDone(a.stopHistoryId!)}
+                          className="px-2 py-0.5 text-xs border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors whitespace-nowrap"
+                          style={mono}
+                        >
+                          MARK AS DONE
+                        </button>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             ))}
           </div>
@@ -269,10 +294,16 @@ export default function Home() {
                 }
 
                 if (inst.type === "UPDATE_STOP") {
+                  const matchTrade = openTrades.find((t) => t.ticker === inst.ticker);
+                  const isImported = matchTrade?.importedFromT212;
                   return (
                     <div key={inst.ticker} className={`${i > 0 ? "border-t border-[var(--border)] pt-4 mt-4" : ""}`}>
                       <div className="border-l-2 border-l-[var(--amber)] pl-4">
-                        <p className="text-base font-bold text-[var(--dim)] mb-3">─── {inst.ticker} ───</p>
+                        <p className="text-base font-bold text-[var(--dim)] mb-3">
+                          ─── {inst.ticker}
+                          {isImported ? <span className="text-[var(--amber)] text-xs ml-2">(📥 T212 Import)</span> : <span className="text-[var(--green)] text-xs ml-2">(📊 Signal)</span>}
+                          {" "}───
+                        </p>
                         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
                           <span className="text-[var(--amber)] font-bold text-sm" style={{ gridColumn: "1 / -1" }}>
                             ⚠ UPDATE YOUR STOP ON TRADING 212
@@ -285,6 +316,65 @@ export default function Home() {
                           <span className="text-[var(--green)]">+{inst.changeAmount != null ? `${inst.currency}${inst.changeAmount.toFixed(2)}` : "—"} (stop ratcheted up — locking in profit)</span>
                           <span className="text-[var(--amber)] font-bold mt-1">Do this</span>
                           <span className="text-[var(--amber)] font-bold mt-1">Before market open tomorrow</span>
+                          {matchTrade && (
+                            <>
+                              <span className="mt-2" />
+                              <span className="mt-2">
+                                <button
+                                  onClick={() => pushStopToT212(matchTrade.id)}
+                                  disabled={pushingStopTradeId === matchTrade.id}
+                                  className="px-3 py-1 text-xs font-bold border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50"
+                                  style={mono}
+                                >
+                                  {pushingStopTradeId === matchTrade.id ? "PUSHING…" : "⚡ UPDATE ON T212"}
+                                </button>
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (inst.type === "T212_STOP_BEHIND") {
+                  const matchTrade = openTrades.find((t) => t.ticker === inst.ticker);
+                  const isImported = matchTrade?.importedFromT212;
+                  return (
+                    <div key={inst.ticker} className={`${i > 0 ? "border-t border-[var(--border)] pt-4 mt-4" : ""}`}>
+                      <div className="border-l-2 border-l-[var(--amber)] pl-4">
+                        <p className="text-base font-bold text-[var(--dim)] mb-3">
+                          ─── {inst.ticker}
+                          {isImported ? <span className="text-[var(--amber)] text-xs ml-2">(📥 T212 Import)</span> : <span className="text-[var(--green)] text-xs ml-2">(📊 Signal)</span>}
+                          {" "}───
+                        </p>
+                        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+                          <span className="text-[var(--amber)] font-bold text-sm" style={{ gridColumn: "1 / -1" }}>
+                            ⚠ T212 STOP IS BEHIND — UPDATE REQUIRED
+                          </span>
+                          <span className="text-[var(--amber)]">T212 stop</span>
+                          <span className="text-[var(--amber)]">{inst.t212Stop != null ? `${inst.currency}${inst.t212Stop.toFixed(2)}` : "—"}</span>
+                          <span className="text-[var(--green)]">System stop</span>
+                          <span className="text-[var(--green)] font-bold">{inst.currency}{inst.currentStop.toFixed(2)}</span>
+                          <span className="text-[var(--dim)]">Difference</span>
+                          <span className="text-[var(--red)]">{inst.changeAmount != null ? `${inst.currency}${inst.changeAmount.toFixed(2)} below` : "—"}</span>
+                          <span className="text-[var(--amber)] font-bold mt-1">Action</span>
+                          <span className="text-[var(--amber)] font-bold mt-1">Raise T212 stop to {inst.currency}{inst.currentStop.toFixed(2)}</span>
+                          {matchTrade && (
+                            <>
+                              <span className="mt-2" />
+                              <span className="mt-2">
+                                <button
+                                  onClick={() => pushStopToT212(matchTrade.id)}
+                                  disabled={pushingStopTradeId === matchTrade.id}
+                                  className="px-3 py-1 text-xs font-bold border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50"
+                                  style={mono}
+                                >
+                                  {pushingStopTradeId === matchTrade.id ? "PUSHING…" : "⚡ UPDATE ON T212"}
+                                </button>
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -294,7 +384,15 @@ export default function Home() {
                 // HOLD
                 return (
                   <div key={inst.ticker} className={`${i > 0 ? "border-t border-[var(--border)] pt-4 mt-4" : ""}`}>
-                    <p className="text-base font-bold text-[var(--dim)] mb-3">─── {inst.ticker} ───</p>
+                    <p className="text-base font-bold text-[var(--dim)] mb-3">
+                      ─── {inst.ticker}
+                      {(() => {
+                        const matchTrade = openTrades.find((t) => t.ticker === inst.ticker);
+                        if (matchTrade?.importedFromT212) return <span className="text-[var(--amber)] text-xs ml-2">(📥 T212 Import)</span>;
+                        return <span className="text-[var(--green)] text-xs ml-2">(📊 Signal)</span>;
+                      })()}
+                      {" "}───
+                    </p>
                     <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#555]">
                       <span>Status</span>
                       <span>HOLD — no action needed today{inst.actioned ? " (stop updated ✓)" : ""}</span>
@@ -331,7 +429,7 @@ export default function Home() {
                 <th className="text-right px-3 py-2">T212 STOP</th>
                 <th className="text-right px-3 py-2">RISK</th>
                 <th className="text-right px-3 py-2">P&amp;L</th>
-                <th className="text-center px-3 py-2">STATUS</th>
+                <th className="text-center px-3 py-2">SOURCE</th>
                 <th className="text-center px-3 py-2"></th>
                 <th className="text-center px-3 py-2"></th>
               </tr>
@@ -339,14 +437,15 @@ export default function Home() {
             <tbody>
               {loading ? (
                 <SkeletonRows cols={14} />
-              ) : openTrades.length === 0 ? (
+              ) : openTrades.length === 0 && (!data?.t212Portfolio || data.t212Portfolio.length === 0) ? (
                 <tr>
                   <td colSpan={14} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
                     No open positions — scan running tonight
                   </td>
                 </tr>
               ) : (
-                openTrades.map((t) => {
+                <>
+                {openTrades.map((t) => {
                   const activeStop = Math.max(t.hardStop, t.trailingStop);
                   const ratcheted = t.trailingStop > t.hardStop;
                   const dollarRisk = (t.entryPrice - t.hardStop) * t.shares;
@@ -355,10 +454,9 @@ export default function Home() {
                   const stopHistory = (t as TradeWithHistory).stopHistory ?? [];
                   const c = tickerCurrency(t.ticker);
                   const sd = syncData[t.id];
-                  const t212 = sd?.t212 ?? null;
+                  const t212 = sd?.t212 ?? (data?.t212Prices?.[t.ticker] ? { ...data.t212Prices[t.ticker], quantity: t.shares, averagePrice: t.entryPrice, confirmed: true } : null);
                   const currentPrice = t212?.currentPrice ?? sd?.latestClose ?? null;
                   const pnl = t212 ? t212.ppl : (currentPrice != null ? (currentPrice - t.entryPrice) * t.shares : null);
-                  const pnlSource = t212 ? "T212" : "Yahoo";
                   const isSyncing = syncingTradeId === t.id;
                   return (
                     <React.Fragment key={t.id}>
@@ -387,18 +485,35 @@ export default function Home() {
                         <td className={`px-3 py-2 text-right ${ratcheted ? "text-[var(--green)]" : "text-[var(--dim)]"}`}>
                           {fmtPrice(activeStop, c)}
                         </td>
-                        <td className="px-3 py-2 text-right">
+                        <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                           {t212?.stopLoss != null ? (
                             <div>
                               <span className={t212.stopLoss >= activeStop - 0.01 ? "text-[var(--green)]" : "text-[var(--amber)]"}>
                                 {fmtPrice(t212.stopLoss, c)}
                               </span>
                               {t212.stopLoss < activeStop - 0.01 && (
-                                <span className="block text-[8px] text-[var(--amber)]">needs update</span>
+                                <button
+                                  onClick={() => pushStopToT212(t.id)}
+                                  disabled={pushingStopTradeId === t.id}
+                                  className="block mx-auto mt-0.5 px-1.5 py-0 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                                  style={mono}
+                                >
+                                  {pushingStopTradeId === t.id ? "…" : "↑ FIX"}
+                                </button>
                               )}
                             </div>
                           ) : t212 ? (
-                            <span className="text-[var(--red)] text-[10px]">not set</span>
+                            <div>
+                              <span className="text-[var(--red)] text-[10px]">not set</span>
+                              <button
+                                onClick={() => pushStopToT212(t.id)}
+                                disabled={pushingStopTradeId === t.id}
+                                className="block mx-auto mt-0.5 px-1.5 py-0 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                                style={mono}
+                              >
+                                {pushingStopTradeId === t.id ? "…" : "↑ SET"}
+                              </button>
+                            </div>
                           ) : (
                             <span className="text-[var(--dim)]">-</span>
                           )}
@@ -418,7 +533,11 @@ export default function Home() {
                         </td>
                         <td className="px-3 py-2 text-center">
                           <div className="flex flex-col items-center gap-0.5">
-                            <Badge label="OPEN" color="var(--green)" />
+                            {t.importedFromT212 ? (
+                              <span className="text-[8px] text-[var(--amber)]">📥 T212 Import</span>
+                            ) : (
+                              <span className="text-[8px] text-[var(--green)]">📊 Signal</span>
+                            )}
                             {t212 ? (
                               <span className="text-[8px] text-[var(--green)]">T212 ✓</span>
                             ) : sd ? (
@@ -527,11 +646,268 @@ export default function Home() {
                     </React.Fragment>
                   );
                 })
+                }
+                {/* Untracked T212 positions */}
+                {data?.t212Portfolio?.filter((p) => !p.tracked).map((p) => {
+                  const c = tickerCurrency(p.ticker);
+                  return (
+                    <tr key={`t212-${p.ticker}`} className="border-b border-[var(--border)] hover:bg-[#1a1a1a] opacity-80">
+                      <td className="px-3 py-2 font-semibold text-[var(--green)]">
+                        {p.ticker}
+                        <span className="text-[var(--amber)] text-[8px] ml-1">T212</span>
+                      </td>
+                      <td className="px-3 py-2 text-[var(--dim)]">
+                        {p.lastSignalDate ? (
+                          <span className="text-[10px]">{fmtDate(p.lastSignalDate)}</span>
+                        ) : "—"}
+                      </td>
+                      <td className="px-3 py-2 text-right">{fmtPrice(p.averagePrice, c)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={p.currentPrice >= p.averagePrice ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                          {fmtPrice(p.currentPrice, c)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">{p.quantity >= 1 ? p.quantity : p.quantity.toFixed(4)}</td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedHardStop != null ? (
+                          <span className="text-[var(--red)]">{fmtPrice(p.suggestedHardStop, c)}</span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedTrailingStop != null ? (
+                          <span className="text-[var(--amber)]">{fmtPrice(p.suggestedTrailingStop, c)}</span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedActiveStop != null ? (
+                          <span className="text-[var(--green)]">{fmtPrice(p.suggestedActiveStop, c)}</span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.stopLoss != null ? (
+                          <span className="text-[var(--amber)]">{fmtPrice(p.stopLoss, c)}</span>
+                        ) : (
+                          <span className="text-[var(--red)] text-[10px]">not set</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right text-[var(--dim)]">—</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={p.ppl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                          {p.ppl >= 0 ? "+" : "-"}{fmtPrice(Math.abs(p.ppl), c)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <button
+                          onClick={() => importT212Position(p)}
+                          disabled={importingTicker === p.ticker}
+                          className="px-2 py-0.5 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                          style={mono}
+                        >
+                          {importingTicker === p.ticker ? "IMPORTING…" : "IMPORT → VT"}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2" />
+                      <td className="px-3 py-2" />
+                    </tr>
+                  );
+                })}
+                </>
               )}
             </tbody>
           </table>
         </div>
       </section>
+
+      {/* ── T212 PORTFOLIO ── */}
+      {data?.t212Portfolio && data.t212Portfolio.length > 0 && (() => {
+        const untrackedCount = data.t212Portfolio!.filter((p) => !p.tracked).length;
+        return (
+        <section className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">
+              TRADING 212 PORTFOLIO — {data.t212Portfolio!.length} position{data.t212Portfolio!.length > 1 ? "s" : ""}
+            </h2>
+            {untrackedCount > 0 && (
+              <button
+                onClick={importAllT212Positions}
+                disabled={importingAll}
+                className="px-3 py-1 text-xs font-bold border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50"
+                style={mono}
+              >
+                {importingAll ? "IMPORTING…" : `IMPORT ALL ${untrackedCount} UNTRACKED`}
+              </button>
+            )}
+          </div>
+          <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
+            <table className="w-full text-sm" style={mono}>
+              <thead>
+                <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                  <th className="text-left px-3 py-2">TICKER</th>
+                  <th className="text-right px-3 py-2">QTY</th>
+                  <th className="text-right px-3 py-2">AVG PRICE</th>
+                  <th className="text-right px-3 py-2">CURRENT</th>
+                  <th className="text-right px-3 py-2">P&amp;L</th>
+                  <th className="text-right px-3 py-2">STOP LOSS</th>
+                  <th className="text-right px-3 py-2">HARD STOP</th>
+                  <th className="text-right px-3 py-2">TRAIL STOP</th>
+                  <th className="text-right px-3 py-2">ACTIVE STOP</th>
+                  <th className="text-center px-3 py-2">TRACKED</th>
+                  <th className="text-center px-3 py-2">LAST SIGNAL</th>
+                  <th className="text-center px-3 py-2">SCAN HISTORY</th>
+                  <th className="text-center px-3 py-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.t212Portfolio.map((p) => {
+                  const c = tickerCurrency(p.ticker);
+                  const gradeColor = (g: string | null) =>
+                    g === "A" ? "#00ff88"
+                      : g === "B" ? "var(--green)"
+                        : g === "C" ? "var(--amber)"
+                          : g === "D" ? "var(--red)"
+                            : "var(--dim)";
+                  return (
+                    <tr key={p.ticker} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                      <td className="px-3 py-2 font-semibold text-[var(--green)]">{p.ticker}</td>
+                      <td className="px-3 py-2 text-right">{p.quantity >= 1 ? p.quantity : p.quantity.toFixed(4)}</td>
+                      <td className="px-3 py-2 text-right">{fmtPrice(p.averagePrice, c)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={p.currentPrice >= p.averagePrice ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                          {fmtPrice(p.currentPrice, c)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <span className={p.ppl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                          {p.ppl >= 0 ? "+" : "-"}{fmtPrice(Math.abs(p.ppl), c)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.stopLoss != null ? (
+                          <div>
+                            <span className={
+                              p.suggestedActiveStop != null && p.stopLoss < p.suggestedActiveStop - 0.01
+                                ? "text-[var(--amber)]"
+                                : "text-[var(--green)]"
+                            }>
+                              {fmtPrice(p.stopLoss, c)}
+                            </span>
+                            {p.suggestedActiveStop != null && p.stopLoss < p.suggestedActiveStop - 0.01 && (
+                              <span className="block text-[8px] text-[var(--amber)]">behind</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-[var(--red)] text-[10px]">not set</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedHardStop != null ? (
+                          <span className="text-[var(--red)]">{fmtPrice(p.suggestedHardStop, c)}</span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedTrailingStop != null ? (
+                          <span className="text-[var(--amber)]">{fmtPrice(p.suggestedTrailingStop, c)}</span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {p.suggestedActiveStop != null ? (
+                          <span className={
+                            p.stopLoss != null && p.stopLoss < p.suggestedActiveStop - 0.01
+                              ? "text-[var(--amber)]"
+                              : "text-[var(--green)]"
+                          }>
+                            {fmtPrice(p.suggestedActiveStop, c)}
+                          </span>
+                        ) : (
+                          <span className="text-[var(--dim)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {p.tracked ? (
+                          <span className="text-[8px] text-[var(--green)]">TRACKED ✓</span>
+                        ) : (
+                          <button
+                            onClick={() => importT212Position(p)}
+                            disabled={importingTicker === p.ticker || importingAll}
+                            className="px-2 py-0.5 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                            style={mono}
+                          >
+                            {importingTicker === p.ticker ? "…" : "IMPORT → VT"}
+                          </button>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {p.lastSignalDate ? (
+                          <div>
+                            <span className="font-bold" style={{ color: gradeColor(p.lastSignalGrade) }}>
+                              {p.lastSignalGrade ?? "—"}
+                            </span>
+                            <span className="text-[var(--dim)] text-[10px] ml-1">{fmtDate(p.lastSignalDate)}</span>
+                          </div>
+                        ) : (
+                          <span className="text-[var(--dim)] text-[10px]">no signal</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {p.scanHistory.length > 0 ? (
+                          <div className="flex items-center justify-center gap-0.5">
+                            {p.scanHistory.map((s, i) => (
+                              <span
+                                key={i}
+                                title={`${fmtDate(s.date)} — ${s.signalFired ? `Signal ${s.compositeGrade ?? ""}` : "No signal"}${s.volumeRatio != null ? ` · Vol ${s.volumeRatio.toFixed(1)}x` : ""}${s.actionTaken ? ` · ${s.actionTaken}` : ""}`}
+                                className="inline-block w-2.5 h-2.5 rounded-sm"
+                                style={{
+                                  backgroundColor: s.signalFired
+                                    ? gradeColor(s.compositeGrade)
+                                    : "#333",
+                                }}
+                              />
+                            ))}
+                            <span className="text-[var(--dim)] text-[8px] ml-1">
+                              {p.scanHistory.filter((s) => s.signalFired).length}/{p.scanHistory.length}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-[var(--dim)] text-[10px]">not scanned</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {(() => {
+                          const needsFix = p.suggestedActiveStop != null && (
+                            p.stopLoss == null || p.stopLoss < p.suggestedActiveStop - 0.01
+                          );
+                          if (!needsFix) return <span className="text-[8px] text-[var(--green)]">✓</span>;
+                          return (
+                            <button
+                              onClick={() => pushStopByTicker(p.ticker, p.suggestedActiveStop!)}
+                              disabled={pushingStopTicker === p.ticker}
+                              className="px-2 py-0.5 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                              style={mono}
+                            >
+                              {pushingStopTicker === p.ticker ? "…" : "↑ FIX STOP"}
+                            </button>
+                          );
+                        })()}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        );
+      })()}
 
       {/* ── TWO-COLUMN: SIGNALS + SCAN ── */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-6 mb-6">

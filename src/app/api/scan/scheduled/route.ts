@@ -9,6 +9,7 @@ import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "@/lib/signals/exitSignal";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { createLogger } from "@/lib/logger";
+import { calculatePositionSize } from "@/lib/risk/positionSizer";
 
 const log = createLogger("api/scan/scheduled");
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
@@ -79,6 +80,7 @@ export async function GET(req: NextRequest) {
       const quotes = quoteMap[ticker]!;
       const signal = generateSignal(ticker, quotes, marketRegime);
 
+      const pos = signal ? calculatePositionSize(signal, accountBalance, equityCurveState) : null;
       const scanData = {
         scanDate: today,
         ticker,
@@ -95,6 +97,16 @@ export async function GET(req: NextRequest) {
               ? "SKIPPED_MAX_POSITIONS"
               : "SIGNAL_FIRED"
           : "NO_SIGNAL",
+        suggestedEntry: signal?.suggestedEntry ?? null,
+        hardStop: signal?.hardStop ?? null,
+        riskPerShare: signal?.riskPerShare ?? null,
+        shares: pos?.shares ?? null,
+        totalExposure: pos?.totalExposure ?? null,
+        dollarRisk: pos?.dollarRisk ?? null,
+        regimeScore: signal?.compositeScore?.components?.regimeScore ?? null,
+        trendScore: signal?.compositeScore?.components?.trendScore ?? null,
+        volumeCompScore: signal?.compositeScore?.components?.volumeScore ?? null,
+        liquidityScore: signal?.compositeScore?.components?.liquidityScore ?? null,
       };
       await prisma.scanResult.upsert({
         where: { ticker_scanDate: { ticker, scanDate: today } },

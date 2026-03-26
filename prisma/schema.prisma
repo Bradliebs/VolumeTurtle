@@ -76,6 +76,9 @@ model Trade {
   volumeRatio   Float     // volume spike ratio at entry
   rangePosition Float     // price range position at entry
   atr20         Float     // ATR at entry
+  importedFromT212  Boolean   @default(false)
+  importedAt        DateTime?
+  manualEntry       Boolean   @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -97,6 +100,7 @@ model StopHistory {
   changeAmount  Float?    // positive number, only set if changed = true
   actioned      Boolean   @default(false)
   actionedAt    DateTime?
+  note          String?   // optional note explaining stop change
   createdAt     DateTime  @default(now())
 
   @@index([tradeId])
@@ -114,6 +118,18 @@ model ScanResult {
   compositeScore Float?   // 0.00–1.00 composite signal quality
   compositeGrade String?  // "A" | "B" | "C" | "D"
   actionTaken    String?  // "ENTERED" | "SIGNAL_FIRED" | "SKIPPED_MAX_POSITIONS" | "SKIPPED_EQUITY_PAUSE" | "NO_SIGNAL"
+  // Signal detail (populated only when signalFired = true)
+  suggestedEntry Float?
+  hardStop        Float?
+  riskPerShare    Float?
+  shares          Float?
+  totalExposure   Float?
+  dollarRisk      Float?
+  // Composite sub-scores
+  regimeScore     Float?
+  trendScore      Float?
+  volumeCompScore Float?  // named to avoid clash with volumeRatio
+  liquidityScore  Float?
   createdAt      DateTime @default(now())
 
   @@unique([ticker, scanDate])

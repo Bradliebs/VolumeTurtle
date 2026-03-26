@@ -66,7 +66,13 @@ export async function GET(request: NextRequest) {
       hasMinimumLiquidity(ticker, quoteMap[ticker]!),
     );
 
-    // 4. Generate signals + collect near misses
+    // 4. Check open positions (needed for actionTaken in signal loop)
+    const openTrades = await prisma.trade.findMany({
+      where: { status: "OPEN" },
+    });
+    const openCount = openTrades.length;
+
+    // 5. Generate signals + collect near misses
     const signals: VolumeSignal[] = [];
     const nearMisses: Array<{ ticker: string; volumeRatio: number; rangePosition: number; failedOn: "VOLUME" | "RANGE" | "LIQUIDITY"; potentialScore: number; potentialGrade: string }> = [];
 
@@ -74,6 +80,7 @@ export async function GET(request: NextRequest) {
       const quotes = quoteMap[ticker]!;
       const signal = generateSignal(ticker, quotes, marketRegime);
 
+      const pos = signal ? calculatePositionSize(signal, accountBalance, equityCurveState) : null;
       const scanData = {
         scanDate: today,
         ticker,
@@ -90,6 +97,16 @@ export async function GET(request: NextRequest) {
               ? "SKIPPED_MAX_POSITIONS"
               : "SIGNAL_FIRED"
           : "NO_SIGNAL",
+        suggestedEntry: signal?.suggestedEntry ?? null,
+        hardStop: signal?.hardStop ?? null,
+        riskPerShare: signal?.riskPerShare ?? null,
+        shares: pos?.shares ?? null,
+        totalExposure: pos?.totalExposure ?? null,
+        dollarRisk: pos?.dollarRisk ?? null,
+        regimeScore: signal?.compositeScore?.components?.regimeScore ?? null,
+        trendScore: signal?.compositeScore?.components?.trendScore ?? null,
+        volumeCompScore: signal?.compositeScore?.components?.volumeScore ?? null,
+        liquidityScore: signal?.compositeScore?.components?.liquidityScore ?? null,
       };
       if (!dryRun) {
         await prisma.scanResult.upsert({
@@ -135,12 +152,6 @@ export async function GET(request: NextRequest) {
     }
 
     signals.sort((a, b) => (b.compositeScore?.total ?? 0) - (a.compositeScore?.total ?? 0));
-
-    // 5. Check open positions
-    const openTrades = await prisma.trade.findMany({
-      where: { status: "OPEN" },
-    });
-    let openCount = openTrades.length;
 
     // 6. Process exits
     const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: ExitReason; rMultiple: number }> = [];

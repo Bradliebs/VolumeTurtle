@@ -15,22 +15,54 @@ const T212_ENDPOINTS = {
   live: "https://live.trading212.com/api/v0",
 };
 
-export async function t212Fetch(path: string, settings: T212Settings): Promise<unknown> {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function t212Fetch(path: string, settings: T212Settings, options?: { method?: string; body?: unknown }): Promise<unknown> {
   const baseUrl = T212_ENDPOINTS[settings.environment];
   const credentials = Buffer.from(`${settings.apiKey}:${settings.apiSecret}`).toString("base64");
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    headers: {
-      Authorization: `Basic ${credentials}`,
-    },
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`T212 API error: ${response.status} ${response.statusText}${body ? ` - ${body}` : ""}`);
+  const method = options?.method ?? "GET";
+  const headers: Record<string, string> = {
+    Authorization: `Basic ${credentials}`,
+  };
+  let body: string | undefined;
+  if (options?.body != null) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(options.body);
   }
 
-  return response.json();
+  // Retry up to 3 times on 429 (rate limit), respecting reset header
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(`${baseUrl}${path}`, { method, headers, body });
+
+    if (response.status === 429) {
+      const resetHeader = response.headers.get("x-ratelimit-reset");
+      let waitMs = 3000 * (attempt + 1); // default: 3s, 6s, 9s
+      if (resetHeader) {
+        const resetTime = parseInt(resetHeader, 10) * 1000;
+        const now = Date.now();
+        if (resetTime > now) waitMs = Math.min(resetTime - now + 500, 30_000);
+      }
+      await sleep(waitMs);
+      continue;
+    }
+
+    if (!response.ok) {
+      const responseBody = await response.text().catch(() => "");
+      throw new Error(`T212 API error: ${response.status} ${response.statusText}${responseBody ? ` - ${responseBody}` : ""}`);
+    }
+
+    // DELETE returns empty body (204)
+    if (response.status === 204 || response.headers.get("content-length") === "0") {
+      return null;
+    }
+
+    return response.json();
+  }
+
+  throw new Error(`T212 API rate limited after 3 retries: ${method} ${path}`);
 }
 
 // ── Read-only endpoints ──
@@ -251,4 +283,99 @@ export function loadT212Settings(): T212Settings | null {
     apiSecret,
     accountType,
   };
+}
+
+// ── Order management (write operations) ──
+
+/**
+ * Cancel a pending order by ID.
+ * DELETE /api/v0/equity/orders/{id}
+ */
+export async function cancelOrder(settings: T212Settings, orderId: number): Promise<void> {
+  await t212Fetch(`/equity/orders/${orderId}`, settings, { method: "DELETE" });
+}
+
+/**
+ * Place a sell stop order on T212.
+ * POST /api/v0/equity/orders/stop
+ * quantity must be negative for a sell (stop-loss).
+ * timeValidity = GOOD_TILL_CANCEL so it persists.
+ */
+export async function placeStopOrder(
+  settings: T212Settings,
+  t212Ticker: string,
+  quantity: number,
+  stopPrice: number,
+): Promise<T212Order> {
+  return t212Fetch("/equity/orders/stop", settings, {
+    method: "POST",
+    body: {
+      ticker: t212Ticker,
+      quantity: -Math.abs(quantity),
+      stopPrice,
+      timeValidity: "GOOD_TILL_CANCEL",
+    },
+  }) as Promise<T212Order>;
+}
+
+/**
+ * Reverse-map a Yahoo-style ticker to the T212 internal ticker.
+ * E.g. "HBR.L" → "PMOl_EQ", "AAPL" → "AAPL_US_EQ"
+ * Returns null if no matching instrument found.
+ */
+export function yahooToT212Ticker(yahooTicker: string, instruments: T212Instrument[]): string | null {
+  for (const inst of instruments) {
+    const mapped = t212ToYahooTicker(inst.ticker, instruments);
+    if (mapped === yahooTicker) return inst.ticker;
+  }
+  return null;
+}
+
+/**
+ * Update (or create) a stop-loss on T212 for a given Yahoo ticker.
+ * Flow:
+ *   1. Find T212 instrument ticker
+ *   2. Find existing stop order for this ticker → cancel it
+ *   3. Place a new stop order at the new price
+ *
+ * stopPrice should be in the instrument's native currency.
+ * For GBX instruments, caller must convert GBP → pence before calling.
+ */
+export async function updateStopOnT212(
+  settings: T212Settings,
+  yahooTicker: string,
+  quantity: number,
+  stopPriceGBP: number,
+): Promise<{ cancelled: number | null; placed: T212Order }> {
+  // Load instruments
+  if (!instrumentCachePromise) {
+    instrumentCachePromise = getInstruments(settings);
+  }
+  const instruments = await instrumentCachePromise;
+
+  const t212Ticker = yahooToT212Ticker(yahooTicker, instruments);
+  if (!t212Ticker) {
+    throw new Error(`No T212 instrument found for ${yahooTicker}`);
+  }
+
+  // Convert GBP → GBX (pence) if instrument is priced in pence
+  const pence = isT212Pence(t212Ticker, instruments);
+  const stopPrice = pence ? stopPriceGBP * 100 : stopPriceGBP;
+
+  // Find and cancel any existing stop order for this ticker
+  let cancelledOrderId: number | null = null;
+  const orders = await getPendingOrders(settings);
+  const existingStop = orders.find(
+    (o) => o.ticker === t212Ticker && (o.type === "STOP" || o.type === "STOP_LIMIT"),
+  );
+  if (existingStop) {
+    await cancelOrder(settings, existingStop.id);
+    cancelledOrderId = existingStop.id;
+    // T212 rate limit: wait after cancel before placing new order
+    await sleep(2500);
+  }
+
+  // Place new stop order (negative quantity = sell/stop-loss)
+  const placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
+  return { cancelled: cancelledOrderId, placed };
 }

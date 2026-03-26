@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { ticker, suggestedEntry, hardStop, shares, volumeRatio, rangePosition, atr20 } = parsed.data;
+    const { ticker, suggestedEntry, hardStop, shares, volumeRatio, rangePosition, atr20 } = parsed.data!;
 
     // Prevent duplicate open trades for the same ticker
     const existingOpen = await prisma.trade.findFirst({

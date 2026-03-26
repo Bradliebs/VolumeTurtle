@@ -479,6 +479,9 @@ export default function SettingsPage() {
             <button onClick={() => dangerAction("reset-positions")} disabled={dangerConfirm !== "CONFIRM"} className="px-3 py-1.5 border border-[var(--red)] text-[var(--red)] hover:bg-[var(--red)] hover:text-black transition-colors uppercase tracking-wider text-[10px] disabled:opacity-20 disabled:cursor-not-allowed">
               RESET ALL POSITIONS
             </button>
+            <button onClick={() => dangerAction("reset-balance-history")} disabled={dangerConfirm !== "CONFIRM"} className="px-3 py-1.5 border border-[var(--red)] text-[var(--red)] hover:bg-[var(--red)] hover:text-black transition-colors uppercase tracking-wider text-[10px] disabled:opacity-20 disabled:cursor-not-allowed" title="Clears account snapshots only, trades are preserved">
+              RESET BALANCE HISTORY
+            </button>
           </div>
           {dangerResult && <p className="text-[10px] text-[var(--amber)] mt-2">{dangerResult}</p>}
         </div>

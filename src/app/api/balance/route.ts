@@ -11,7 +11,7 @@ export async function PATCH(request: NextRequest) {
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { balance } = parsed.data;
+    const { balance } = parsed.data!;
 
     const latest = await prisma.accountSnapshot.findFirst({
       orderBy: { date: "desc" },

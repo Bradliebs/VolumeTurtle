@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { action } = parsed.data;
+    const { action } = parsed.data!;
 
     if (action === "clear-scans") {
       const result = await prisma.scanResult.deleteMany();
@@ -27,6 +27,21 @@ export async function POST(request: NextRequest) {
       await prisma.stopHistory.deleteMany();
       const result = await prisma.trade.deleteMany();
       return NextResponse.json({ cleared: result.count, type: "trades" });
+    }
+
+    if (action === "reset-balance-history") {
+      const result = await prisma.accountSnapshot.deleteMany();
+
+      // Seed a new snapshot from the manual balance setting
+      const setting = await prisma.settings.findUnique({ where: { key: "manualBalance" } });
+      const balance = setting ? parseFloat(setting.value) : 0;
+      if (balance > 0) {
+        await prisma.accountSnapshot.create({
+          data: { date: new Date(), balance, openTrades: 0 },
+        });
+      }
+
+      return NextResponse.json({ cleared: result.count, type: "account_snapshots" });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });

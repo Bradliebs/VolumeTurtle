@@ -15,7 +15,7 @@ export const createTradeSchema = z.object({
 });
 
 export const closeTradeSchema = z.object({
-  exitPrice: z.number({ required_error: "exitPrice is required" }),
+  exitPrice: z.number({ error: "exitPrice is required" }),
 });
 
 export const updateBalanceSchema = z.object({
@@ -31,12 +31,8 @@ export const updateSettingsSchema = z.object({
 });
 
 export const dangerActionSchema = z.object({
-  action: z.enum(["clear-scans", "reset-positions"], {
-    errorMap: () => ({ message: "action must be 'clear-scans' or 'reset-positions'" }),
-  }),
-  confirm: z.literal("CONFIRM", {
-    errorMap: () => ({ message: "Type CONFIRM to proceed" }),
-  }),
+  action: z.enum(["clear-scans", "reset-positions", "reset-balance-history"], { error: "action must be 'clear-scans', 'reset-positions', or 'reset-balance-history'" }),
+  confirm: z.literal("CONFIRM", { error: "Type CONFIRM to proceed" }),
 });
 
 /**
@@ -65,3 +61,4 @@ export async function validateBody<T extends z.ZodTypeAny>(
 
   return { data: result.data };
 }
+

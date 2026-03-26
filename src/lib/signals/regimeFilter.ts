@@ -48,8 +48,9 @@ export interface RegimeAssessment {
 
 function calculateSMA(quotes: DailyQuote[], period: number): number | null {
   if (quotes.length < period) return null;
-  const slice = quotes.slice(-period);
-  return slice.reduce((sum, q) => sum + q.close, 0) / period;
+  const slice = quotes.slice(-period).filter((q) => q.close != null);
+  if (slice.length < period) return null;
+  return slice.reduce((sum, q) => sum + q.close, 0) / slice.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,9 +152,22 @@ export function calculateTickerRegime(
   quotes: DailyQuote[],
 ): TickerRegime {
   const close = quotes.length > 0 ? quotes[quotes.length - 1]!.close : 0;
+
+  if (quotes.length < 52) {
+    log.warn(`${ticker}: only ${quotes.length} days available — need 52 for trend calculation`);
+    return {
+      ticker,
+      tickerTrend: "INSUFFICIENT_DATA",
+      close,
+      ma50: null,
+      pctAboveMA50: null,
+    };
+  }
+
   const ma50 = calculateSMA(quotes, 50);
 
   if (ma50 === null) {
+    log.warn(`${ticker}: MA50 calculation failed despite ${quotes.length} quotes — possible data gaps`);
     return {
       ticker,
       tickerTrend: "INSUFFICIENT_DATA",

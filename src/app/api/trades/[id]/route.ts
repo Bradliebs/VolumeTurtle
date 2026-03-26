@@ -15,7 +15,7 @@ export async function PATCH(
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { exitPrice } = parsed.data;
+    const { exitPrice } = parsed.data!;
 
     const trade = await prisma.trade.findUnique({ where: { id } });
     if (!trade) {

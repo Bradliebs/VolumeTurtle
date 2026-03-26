@@ -7,7 +7,7 @@ import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getPositionsWithStopsMapped, getAccountCash } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
-import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
 
@@ -18,7 +18,8 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function POST(request: Request) {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export async function POST(_request: Request) {
   // Rate limit: max 3 sync-all per minute
   const limited = rateLimit(`sync-all`, 3, 60_000);
   if (limited) return limited;
@@ -77,15 +78,23 @@ export async function POST(request: Request) {
         const atr20 = calculateATR(quotes, 20) ?? trade.atr20;
 
         const openPos = tradeToOpenPosition(trade);
-        const newTrailingStop = updateTrailingStop(openPos, quotes);
+        const newTrailingStop = updateTrailingStop(openPos, quotes, atr20);
         const previousStop = Math.max(trade.hardStop, trade.trailingStop);
         const newCurrentStop = Math.max(trade.hardStop, newTrailingStop);
         const stopChanged = newTrailingStop > trade.trailingStop;
 
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: { trailingStop: newTrailingStop, atr20 },
-        });
+        // Monotonic enforcement: only write trailing stop if it moved up
+        if (stopChanged) {
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data: { trailingStop: newTrailingStop, atr20 },
+          });
+        } else {
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data: { atr20 },
+          });
+        }
 
         if (stopChanged) {
           await prisma.stopHistory.create({
@@ -183,7 +192,10 @@ export async function POST(request: Request) {
             quantity: t212Match.quantity,
             averagePrice: t212Match.averagePrice,
             ppl: t212Match.ppl,
-            stopLoss: t212Match.stopLoss ?? null,
+            // Monotonic broker sync: discard T212 stop if lower than stored stop
+            stopLoss: t212Match.stopLoss != null
+              ? enforceMonotonicStop(t212Match.stopLoss, newCurrentStop)
+              : null,
             confirmed: true,
           } : null,
         });

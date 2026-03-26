@@ -2,7 +2,6 @@ import React from "react";
 import type { SignalFired, EquityCurveData } from "./types";
 import { pctChange, fmtPrice, fmtMoney, tickerCurrency, mono } from "./helpers";
 import { MiniBar } from "./MiniBar";
-import { Badge } from "./Badge";
 
 export function SignalCard({
   signal,

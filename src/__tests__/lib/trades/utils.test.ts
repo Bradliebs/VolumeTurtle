@@ -1,4 +1,23 @@
-import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
+import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
+
+describe("enforceMonotonicStop", () => {
+  it("returns newStop when it is higher", () => {
+    expect(enforceMonotonicStop(105, 100)).toBe(105);
+  });
+
+  it("returns currentStop when newStop is lower", () => {
+    expect(enforceMonotonicStop(95, 100)).toBe(100);
+  });
+
+  it("returns currentStop when newStop equals currentStop", () => {
+    expect(enforceMonotonicStop(100, 100)).toBe(100);
+  });
+
+  it("handles fractional values", () => {
+    expect(enforceMonotonicStop(100.01, 100.00)).toBe(100.01);
+    expect(enforceMonotonicStop(99.99, 100.00)).toBe(100.00);
+  });
+});
 
 describe("calculateRMultiple", () => {
   it("returns positive R for winning trade", () => {

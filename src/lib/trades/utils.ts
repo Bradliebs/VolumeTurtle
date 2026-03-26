@@ -1,6 +1,15 @@
 import type { OpenPosition } from "@/lib/signals/exitSignal";
 
 /**
+ * Monotonic stop guard: a stop can only ever move UP.
+ * Returns newStop if it is strictly higher than currentStop,
+ * otherwise returns currentStop unchanged.
+ */
+export function enforceMonotonicStop(newStop: number, currentStop: number): number {
+  return newStop > currentStop ? newStop : currentStop;
+}
+
+/**
  * Calculate R-multiple for a trade exit.
  */
 export function calculateRMultiple(

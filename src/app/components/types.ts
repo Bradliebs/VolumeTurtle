@@ -23,6 +23,8 @@ export interface Trade {
   volumeRatio: number;
   rangePosition: number;
   atr20: number;
+  importedFromT212: boolean;
+  importedAt: string | null;
 }
 
 export interface ScanResult {
@@ -45,6 +47,7 @@ export interface StopHistoryEntry {
   stopType: string;
   changed: boolean;
   changeAmount: number | null;
+  note: string | null;
 }
 
 export interface ActionItem {
@@ -58,7 +61,7 @@ export interface ActionItem {
 export interface Instruction {
   ticker: string;
   currency: string;
-  type: "HOLD" | "UPDATE_STOP" | "EXIT" | "T212_EXIT";
+  type: "HOLD" | "UPDATE_STOP" | "EXIT" | "T212_EXIT" | "T212_STOP_BEHIND";
   currentStop: number;
   stopSetDate: string | null;
   latestClose: number | null;
@@ -67,10 +70,39 @@ export interface Instruction {
   changeAmount: number | null;
   breakAmount: number | null;
   actioned: boolean;
+  t212Stop: number | null;
 }
 
 export interface TradeWithHistory extends Trade {
   stopHistory: StopHistoryEntry[];
+}
+
+export interface T212ScanEntry {
+  date: string;
+  signalFired: boolean;
+  compositeGrade: string | null;
+  compositeScore: number | null;
+  volumeRatio: number | null;
+  rangePosition: number | null;
+  actionTaken: string | null;
+}
+
+export interface T212PortfolioPosition {
+  ticker: string;
+  quantity: number;
+  averagePrice: number;
+  currentPrice: number;
+  ppl: number;
+  stopLoss: number | null;
+  tracked: boolean;
+  suggestedHardStop: number | null;
+  suggestedTrailingStop: number | null;
+  suggestedActiveStop: number | null;
+  atr20: number | null;
+  scanHistory: T212ScanEntry[];
+  lastSignalDate: string | null;
+  lastSignalGrade: string | null;
+  tradeStatus: string | null;
 }
 
 export interface DashboardData {
@@ -90,6 +122,8 @@ export interface DashboardData {
   equityCurve: EquityCurveData | null;
   sparklineSnapshots: SnapshotForSparkline[];
   lastBackupAt: string | null;
+  t212Portfolio: T212PortfolioPosition[] | null;
+  t212Prices: Record<string, { currentPrice: number; ppl: number; stopLoss: number | null }>;
 }
 
 export interface EquityCurveData {

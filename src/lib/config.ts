@@ -21,6 +21,7 @@ export interface VolumeTurtleConfig {
   atrPeriod: number;
   trailingStopDays: number;
   hardStopAtrMultiple: number;
+  trailAtrMultiple: number;
   scoreWeightRegime: number;
   scoreWeightTrend: number;
   scoreWeightVolume: number;
@@ -48,6 +49,7 @@ export const config: VolumeTurtleConfig = {
   atrPeriod: envInt("ATR_PERIOD", 20),
   trailingStopDays: envInt("TRAILING_STOP_DAYS", 10),
   hardStopAtrMultiple: envFloat("HARD_STOP_ATR_MULTIPLE", 2),
+  trailAtrMultiple: envFloat("TRAIL_ATR_MULTIPLE", 2),
   scoreWeightRegime: envFloat("SCORE_WEIGHT_REGIME", 0.40),
   scoreWeightTrend: envFloat("SCORE_WEIGHT_TREND", 0.30),
   scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.20),
@@ -56,7 +58,7 @@ export const config: VolumeTurtleConfig = {
   pauseDrawdownPct: envFloat("PAUSE_DRAWDOWN_PCT", 20),
   quoteBatchSize: envInt("QUOTE_BATCH_SIZE", 10),
   quoteBatchDelayMs: envInt("QUOTE_BATCH_DELAY_MS", 500),
-  quoteLookbackDays: envInt("QUOTE_LOOKBACK_DAYS", 60),
+  quoteLookbackDays: envInt("QUOTE_LOOKBACK_DAYS", 120),
   dashboardPageSize: envInt("DASHBOARD_PAGE_SIZE", 20),
   dashboardLookbackDays: envInt("DASHBOARD_LOOKBACK_DAYS", 14),
   lseScanHour: envInt("LSE_SCAN_HOUR", 17),

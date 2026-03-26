@@ -17,6 +17,7 @@ import { generateSignal, calculateAverageVolume, isVolumeSpike, isPriceConfirmed
 import type { VolumeSignal } from "../src/lib/signals/volumeSignal";
 import { shouldExit, updateTrailingStop } from "../src/lib/signals/exitSignal";
 import type { OpenPosition } from "../src/lib/signals/exitSignal";
+import { calculateATR } from "../src/lib/risk/atr";
 import { calculatePositionSize, checkMaxPositions } from "../src/lib/risk/positionSizer";
 import type { PositionSize } from "../src/lib/risk/positionSizer";
 import { config } from "../src/lib/config";
@@ -25,6 +26,7 @@ import type { RegimeState } from "../src/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "../src/lib/risk/equityCurve";
 import type { EquityCurveState } from "../src/lib/risk/equityCurve";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "../src/lib/trades/utils";
+
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -201,78 +203,68 @@ async function main() {
     const latestQuote = quotes[quotes.length - 1]!;
     const currentClose = latestQuote.close;
 
-    // Check hard stop first
-    if (currentClose < trade.hardStop) {
-      const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
+    // Calculate ATR for R-ladder + ATR trailing
+    const atr20 = calculateATR(quotes, 20) ?? trade.atr20;
 
-      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
-
-      if (!DRY_RUN) {
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: {
-            status: "CLOSED",
-            exitDate: today,
-            exitPrice: currentClose,
-            exitReason: "HARD_STOP",
-            rMultiple,
-          },
-        });
-      }
-
-      openCount--;
-      console.log(
-        `  [EXIT] ${trade.ticker} — HARD_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
-      );
-      continue;
-    }
-
-    // Check trailing stop via 10-day low
-    if (shouldExit(currentClose, quotes)) {
-      const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
-
-      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
-
-      if (!DRY_RUN) {
-        await prisma.trade.update({
-          where: { id: trade.id },
-          data: {
-            status: "CLOSED",
-            exitDate: today,
-            exitPrice: currentClose,
-            exitReason: "TRAILING_STOP",
-            rMultiple,
-          },
-        });
-      }
-
-      openCount--;
-      console.log(
-        `  [EXIT] ${trade.ticker} — TRAILING_STOP @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
-      );
-      continue;
-    }
-
-    // No exit — update trailing stop (ratchet up only)
+    // Calculate new monotonic stop (R-ladder + ATR trailing)
     const openPos = tradeToOpenPosition(trade);
-    const newTrailingStop = updateTrailingStop(openPos, quotes);
+    const newTrailingStop = updateTrailingStop(openPos, quotes, atr20);
+    const newCurrentStop = Math.max(trade.hardStop, newTrailingStop);
 
-    if (newTrailingStop !== trade.trailingStop && !DRY_RUN) {
-      await prisma.trade.update({
-        where: { id: trade.id },
-        data: { trailingStop: newTrailingStop },
-      });
+    // Check exit against the monotonic stop level
+    if (currentClose < newCurrentStop) {
+      const exitReason = currentClose < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
+      const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
+
+      summary.tradesExited.push({ ticker: trade.ticker, rMultiple });
+
+      if (!DRY_RUN) {
+        // Update trailing stop before closing (so final state is accurate)
+        if (newTrailingStop > trade.trailingStop) {
+          await prisma.trade.update({
+            where: { id: trade.id },
+            data: { trailingStop: newTrailingStop, atr20 },
+          });
+        }
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data: {
+            status: "CLOSED",
+            exitDate: today,
+            exitPrice: currentClose,
+            exitReason,
+            rMultiple,
+          },
+        });
+      }
+
+      openCount--;
+      console.log(
+        `  [EXIT] ${trade.ticker} — ${exitReason} @ $${currentClose.toFixed(2)} (R: ${rMultiple.toFixed(2)})`,
+      );
+      continue;
     }
 
-    // Write stop history record only when stop changed
+    // No exit — update trailing stop (monotonic: only write if it moved up)
     const stopChanged = newTrailingStop > trade.trailingStop;
     if (stopChanged && !DRY_RUN) {
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data: { trailingStop: newTrailingStop, atr20 },
+      });
+
       await prisma.stopHistory.create({
         data: buildStopHistoryData(trade.id, today, trade.hardStop, trade.trailingStop, newTrailingStop),
       });
+    } else if (!DRY_RUN) {
+      // Still update ATR even if stop didn't change
+      await prisma.trade.update({
+        where: { id: trade.id },
+        data: { atr20 },
+      });
     }
 
-    if (newTrailingStop !== trade.trailingStop) {
+    if (stopChanged) {
       console.log(
         `  [STOP] ${trade.ticker} — trailing stop raised to $${newTrailingStop.toFixed(2)}`,
       );

@@ -296,6 +296,107 @@ export const HIGH_RISK_UNIVERSE: string[] = [
   "AEYE",    // AudioEye
   "GEVI",    // GreenVision (check liquidity)
 
+  // ========== ENERGY — OIL & GAS HIGH BETA (Hormuz shock March 2026) ==========
+  "XOM",     // ExxonMobil — Permian titan, $20B buyback
+  "CVX",     // Chevron — 1M bpd Permian milestone
+  "COP",     // ConocoPhillips — pure upstream high beta
+  "OXY",     // Occidental Petroleum — Buffett holding, high beta
+  "DVN",     // Devon Energy — US shale high beta
+  "FANG",    // Diamondback Energy — Permian pure play
+  "APA",     // APA Corporation — international exposure
+  "PR",      // Permian Resources
+  "CTRA",    // Coterra Energy
+  "SM",      // SM Energy — small cap high beta
+  "MTDR",    // Matador Resources
+  "CHRD",    // Chord Energy
+  "NOG",     // Northern Oil and Gas
+
+  // ========== ENERGY SERVICES (leverage to oil price) ==========
+  "SLB",     // Schlumberger — services giant
+  "HAL",     // Halliburton
+  "BKR",     // Baker Hughes
+  "WHD",     // Cactus Inc
+  "PTEN",    // Patterson-UTI Energy
+  "RIG",     // Transocean — offshore drilling high beta
+  "VAL",     // Valaris — offshore drilling
+
+  // ========== LNG & MIDSTREAM (supply shock plays) ==========
+  "LNG",     // Cheniere Energy — LNG exports
+  "NFE",     // New Fortress Energy — LNG high beta
+  "NEXT",    // NextDecade — LNG development
+  "TRGP",    // Targa Resources
+  "WMB",     // Williams Companies
+
+  // ========== MATERIALS & MINING (17.8% YTD, active sector) ==========
+  "SCCO",    // Southern Copper
+  "NUE",     // Nucor — steel high beta
+  "STLD",    // Steel Dynamics
+  "CMC",     // Commercial Metals
+
+
+  // ========== URANIUM (nuclear renaissance active) ==========
+  "NXE",     // NexGen Energy
+
+  // ========== PRECIOUS METALS — SILVER & GOLD HIGH BETA ==========
+  "SLV",     // iShares Silver Trust ETF
+  "SILJ",    // ETFMG Prime Junior Silver ETF
+
+  "KGC",     // Kinross Gold
+  "AU",      // AngloGold Ashanti
+  "NGD",     // New Gold
+  "BTG",     // B2Gold
+  "IAG",     // IAMGOLD
+  "OR",      // Osisko Gold Royalties
+
+  // ========== COPPER PLAYS (AI infrastructure + energy transition) ==========
+  "COPX",    // Global X Copper Miners ETF
+  "CPER",    // US Copper Index ETF
+  "ARIS",    // Aris Mining
+
+  // ========== DEFENCE (geopolitical spending surge) ==========
+  "HII",     // Huntington Ingalls — shipbuilding
+  "GD",      // General Dynamics
+  "LMT",     // Lockheed Martin
+  "RTX",     // RTX Corporation
+  "NOC",     // Northrop Grumman
+  "SAIC",    // Science Applications
+
+  // ========== UK DEFENCE & ENERGY (LSE active) ==========
+  "BP.L",    // BP — oil price beneficiary
+  "SHEL.L",  // Shell
+  "TLW.L",   // Tullow Oil — high beta oil
+  "ENQ.L",   // EnQuest — high beta oil
+
+  // ========== AI PHYSICAL INFRASTRUCTURE (power demand theme) ==========
+  "NRG",     // NRG Energy
+  "PWR",     // Quanta Services — grid buildout
+  "POWL",    // Powell Industries — electrical infrastructure
+  "FCEL",    // FuelCell Energy
+  "BE",      // Bloom Energy
+  "GTLS",    // Chart Industries — industrial gas/LNG equipment
+
+  // ========== SHIPPING (commodity transport bottleneck) ==========
+  "ZIM",     // ZIM Integrated Shipping — high beta
+  "SBLK",    // Star Bulk Carriers
+  "EGLE",    // Eagle Bulk Shipping
+  "NMM",     // Navios Maritime Partners
+  "CTRM",    // Castor Maritime — speculative
+  "TOPS",    // TOP Ships — speculative
+
+  // ========== FERTILISERS & AGRICULTURE (food security theme) ==========
+  "MOS",     // Mosaic Company — potash/phosphate
+  "NTR",     // Nutrien — fertiliser major
+  "CF",      // CF Industries — nitrogen
+  "CTVA",    // Corteva — agri science
+  "ANDE",    // Andersons
+
+  // ========== INDUSTRIAL METALS ETFs (easy broad exposure) ==========
+  "PICK",    // iShares MSCI Global Metals & Mining ETF
+  "REMX",    // VanEck Rare Earth/Strategic Metals ETF
+  "SIL",     // Global X Silver Miners ETF
+  "GDX",     // VanEck Gold Miners ETF
+  "GDXJ",    // VanEck Junior Gold Miners ETF — high beta
+
 ];
 
 /**

@@ -9,6 +9,7 @@ export const config: VolumeTurtleConfig = {
   atrPeriod: 20,
   trailingStopDays: 10,
   hardStopAtrMultiple: 2.0,
+  trailAtrMultiple: 2.0,
   scoreWeightRegime: 0.40,
   scoreWeightTrend: 0.30,
   scoreWeightVolume: 0.20,
