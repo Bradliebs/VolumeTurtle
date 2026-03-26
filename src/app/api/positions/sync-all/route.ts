@@ -5,7 +5,7 @@ import { config } from "@/lib/config";
 import { updateTrailingStop } from "@/lib/signals/exitSignal";
 import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
-import { loadT212Settings, getPositionsWithStopsMapped, getAccountCash } from "@/lib/t212/client";
+import { loadT212Settings, getCachedT212Positions, getAccountCash } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
@@ -34,7 +34,7 @@ export async function POST(_request: Request) {
       return NextResponse.json({ results: [], syncedAt: new Date().toISOString(), t212: null });
     }
 
-    // Try to fetch T212 positions if configured
+    // Try to fetch T212 positions if configured (uses shared cache)
     let t212Positions: T212Position[] = [];
     let t212Loaded = false;
     let t212Balance: number | null = null;
@@ -42,11 +42,11 @@ export async function POST(_request: Request) {
     const t212Settings = loadT212Settings();
     if (t212Settings) {
       try {
-        const [positions, account] = await Promise.all([
-          getPositionsWithStopsMapped(t212Settings),
+        const [cached, account] = await Promise.all([
+          getCachedT212Positions(t212Settings),
           getAccountCash(t212Settings),
         ]);
-        t212Positions = positions;
+        t212Positions = cached.positions;
         t212Loaded = true;
         t212Balance = account.total ?? account.cash ?? null;
         t212Currency = account.currencyCode ?? "GBP";

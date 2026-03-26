@@ -6,7 +6,7 @@ import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import type { RegimeState } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { config } from "@/lib/config";
-import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
@@ -14,11 +14,6 @@ import { calculateATR20 } from "@/lib/risk/atr";
 import { calculateTrailingLow } from "@/lib/signals/exitSignal";
 
 const log = createLogger("api/dashboard");
-
-// ── T212 position cache (survives across requests, avoids 429 blanking) ──
-let cachedT212Positions: T212Position[] = [];
-let cachedT212At = 0;
-const T212_CACHE_TTL_MS = 60_000; // 1 minute
 
 function getNextScheduledRun(hour: number, minute: number): { label: string; iso: string } {
   const now = new Date();
@@ -112,29 +107,17 @@ export async function GET(req: Request) {
   }));
 
   // Fetch T212 portfolio (always, regardless of open trades)
-  // Uses in-memory cache to survive 429 rate limiting
+  // Uses shared cache to survive 429 rate limiting across routes
   let t212Positions: T212Position[] = [];
   let t212Loaded = false;
   const t212Settings = loadT212Settings();
   if (t212Settings) {
-    const now = Date.now();
-    if (cachedT212Positions.length > 0 && now - cachedT212At < T212_CACHE_TTL_MS) {
-      // Use cache — still fresh
-      t212Positions = cachedT212Positions;
+    try {
+      const cached = await getCachedT212Positions(t212Settings);
+      t212Positions = cached.positions;
       t212Loaded = true;
-    } else {
-      try {
-        t212Positions = await getPositionsWithStopsMapped(t212Settings);
-        cachedT212Positions = t212Positions;
-        cachedT212At = now;
-        t212Loaded = true;
-      } catch (err) {
-        log.warn({ err }, "T212 fetch failed, using cache");
-        if (cachedT212Positions.length > 0) {
-          t212Positions = cachedT212Positions;
-          t212Loaded = true;
-        }
-      }
+    } catch (err) {
+      log.warn({ err }, "T212 fetch failed");
     }
   }
 

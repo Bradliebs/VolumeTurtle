@@ -4,7 +4,7 @@ import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { calculateATR20 } from "@/lib/risk/atr";
 import { calculateTrailingLow } from "@/lib/signals/exitSignal";
 import { config } from "@/lib/config";
-import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 
@@ -20,8 +20,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "T212 not configured" }, { status: 400 });
     }
 
-    // Fetch all T212 positions
-    const t212Positions = await getPositionsWithStopsMapped(t212Settings);
+    // Fetch all T212 positions (uses shared cache)
+    const cached = await getCachedT212Positions(t212Settings);
+    const t212Positions = cached.positions;
 
     // Fetch all open VT trades
     const vtTrades = await prisma.trade.findMany({

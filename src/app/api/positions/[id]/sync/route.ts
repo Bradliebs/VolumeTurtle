@@ -4,7 +4,7 @@ import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { updateTrailingStop } from "@/lib/signals/exitSignal";
 import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
-import { loadT212Settings, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
@@ -104,8 +104,8 @@ export async function POST(
     const t212Settings = loadT212Settings();
     if (t212Settings) {
       try {
-        const t212Positions = await getPositionsWithStopsMapped(t212Settings);
-        const t212Match = t212Positions.find((p) => p.ticker === trade.ticker);
+        const cached = await getCachedT212Positions(t212Settings);
+        const t212Match = cached.positions.find((p) => p.ticker === trade.ticker);
         t212Loaded = true;
         if (t212Match) {
           // Monotonic broker sync: if T212 stop is lower than our stored stop, discard it
