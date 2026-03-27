@@ -215,29 +215,51 @@ export async function GET(req: Request) {
           urgency: "HIGH",
         });
       } else if (stopChanged && unactionedUpdate) {
-        // UPDATE STOP
-        const previousStopLevel = unactionedUpdate.stopLevel - (unactionedUpdate.changeAmount ?? 0);
-        instructions.push({
-          ticker: trade.ticker,
-          currency: c,
-          type: "UPDATE_STOP",
-          currentStop,
-          stopSetDate: lastStopEntry?.date?.toISOString() ?? null,
-          latestClose,
-          oldStop: previousStopLevel,
-          newStop: trade.trailingStop,
-          changeAmount: unactionedUpdate.changeAmount,
-          breakAmount: null,
-          actioned: false,
-          t212Stop: t212Match?.stopLoss ?? null,
-        });
-        actions.push({
-          type: "STOP_UPDATE",
-          ticker: trade.ticker,
-          message: `Move stop UP to ${c}${trade.trailingStop.toFixed(2)} (was ${c}${previousStopLevel.toFixed(2)})`,
-          urgency: "MEDIUM",
-          stopHistoryId: unactionedUpdate.id,
-        });
+        // UPDATE STOP — but check if T212 already has a stop >= our new level
+        const t212StopValue = t212Match?.stopLoss ?? null;
+        const t212AlreadyAhead = t212StopValue !== null && t212StopValue >= currentStop - 0.01;
+
+        if (t212AlreadyAhead) {
+          // T212 stop is already at or above our system stop — no user action needed
+          // Auto-mark as actioned since T212 is already protecting the position
+          instructions.push({
+            ticker: trade.ticker,
+            currency: c,
+            type: "HOLD",
+            currentStop,
+            stopSetDate: lastStopEntry?.date?.toISOString() ?? trade.createdAt.toISOString(),
+            latestClose,
+            oldStop: null,
+            newStop: null,
+            changeAmount: null,
+            breakAmount: null,
+            actioned: true,
+            t212Stop: t212StopValue,
+          });
+        } else {
+          const previousStopLevel = unactionedUpdate.stopLevel - (unactionedUpdate.changeAmount ?? 0);
+          instructions.push({
+            ticker: trade.ticker,
+            currency: c,
+            type: "UPDATE_STOP",
+            currentStop,
+            stopSetDate: lastStopEntry?.date?.toISOString() ?? null,
+            latestClose,
+            oldStop: previousStopLevel,
+            newStop: trade.trailingStop,
+            changeAmount: unactionedUpdate.changeAmount,
+            breakAmount: null,
+            actioned: false,
+            t212Stop: t212StopValue,
+          });
+          actions.push({
+            type: "STOP_UPDATE",
+            ticker: trade.ticker,
+            message: `Move stop UP to ${c}${trade.trailingStop.toFixed(2)} (was ${c}${previousStopLevel.toFixed(2)})`,
+            urgency: "MEDIUM",
+            stopHistoryId: unactionedUpdate.id,
+          });
+        }
       } else {
         // Check if T212 stop is behind the system's active stop
         const t212StopValue = t212Match?.stopLoss ?? null;
@@ -386,11 +408,22 @@ export async function GET(req: Request) {
         const quotes = t212QuoteMap[p.ticker] ?? [];
         const atr20 = calculateATR20(quotes);
         const trailingLow = calculateTrailingLow(quotes);
-        const suggestedHardStop = atr20 != null ? p.currentPrice - (config.hardStopAtrMultiple * atr20) : null;
-        const suggestedTrailingStop = trailingLow;
-        const suggestedActiveStop = suggestedHardStop != null && suggestedTrailingStop != null
-          ? Math.max(suggestedHardStop, suggestedTrailingStop)
-          : suggestedHardStop ?? suggestedTrailingStop;
+        const matchedTrade = openTrades.find((t) => t.ticker === p.ticker);
+        const isTracked = !!matchedTrade;
+
+        // For tracked positions, use the database trade stops (same source as Daily Instructions)
+        // For untracked positions, calculate fresh from market data
+        const suggestedHardStop = isTracked
+          ? matchedTrade!.hardStop
+          : atr20 != null ? p.currentPrice - (config.hardStopAtrMultiple * atr20) : null;
+        const suggestedTrailingStop = isTracked
+          ? matchedTrade!.trailingStop
+          : trailingLow;
+        const suggestedActiveStop = isTracked
+          ? Math.max(matchedTrade!.hardStop, matchedTrade!.trailingStop)
+          : suggestedHardStop != null && suggestedTrailingStop != null
+            ? Math.max(suggestedHardStop, suggestedTrailingStop)
+            : suggestedHardStop ?? suggestedTrailingStop;
 
         return {
           ticker: p.ticker,
@@ -399,7 +432,7 @@ export async function GET(req: Request) {
           currentPrice: p.currentPrice,
           ppl: p.ppl,
           stopLoss: p.stopLoss ?? null,
-          tracked: openTrades.some((t) => t.ticker === p.ticker),
+          tracked: isTracked,
           suggestedHardStop,
           suggestedTrailingStop,
           suggestedActiveStop,

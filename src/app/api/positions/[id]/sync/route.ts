@@ -108,8 +108,35 @@ export async function POST(
         const t212Match = cached.positions.find((p) => p.ticker === trade.ticker);
         t212Loaded = true;
         if (t212Match) {
-          // Monotonic broker sync: if T212 stop is lower than our stored stop, discard it
           const brokerStop = t212Match.stopLoss ?? null;
+
+          // If T212 stop is HIGHER than our system stop, pull system up to match
+          if (brokerStop !== null && brokerStop > newCurrentStop) {
+            log.info(
+              { ticker: trade.ticker, systemStop: newCurrentStop, t212Stop: brokerStop },
+              "T212 stop is ahead of system — pulling system stop up",
+            );
+            await prisma.trade.update({
+              where: { id },
+              data: { trailingStop: brokerStop },
+            });
+            // Also write stop history for the pull-up
+            await prisma.stopHistory.create({
+              data: buildStopHistoryData(trade.id, now, trade.hardStop, newTrailingStop, brokerStop),
+            });
+            // Auto-mark as actioned since T212 already has this stop
+            const latestHistory = await prisma.stopHistory.findFirst({
+              where: { tradeId: id, changed: true, actioned: false },
+              orderBy: { date: "desc" },
+            });
+            if (latestHistory) {
+              await prisma.stopHistory.update({
+                where: { id: latestHistory.id },
+                data: { actioned: true, actionedAt: now },
+              });
+            }
+          }
+
           const effectiveBrokerStop = brokerStop !== null
             ? enforceMonotonicStop(brokerStop, newCurrentStop)
             : null;
