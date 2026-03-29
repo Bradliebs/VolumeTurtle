@@ -16,25 +16,30 @@ export function calculateTrueRange(prev: DailyQuote, curr: DailyQuote): number {
 
 /**
  * ATR using Wilder's smoothing method.
- * Returns null if there are fewer than period+1 quotes.
+ * Uses all available data down to a minimum of 5 candles.
+ * Returns null if there are fewer than 6 quotes (need at least 5 true ranges).
  */
 export function calculateATR(
   quotes: DailyQuote[],
   period: number = 14,
 ): number | null {
-  if (quotes.length < period + 1) return null;
+  // Need at least 6 quotes for 5 true ranges (minimum useful ATR)
+  if (quotes.length < 6) return null;
 
-  // Initial ATR: simple average of the first `period` true ranges
+  // Use the requested period or all available data, whichever is smaller
+  const effectivePeriod = Math.min(period, quotes.length - 1);
+
+  // Initial ATR: simple average of the first `effectivePeriod` true ranges
   let atr = 0;
-  for (let i = 1; i <= period; i++) {
+  for (let i = 1; i <= effectivePeriod; i++) {
     atr += calculateTrueRange(quotes[i - 1]!, quotes[i]!);
   }
-  atr /= period;
+  atr /= effectivePeriod;
 
   // Wilder's smoothing for remaining bars
-  for (let i = period + 1; i < quotes.length; i++) {
+  for (let i = effectivePeriod + 1; i < quotes.length; i++) {
     const tr = calculateTrueRange(quotes[i - 1]!, quotes[i]!);
-    atr = (atr * (period - 1) + tr) / period;
+    atr = (atr * (effectivePeriod - 1) + tr) / effectivePeriod;
   }
 
   return atr;

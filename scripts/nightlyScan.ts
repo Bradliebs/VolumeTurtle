@@ -26,6 +26,11 @@ import type { RegimeState } from "../src/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "../src/lib/risk/equityCurve";
 import type { EquityCurveState } from "../src/lib/risk/equityCurve";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "../src/lib/trades/utils";
+import { loadUniverse } from "../src/lib/hbme/loadUniverse";
+import { scoreSectors } from "../src/lib/hbme/sectorEngine";
+import { findBreakouts } from "../src/lib/hbme/breakoutEngine";
+import { runAlertCheck } from "../src/lib/hbme/alertEngine";
+import type { Candle } from "../src/lib/hbme/types";
 
 
 // ---------------------------------------------------------------------------
@@ -345,6 +350,160 @@ async function main() {
         openTrades: finalOpenTrades,
       },
     });
+  }
+
+  // ── MOMENTUM SCAN ──────────────────────────────────────────────
+  if (config.MOMENTUM_ENABLED && !DRY_RUN) {
+    console.log("\n── MOMENTUM SCAN ──");
+
+    // Create a ScanRun for momentum (reuse marketRegime from above)
+    const momentumScanRun = await prisma.scanRun.create({
+      data: {
+        startedAt: today,
+        status: "RUNNING",
+        trigger: "SCHEDULED",
+        market: "ALL",
+        scanType: "momentum",
+        marketRegime: marketRegime.marketRegime,
+      },
+    });
+
+    try {
+      // 1. Load momentum universe
+      const mUniverse = await loadUniverse();
+      console.log(`[momentum] Universe: ${mUniverse.length} tickers`);
+
+      // 2. Fetch prices (shares PriceCache — no duplicate Yahoo calls)
+      const mTickers = mUniverse.map((u) => u.ticker);
+      const mQuoteMap = await fetchEODQuotes(mTickers);
+
+      // 3. Convert to Map<string, Candle[]> for sector/breakout engines
+      const priceMap = new Map<string, Candle[]>();
+      for (const [ticker, quotes] of Object.entries(mQuoteMap)) {
+        priceMap.set(ticker, quotes.map((q) => ({
+          date: q.date,
+          open: q.open,
+          high: q.high,
+          low: q.low,
+          close: q.close,
+          volume: q.volume,
+        })));
+      }
+
+      // 4. Run sector engine
+      const sectors = scoreSectors(mUniverse, priceMap);
+      console.log(`[momentum] Sectors: ${sectors.length} ranked`);
+
+      // 5. Save SectorScanResult rows
+      const sectorData = sectors.map((s, i) => ({
+        runAt: today,
+        sector: s.sector,
+        score: s.score,
+        R5: s.R5,
+        R20: s.R20,
+        volRatio: s.volRatio,
+        R5Rank: i + 1,
+        R20Rank: i + 1,
+        volRank: i + 1,
+        scanRunId: momentumScanRun.id,
+      }));
+      if (sectorData.length > 0) {
+        await (prisma as any).sectorScanResult.createMany({ data: sectorData });
+      }
+
+      // 6. Run breakout engine on top 5 sectors
+      const hotSectors = sectors.slice(0, 5).map((s) => s.sector);
+      const { candidates, nearMisses } = findBreakouts(
+        mUniverse, priceMap, hotSectors, sectors,
+      );
+      console.log(`[momentum] Breakouts: ${candidates.length} signals, ${nearMisses.length} near misses`);
+
+      // 7. Save MomentumSignal rows
+      const signalRows: any[] = [];
+      for (const c of candidates) {
+        signalRows.push({
+          createdAt: today,
+          ticker: c.ticker,
+          sector: c.sector,
+          chg1d: c.chg1d,
+          volRatio: c.volRatio,
+          R5: c.R5,
+          R20: c.R20,
+          price: c.price,
+          sma20: 0,
+          atr: 0,
+          stopPrice: 0,
+          compositeScore: c.compositeScore.total,
+          grade: c.compositeScore.grade,
+          regimeScore: c.regimeScore ?? 0,
+          tickerTrend: c.tickerTrend ?? "INSUFFICIENT_DATA",
+          sectorScore: c.compositeScore.components.sector,
+          sectorRank: 0,
+          status: "active",
+          scanRunId: momentumScanRun.id,
+        });
+      }
+      for (const nm of nearMisses) {
+        signalRows.push({
+          createdAt: today,
+          ticker: nm.ticker,
+          sector: nm.sector,
+          chg1d: nm.chg1d,
+          volRatio: nm.volRatio,
+          R5: nm.R5,
+          R20: nm.R20,
+          price: nm.price,
+          sma20: 0,
+          atr: 0,
+          stopPrice: 0,
+          compositeScore: nm.projectedScore.total,
+          grade: nm.projectedGrade,
+          regimeScore: 0,
+          tickerTrend: "INSUFFICIENT_DATA",
+          sectorScore: 0,
+          sectorRank: 0,
+          status: "near-miss",
+          scanRunId: momentumScanRun.id,
+        });
+      }
+      if (signalRows.length > 0) {
+        await (prisma as any).momentumSignal.createMany({ data: signalRows });
+      }
+
+      // 8. Run alert check
+      let alertCount = 0;
+      try {
+        const alerts = await runAlertCheck();
+        alertCount = alerts.length;
+      } catch (err) {
+        console.error("[momentum] Alert check failed:", err);
+      }
+
+      const durationMs = Date.now() - momentumScanRun.startedAt.getTime();
+      await prisma.scanRun.update({
+        where: { id: momentumScanRun.id },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          tickersScanned: mUniverse.length,
+          signalsFound: candidates.length,
+          durationMs,
+        },
+      });
+
+      console.log(`[momentum] Alerts: ${alertCount} fired`);
+      console.log(`[momentum] Completed in ${durationMs}ms`);
+    } catch (err) {
+      console.error("[momentum] Momentum scan failed:", err);
+      await prisma.scanRun.update({
+        where: { id: momentumScanRun.id },
+        data: {
+          status: "FAILED",
+          completedAt: new Date(),
+          error: String(err),
+        },
+      });
+    }
   }
 
   // 9. Print summary

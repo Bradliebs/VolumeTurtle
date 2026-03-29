@@ -35,14 +35,19 @@ describe("calculateTrueRange", () => {
 });
 
 describe("calculateATR", () => {
-  it("returns null when fewer than period+1 quotes", () => {
-    const quotes = generateQuotes(10);
+  it("returns null when fewer than 6 quotes", () => {
+    const quotes = generateQuotes(5);
     expect(calculateATR(quotes, 14)).toBeNull();
   });
 
-  it("returns null for exactly period quotes (need period+1)", () => {
+  it("returns a value with fewer than period+1 quotes if >= 6", () => {
+    const quotes = generateQuotes(10);
+    expect(calculateATR(quotes, 14)).not.toBeNull();
+  });
+
+  it("returns a value for exactly period quotes when >= 6", () => {
     const quotes = generateQuotes(14);
-    expect(calculateATR(quotes, 14)).toBeNull();
+    expect(calculateATR(quotes, 14)).not.toBeNull();
   });
 
   it("returns a number when given exactly period+1 quotes", () => {

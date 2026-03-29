@@ -55,8 +55,85 @@ model ScanRun {
   market      String   @default("ALL")    // ALL | LSE | US | EU
   durationMs  Int?                        // scan duration in milliseconds
   marketRegime String?                    // BULLISH | BEARISH
-  vixLevel     Float?                     // VIX close value
+  vixLevel     String?
+  vixValue     Float?
   qqqVs200MA   Float?                     // % above/below 200MA
+  regimeScore      Int?
+  regimeAssessment String?
+  scanType         String   @default("volume") // "volume" | "momentum" | "both"
+}
+
+model SectorScanResult {
+  id           Int      @id @default(autoincrement())
+  runAt        DateTime @default(now())
+  sector       String
+  score        Float
+  R5           Float
+  R20          Float
+  volRatio     Float
+  R5Rank       Float
+  R20Rank      Float
+  volRank      Float
+  tickerCount  Int      @default(0)
+  hotCount     Int      @default(0)
+  ma5AboveMa20 Boolean  @default(false)
+  scanRunId    Int?
+}
+
+model MomentumSignal {
+  id             Int      @id @default(autoincrement())
+  createdAt      DateTime @default(now())
+  ticker         String
+  sector         String
+  chg1d          Float
+  volRatio       Float
+  R5             Float
+  R20            Float
+  price          Float
+  sma20          Float
+  atr            Float
+  stopPrice      Float
+  compositeScore Float
+  grade          String   // "A" | "B" | "C" | "D"
+  regimeScore    Int
+  tickerTrend    String
+  sectorScore    Float
+  sectorRank     Int
+  status         String   @default("active") // "active" | "near-miss" | "expired"
+  scanRunId      Int?
+
+  @@unique([ticker, scanRunId])
+}
+
+model WatchlistItem {
+  id      Int      @id @default(autoincrement())
+  ticker  String   @unique
+  sector  String
+  addedAt DateTime @default(now())
+  notes   String?
+  source  String   @default("manual") // "manual" | "near-miss" | "volume" | "momentum"
+}
+
+model Alert {
+  id           Int      @id @default(autoincrement())
+  type         String
+  ticker       String
+  message      String
+  severity     String   @default("info")
+  price        Float?
+  stopPrice    Float?
+  signalSource String?  // "volume" | "momentum"
+  acknowledged Boolean  @default(false)
+  sentTelegram Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+model TelegramSettings {
+  id        Int      @id @default(autoincrement())
+  botToken  String
+  chatId    String
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
 }
 
 /// A trade opened (and possibly closed) by VolumeTurtle
@@ -76,6 +153,13 @@ model Trade {
   volumeRatio   Float     // volume spike ratio at entry
   rangePosition Float     // price range position at entry
   atr20         Float     // ATR at entry
+  signalSource  String    @default("volume") // "volume" | "momentum" | "manual"
+  signalScore   Float?    // composite score at time of entry
+  signalGrade   String?   // "A" | "B" | "C" | "D"
+  hardStopPrice     Float?
+  trailingStopPrice Float?
+  peakClosePrice    Float?
+  stopSource        String?
   importedFromT212  Boolean   @default(false)
   importedAt        DateTime?
   manualEntry       Boolean   @default(false)
@@ -168,4 +252,17 @@ model T212Connection {
   lastSyncError   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
+}
+
+/// Unified app settings (DB-configurable, falls back to env vars)
+model AppSettings {
+  id                    Int      @id @default(autoincrement())
+  momentumEnabled       Boolean  @default(true)
+  breakoutMinChg        Float    @default(0.10)
+  breakoutMinVol        Float    @default(3.0)
+  scoreWeightRegime     Float    @default(0.35)
+  scoreWeightBreakout   Float    @default(0.30)
+  scoreWeightSector     Float    @default(0.25)
+  scoreWeightLiquidity  Float    @default(0.10)
+  updatedAt             DateTime @updatedAt
 }

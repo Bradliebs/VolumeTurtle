@@ -1,5 +1,5 @@
 {
-  "name": "volume-turtle",
+  "name": "tradecore",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -16,6 +16,7 @@
     "scan": "npx tsx scripts/nightlyScan.ts",
     "scan:dry": "npx tsx scripts/nightlyScan.ts --dry-run",
     "validate": "npx tsx scripts/validateUniverse.ts",
+    "validate:universe": "npx tsx scripts/validateUniverse.ts",
     "schedule:setup": "scripts\\setupScheduler.bat",
     "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
     "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",
@@ -26,6 +27,7 @@
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
     "next": "14.2.35",
+    "papaparse": "^5.5.3",
     "pg": "^8.20.0",
     "pino": "^10.3.1",
     "react": "^18",
@@ -36,6 +38,7 @@
   "devDependencies": {
     "@types/jest": "^30.0.0",
     "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "dotenv": "^17.3.1",

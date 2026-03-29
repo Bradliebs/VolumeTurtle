@@ -3,8 +3,8 @@ import "./globals.css";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 export const metadata: Metadata = {
-  title: "VolumeTurtle",
-  description: "Volume-based signal scanner dashboard",
+  title: "TradeCore",
+  description: "Unified trading system — volume spike + sector momentum",
 };
 
 export default function RootLayout({

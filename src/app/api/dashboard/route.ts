@@ -548,5 +548,54 @@ export async function GET(req: Request) {
       },
     },
     t212Portfolio,
+
+    // Momentum summary — convergence with volume engine
+    momentumSummary: await buildMomentumSummary(recentSignals),
   });
+}
+
+async function buildMomentumSummary(recentSignals: Array<{ ticker: string; signalFired: boolean; scanDate: Date }>) {
+  const db = prisma as unknown as {
+    sectorScanResult: { findFirst: (a: unknown) => Promise<{ sector: string; score: number; runAt: Date } | null>; findMany: (a: unknown) => Promise<unknown[]> };
+    momentumSignal: { findMany: (a: unknown) => Promise<Array<{ ticker: string; grade: string; status: string; createdAt: Date }>>; count: (a: unknown) => Promise<number> };
+  };
+
+  const topSector = await db.sectorScanResult.findFirst({
+    orderBy: { score: "desc" },
+  });
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const recentMomentum = await db.momentumSignal.findMany({
+    where: { status: "active", createdAt: { gte: todayStart } },
+  });
+
+  const nearMissCount = await db.momentumSignal.count({
+    where: { status: "near-miss", createdAt: { gte: todayStart } },
+  });
+
+  const gradeBreakdown = { A: 0, B: 0, C: 0, D: 0 };
+  for (const s of recentMomentum) {
+    if (s.grade in gradeBreakdown) gradeBreakdown[s.grade as keyof typeof gradeBreakdown]++;
+  }
+
+  // Convergence: tickers flagged by BOTH volume and momentum engines today
+  const volumeTickers = new Set(
+    recentSignals.filter((s) => s.signalFired).map((s) => s.ticker),
+  );
+  const momentumTickers = new Set(recentMomentum.map((s) => s.ticker));
+  let convergenceCount = 0;
+  for (const t of momentumTickers) {
+    if (volumeTickers.has(t)) convergenceCount++;
+  }
+
+  return {
+    topSector: topSector?.sector ?? null,
+    topSectorScore: topSector?.score ?? null,
+    signalCount: recentMomentum.length,
+    nearMissCount,
+    gradeBreakdown,
+    convergenceCount,
+  };
 }

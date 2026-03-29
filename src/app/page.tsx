@@ -13,6 +13,9 @@ import { RegimeBanner } from "./components/RegimeBanner";
 import { ScanHistorySection } from "./components/ScanHistorySection";
 import { SignalCard } from "./components/SignalCard";
 import { GradeLegend } from "./components/GradeLegend";
+import { SignalPill } from "./components/SignalPill";
+import { AlertPanel } from "./components/AlertPanel";
+import { MomentumSummaryPanel } from "./components/MomentumSummaryPanel";
 import { useDashboard } from "./hooks/useDashboard";
 
 // ---------------------------------------------------------------------------
@@ -29,6 +32,7 @@ export default function Home() {
     syncingTradeId, syncingAll, syncData, exitFlash,
     pushingStopTradeId,
     pushingStopTicker,
+    pendingStopPush,
     importingTicker,
     importingAll,
     errorMsg,
@@ -40,6 +44,8 @@ export default function Home() {
     syncPosition, syncAllPositions, runScan,
     markPlaced, markExited, updateBalance, markActionDone,
     pushStopToT212,
+    confirmPushStop,
+    cancelStopPush,
     pushStopByTicker,
     importT212Position,
     importAllT212Positions,
@@ -49,6 +55,30 @@ export default function Home() {
     startExit, cancelExit, setExitPrice,
     toggleExpand,
   } = useDashboard();
+
+  const hasStopAction = instructions.some((i) => i.type === "UPDATE_STOP" || i.type === "T212_STOP_BEHIND")
+    || actionItems.some((a) => a.type === "STOP_UPDATE" || a.type === "STOP_SYNC");
+
+  const hasUnknownStopStatus = openTrades.some((t) => {
+    const hasSyncData = Boolean(syncData[t.id]?.t212);
+    const hasDashboardData = Boolean(data?.t212Prices?.[t.ticker]);
+    return !hasSyncData && !hasDashboardData;
+  });
+
+  const hasStopMismatch = openTrades.some((t) => {
+    const activeStop = Math.max(t.hardStop, t.trailingStop);
+    const stopLoss = syncData[t.id]?.t212?.stopLoss ?? data?.t212Prices?.[t.ticker]?.stopLoss ?? null;
+    if (stopLoss == null) return true;
+    return stopLoss < activeStop - 0.01;
+  });
+
+  const stopAlignmentState = openTrades.length === 0
+    ? "none"
+    : hasUnknownStopStatus
+      ? "unknown"
+      : (hasStopAction || hasStopMismatch)
+        ? "needs_update"
+        : "aligned";
 
   return (
     <main className="min-h-screen p-4 max-w-[1400px] mx-auto">
@@ -70,12 +100,29 @@ export default function Home() {
         </h1>
         <nav className="flex items-center gap-4 text-sm mr-2" style={mono}>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">DASHBOARD</span>
+          <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
+          <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--green)]">
           <span className="w-2 h-2 rounded-full bg-[var(--green)] animate-pulse-live" />
           LIVE
         </span>
+        {stopAlignmentState === "aligned" && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--green)] border border-[var(--green)]/40 px-2 py-0.5">
+            ✓ ALL STOPS ALIGNED
+          </span>
+        )}
+        {stopAlignmentState === "needs_update" && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--amber)] border border-[var(--amber)]/40 px-2 py-0.5">
+            ⚠ STOP UPDATES NEEDED
+          </span>
+        )}
+        {stopAlignmentState === "unknown" && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--dim)] border border-[var(--border)] px-2 py-0.5">
+            ? STOP STATUS UNKNOWN
+          </span>
+        )}
         <span className="text-[var(--border)]">|</span>
         <span className="text-sm text-[var(--dim)]">
           Balance:{" "}
@@ -166,6 +213,7 @@ export default function Home() {
           </>
         )}
         {syncingAll && <span className="text-xs text-[var(--amber)] ml-auto">↻ Refreshing positions…</span>}
+        <AlertPanel />
         {!syncingAll && openCount > 0 && (
           <button
             onClick={syncAllPositions}
@@ -184,6 +232,9 @@ export default function Home() {
 
       {/* ── EQUITY CURVE ── */}
       <EquityCurvePanel data={data?.equityCurve ?? null} snapshots={data?.sparklineSnapshots ?? []} />
+
+      {/* ── MOMENTUM SUMMARY ── */}
+      <MomentumSummaryPanel data={data?.momentumSummary ?? null} />
 
       {/* ── ACTION REQUIRED ── */}
       {actionItems.length > 0 && (
@@ -308,6 +359,8 @@ export default function Home() {
                           <span className="text-[var(--amber)] font-bold text-sm" style={{ gridColumn: "1 / -1" }}>
                             ⚠ UPDATE YOUR STOP ON TRADING 212
                           </span>
+                          <span className="text-[var(--dim)]">Trading 212 stop now</span>
+                          <span className="text-[var(--dim)]">{inst.t212Stop != null ? `${inst.currency}${inst.t212Stop.toFixed(2)}` : "not set"}</span>
                           <span className="text-[var(--dim)]">Move stop from</span>
                           <span className="text-[var(--dim)]">{inst.oldStop != null ? `${inst.currency}${inst.oldStop.toFixed(2)}` : "—"}</span>
                           <span className="text-[var(--amber)]">Move stop to</span>
@@ -398,6 +451,8 @@ export default function Home() {
                       <span>HOLD — no action needed today{inst.actioned ? " (stop updated ✓)" : ""}</span>
                       <span>Your stop</span>
                       <span>{inst.currency}{inst.currentStop.toFixed(2)}</span>
+                      <span>Trading 212 stop now</span>
+                      <span>{inst.t212Stop != null ? `${inst.currency}${inst.t212Stop.toFixed(2)}` : "not set"}</span>
                       <span>Set on</span>
                       <span>{inst.stopSetDate ? fmtDate(inst.stopSetDate) : "entry day"}</span>
                       <span>Next check</span>
@@ -533,11 +588,7 @@ export default function Home() {
                         </td>
                         <td className="px-3 py-2 text-center">
                           <div className="flex flex-col items-center gap-0.5">
-                            {t.importedFromT212 ? (
-                              <span className="text-[8px] text-[var(--amber)]">📥 T212 Import</span>
-                            ) : (
-                              <span className="text-[8px] text-[var(--green)]">📊 Signal</span>
-                            )}
+                            <SignalPill source={(t as unknown as { signalSource?: string }).signalSource} />
                             {t212 ? (
                               <span className="text-[8px] text-[var(--green)]">T212 ✓</span>
                             ) : sd ? (
@@ -1158,6 +1209,60 @@ export default function Home() {
             runScan(false);
           }}
         />
+      )}
+
+      {/* ── STOP PUSH CONFIRMATION MODAL ── */}
+      {pendingStopPush && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" role="dialog" aria-modal="true" aria-labelledby="stop-confirm-title">
+          <div className="border border-[#333] bg-[#111] p-6 w-full max-w-md" style={mono}>
+            <h3 id="stop-confirm-title" className="text-lg font-semibold text-[var(--amber)] mb-4">⚠ UPDATE STOP ON TRADING 212</h3>
+            <p className="text-sm text-[var(--dim)] mb-3">
+              This will place a <span className="text-white">SELL STOP</span> order on your <span className="text-white">live T212 account</span>.
+            </p>
+            <div className="space-y-2 mb-4 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[var(--dim)]">Ticker</span>
+                <span className="text-white font-bold">{pendingStopPush.ticker}</span>
+              </div>
+              {pendingStopPush.t212Stop != null && (
+                <div className="flex justify-between">
+                  <span className="text-[var(--dim)]">Current T212 stop</span>
+                  <span className="text-white">{pendingStopPush.currency}{pendingStopPush.t212Stop.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-[var(--dim)]">New stop</span>
+                <span className="text-[var(--green)] font-bold">{pendingStopPush.currency}{pendingStopPush.newStop.toFixed(2)}</span>
+              </div>
+              {pendingStopPush.t212Stop != null && pendingStopPush.newStop > pendingStopPush.t212Stop && (
+                <div className="flex justify-between">
+                  <span className="text-[var(--dim)]">Change</span>
+                  <span className="text-[var(--green)]">+{pendingStopPush.currency}{(pendingStopPush.newStop - pendingStopPush.t212Stop).toFixed(2)} ↑</span>
+                </div>
+              )}
+            </div>
+            <div className="p-3 border border-[var(--amber)]/30 bg-[var(--amber)]/5 mb-4">
+              <p className="text-xs text-[var(--amber)]">
+                ⚠ Stops can only move UP, never down. Any existing stop order for this ticker will be cancelled and replaced. This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelStopPush}
+                className="px-4 py-2 text-sm border border-[#333] text-[var(--dim)] hover:text-white transition-colors"
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={confirmPushStop}
+                disabled={pushingStopTradeId === pendingStopPush.tradeId}
+                className="px-4 py-2 text-sm border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors font-semibold disabled:opacity-50"
+              >
+                {pushingStopTradeId === pendingStopPush.tradeId ? "PUSHING…" : "CONFIRM — UPDATE STOP"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

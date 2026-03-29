@@ -31,6 +31,7 @@ interface DashboardState {
   lastSyncAt: string | null;
   pushingStopTradeId: string | null;
   pushingStopTicker: string | null;
+  pendingStopPush: { tradeId: string; ticker: string; currentStop: number; newStop: number; t212Stop: number | null; currency: string } | null;
   importingTicker: string | null;
   importingAll: boolean;
   importProgress: string;
@@ -59,6 +60,7 @@ const initialState: DashboardState = {
   lastSyncAt: null,
   pushingStopTradeId: null,
   pushingStopTicker: null,
+  pendingStopPush: null as { tradeId: string; ticker: string; currentStop: number; newStop: number; t212Stop: number | null; currency: string } | null,
   importingTicker: null,
   importingAll: false,
   importProgress: "",
@@ -95,6 +97,8 @@ type Action =
   | { type: "T212_STOP_START"; tradeId: string }
   | { type: "T212_STOP_DONE"; tradeId: string }
   | { type: "T212_STOP_FAIL" }
+  | { type: "T212_STOP_CONFIRM"; payload: { tradeId: string; ticker: string; currentStop: number; newStop: number; t212Stop: number | null; currency: string } }
+  | { type: "T212_STOP_CANCEL" }
   | { type: "T212_TICKER_STOP_START"; ticker: string }
   | { type: "T212_TICKER_STOP_DONE" }
   | { type: "T212_TICKER_STOP_FAIL" }
@@ -185,11 +189,15 @@ function reducer(state: DashboardState, action: Action): DashboardState {
       return { ...state, syncingAll: false, syncProgress: "" };
 
     case "T212_STOP_START":
-      return { ...state, pushingStopTradeId: action.tradeId };
+      return { ...state, pushingStopTradeId: action.tradeId, pendingStopPush: null };
     case "T212_STOP_DONE":
       return { ...state, pushingStopTradeId: null };
     case "T212_STOP_FAIL":
       return { ...state, pushingStopTradeId: null };
+    case "T212_STOP_CONFIRM":
+      return { ...state, pendingStopPush: action.payload };
+    case "T212_STOP_CANCEL":
+      return { ...state, pendingStopPush: null };
 
     case "T212_TICKER_STOP_START":
       return { ...state, pushingStopTicker: action.ticker };
@@ -276,7 +284,7 @@ export function useDashboard() {
     if (syncedOnceRef.current) return;
     if (state.lastSyncAt) {
       const elapsed = Date.now() - new Date(state.lastSyncAt).getTime();
-      if (elapsed < 3600_000) return;
+      if (elapsed < 300_000) return;  // 5 minute TTL
     }
     if (state.syncingAll) return;
     syncedOnceRef.current = true;
@@ -414,12 +422,33 @@ export function useDashboard() {
     }
   }
 
-  async function pushStopToT212(tradeId: string) {
-    dispatch({ type: "T212_STOP_START", tradeId });
+  function requestStopPush(tradeId: string) {
+    // Find the trade and instruction to build the confirmation payload
+    const trade = state.data?.openTrades.find((t) => t.id === tradeId);
+    if (!trade) return;
+    const instr = state.data?.instructions?.find((i) => i.ticker === trade.ticker);
+    const currentStop = Math.max(trade.hardStop, trade.trailingStop);
+    const newStop = instr?.newStop ?? currentStop;
+    const t212Stop = instr?.t212Stop ?? null;
+    const currency = instr?.currency ?? "$";
+    dispatch({
+      type: "T212_STOP_CONFIRM",
+      payload: { tradeId, ticker: trade.ticker, currentStop, newStop, t212Stop, currency },
+    });
+  }
+
+  function cancelStopPush() {
+    dispatch({ type: "T212_STOP_CANCEL" });
+  }
+
+  async function confirmPushStop() {
+    const pending = state.pendingStopPush;
+    if (!pending) return;
+    dispatch({ type: "T212_STOP_START", tradeId: pending.tradeId });
     try {
-      const res = await fetch(`/api/t212/stops/${tradeId}`, { method: "POST" });
+      const res = await fetch(`/api/t212/stops/${pending.tradeId}`, { method: "POST" });
       if (res.ok) {
-        dispatch({ type: "T212_STOP_DONE", tradeId });
+        dispatch({ type: "T212_STOP_DONE", tradeId: pending.tradeId });
         fetchDashboard(true);
       } else {
         const json = await res.json().catch(() => ({ error: "Failed" }));
@@ -565,7 +594,9 @@ export function useDashboard() {
     markExited,
     updateBalance,
     markActionDone,
-    pushStopToT212,
+    pushStopToT212: requestStopPush,
+    confirmPushStop,
+    cancelStopPush,
     pushStopByTicker,
     importT212Position,
     importAllT212Positions,

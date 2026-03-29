@@ -9,6 +9,9 @@ export const createTradeSchema = z.object({
   volumeRatio: z.number().optional(),
   rangePosition: z.number().optional(),
   atr20: z.number().optional(),
+  signalSource: z.enum(["volume", "momentum", "manual"]).optional(),
+  signalScore: z.number().optional(),
+  signalGrade: z.string().optional(),
 }).refine((data) => data.hardStop < data.suggestedEntry, {
   message: "hardStop must be below suggestedEntry",
   path: ["hardStop"],
@@ -27,6 +30,8 @@ export const updateSettingsSchema = z.object({
   t212: z.object({
     environment: z.enum(["demo", "live"]).optional(),
     accountType: z.enum(["invest", "isa", "both"]).optional(),
+    apiKey: z.string().min(1).optional(),
+    apiSecret: z.string().optional(),
   }).optional(),
 });
 

@@ -1,6 +1,7 @@
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
 import { getCachedQuotes, cacheQuotes, getLatestCachedDate } from "@/lib/data/quoteCache";
+import { prisma } from "@/db/client";
 import { createLogger } from "@/lib/logger";
 import { config } from "@/lib/config";
 
@@ -106,16 +107,28 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
   const since = new Date();
   since.setDate(since.getDate() - LOOKBACK_DAYS);
 
-  // Phase 1: Check cache for each ticker
+  // Phase 1: Batch-check which tickers exist in the DB cache
+  // (one query instead of N sequential lookups)
+  const cachedTickerRows = await prisma.ticker.findMany({
+    where: { symbol: { in: tickers } },
+    select: { id: true, symbol: true },
+  });
+  const cachedTickerMap = new Map(cachedTickerRows.map((t) => [t.symbol, t.id]));
+
   for (const ticker of tickers) {
+    if (!cachedTickerMap.has(ticker)) {
+      // Not in DB at all — must fetch from Yahoo
+      tickersToFetch.push(ticker);
+      continue;
+    }
+
     try {
       const latestCached = await getLatestCachedDate(ticker);
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
+      const dayOfWeek = now.getUTCDay(); // 0=Sun, 6=Sat
 
       if (latestCached && latestCached.toISOString().slice(0, 10) === today) {
-        // Cache has today's bar — only trust it after all markets close (23:00 UTC)
-        // to avoid caching partial intraday bars from Yahoo Finance
         const afterAllMarketsClose = now.getUTCHours() >= 23;
         if (afterAllMarketsClose) {
           const cached = await getCachedQuotes(ticker, since);
@@ -125,13 +138,16 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
           }
         }
       } else if (latestCached) {
-        // Cache has yesterday's (or older) bar — use if today is a non-trading day
-        // (weekends/holidays), otherwise re-fetch to check for today's bar
-        const isWeekend = now.getUTCDay() === 0 || now.getUTCDay() === 6;
-        const cachedYesterday = new Date(now);
-        cachedYesterday.setDate(cachedYesterday.getDate() - 1);
-        const latestIsFresh = latestCached.toISOString().slice(0, 10) >= cachedYesterday.toISOString().slice(0, 10);
-        if (isWeekend && latestIsFresh) {
+        // On weekends/holidays, the last trading day is Friday (or earlier).
+        // Calculate how many days back a "fresh" cache entry could be:
+        // Sunday → Friday = 2 days ago, Saturday → Friday = 1 day ago, weekday → yesterday
+        const staleDays = dayOfWeek === 0 ? 2 : dayOfWeek === 6 ? 1 : 1;
+        const freshCutoff = new Date(now);
+        freshCutoff.setDate(freshCutoff.getDate() - staleDays);
+        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+        const latestIsFresh = latestCached.toISOString().slice(0, 10) >= freshCutoff.toISOString().slice(0, 10);
+        if ((isWeekend || now.getUTCHours() < 14) && latestIsFresh) {
+          // Weekend or before US market open — serve cached data
           const cached = await getCachedQuotes(ticker, since);
           if (cached.length >= MIN_DAYS) {
             result[ticker] = cached;
@@ -145,7 +161,15 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
     tickersToFetch.push(ticker);
   }
 
+  const cachedCount = Object.keys(result).length;
+  if (tickersToFetch.length > 0) {
+    log.info({ totalRequested: tickers.length, fromCache: cachedCount, toFetch: tickersToFetch.length },
+      "Quote fetch: cache hit/miss breakdown");
+  }
+
   // Phase 2: Fetch missing tickers from Yahoo Finance in batches
+  let fetchedCount = 0;
+  let failedCount = 0;
   for (let i = 0; i < tickersToFetch.length; i += BATCH_SIZE) {
     const batch = tickersToFetch.slice(i, i + BATCH_SIZE);
 
@@ -159,11 +183,14 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
     for (const { ticker, quotes } of settled) {
       if (quotes && quotes.length >= MIN_DAYS) {
         result[ticker] = quotes;
+        fetchedCount++;
 
         // Store in cache (fire-and-forget to avoid blocking)
         cacheQuotes(ticker, quotes).catch((err) => {
           log.warn({ ticker, err: err instanceof Error ? err.message : err }, "Failed to cache quotes");
         });
+      } else {
+        failedCount++;
       }
     }
 
@@ -171,6 +198,11 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
     if (hasMore) {
       await sleep(BATCH_DELAY_MS);
     }
+  }
+
+  if (tickersToFetch.length > 0) {
+    log.info({ fetched: fetchedCount, failed: failedCount, totalWithData: Object.keys(result).length },
+      "Quote fetch: Yahoo results");
   }
 
   return result;

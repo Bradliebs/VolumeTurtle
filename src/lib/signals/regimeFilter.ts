@@ -32,6 +32,7 @@ export interface TickerRegime {
   close: number;
   ma50: number | null;
   pctAboveMA50: number | null;
+  maPeriod: number | null;
 }
 
 export interface RegimeAssessment {
@@ -153,38 +154,43 @@ export function calculateTickerRegime(
 ): TickerRegime {
   const close = quotes.length > 0 ? quotes[quotes.length - 1]!.close : 0;
 
-  if (quotes.length < 52) {
-    log.warn(`${ticker}: only ${quotes.length} days available — need 52 for trend calculation`);
+  if (quotes.length < 30) {
+    log.warn(`${ticker}: only ${quotes.length} days available — need 30+ for trend calculation`);
     return {
       ticker,
       tickerTrend: "INSUFFICIENT_DATA",
       close,
       ma50: null,
       pctAboveMA50: null,
+      maPeriod: null,
     };
   }
 
-  const ma50 = calculateSMA(quotes, 50);
+  // Use all available data up to 50 days
+  const smaPeriod = Math.min(50, quotes.length);
+  const ma = calculateSMA(quotes, smaPeriod);
 
-  if (ma50 === null) {
-    log.warn(`${ticker}: MA50 calculation failed despite ${quotes.length} quotes — possible data gaps`);
+  if (ma === null) {
+    log.warn(`${ticker}: MA${smaPeriod} calculation failed despite ${quotes.length} quotes — possible data gaps`);
     return {
       ticker,
       tickerTrend: "INSUFFICIENT_DATA",
       close,
       ma50: null,
       pctAboveMA50: null,
+      maPeriod: null,
     };
   }
 
-  const pctAboveMA50 = ((close - ma50) / ma50) * 100;
+  const pctAboveMA50 = ((close - ma) / ma) * 100;
 
   return {
     ticker,
-    tickerTrend: close >= ma50 ? "UPTREND" : "DOWNTREND",
+    tickerTrend: close >= ma ? "UPTREND" : "DOWNTREND",
     close,
-    ma50,
+    ma50: ma,
     pctAboveMA50,
+    maPeriod: smaPeriod,
   };
 }
 

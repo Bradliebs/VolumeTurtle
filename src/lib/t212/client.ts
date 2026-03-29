@@ -101,13 +101,56 @@ export interface T212Order {
   type: string;
   status: string;
   stopPrice?: number;
+  stopLossPrice?: number;
+  triggerPrice?: number;
   limitPrice?: number;
+  stopLoss?: number;
+  price?: number;
   quantity: number;
   filledQuantity: number;
 }
 
 export async function getPendingOrders(settings: T212Settings): Promise<T212Order[]> {
   return t212Fetch("/equity/orders", settings) as Promise<T212Order[]>;
+}
+
+function normalizeTicker(ticker: string): string {
+  return ticker.trim().toUpperCase();
+}
+
+function isStopOrderType(type: string | undefined): boolean {
+  if (!type) return false;
+  return type.toUpperCase().includes("STOP");
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function extractOrderStopPrice(order: T212Order): number | null {
+  return (
+    asNumber(order.stopPrice) ??
+    asNumber(order.stopLossPrice) ??
+    asNumber(order.triggerPrice) ??
+    asNumber(order.stopLoss) ??
+    asNumber(order.limitPrice) ??
+    asNumber(order.price)
+  );
+}
+
+function extractPositionStopLoss(raw: unknown): number | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rec = raw as Record<string, unknown>;
+  return (
+    asNumber(rec["stopLoss"]) ??
+    asNumber(rec["stopLossPrice"]) ??
+    asNumber(rec["stop_price"])
+  );
 }
 
 /**
@@ -122,13 +165,18 @@ export async function getPositionsWithStops(settings: T212Settings): Promise<T21
   ]);
 
   for (const pos of positions) {
+    const normalizedPosTicker = normalizeTicker(pos.ticker);
+    if (pos.stopLoss == null) {
+      pos.stopLoss = extractPositionStopLoss(pos);
+    }
     // If stopLoss isn't already on the position, check pending orders
     if (pos.stopLoss == null) {
       const stopOrder = orders.find(
-        (o) => o.ticker === pos.ticker && (o.type === "STOP" || o.type === "STOP_LIMIT"),
+        (o) => normalizeTicker(o.ticker) === normalizedPosTicker && isStopOrderType(o.type),
       );
-      if (stopOrder?.stopPrice) {
-        pos.stopLoss = stopOrder.stopPrice;
+      const stopPrice = stopOrder ? extractOrderStopPrice(stopOrder) : null;
+      if (stopPrice != null) {
+        pos.stopLoss = stopPrice;
       }
     }
   }
@@ -225,10 +273,14 @@ export async function getPositionsWithStopsMapped(settings: T212Settings): Promi
 
     // Match stop-loss from pending orders
     if (pos.stopLoss == null) {
+      pos.stopLoss = extractPositionStopLoss(original);
+    }
+    if (pos.stopLoss == null) {
       for (const o of orders) {
         const orderYahoo = t212ToYahooTicker(o.ticker, instrumentCache);
-        if (orderYahoo === pos.ticker && (o.type === "STOP" || o.type === "STOP_LIMIT")) {
-          pos.stopLoss = o.stopPrice != null ? o.stopPrice / divisor : null;
+        if (normalizeTicker(orderYahoo) === normalizeTicker(pos.ticker) && isStopOrderType(o.type)) {
+          const rawStopPrice = extractOrderStopPrice(o);
+          pos.stopLoss = rawStopPrice != null ? rawStopPrice / divisor : null;
           break;
         }
       }
@@ -300,8 +352,8 @@ export async function testConnection(settings: T212Settings): Promise<{
  */
 export function loadT212Settings(): T212Settings | null {
   const apiKey = process.env["T212_API_KEY"];
-  const env = (process.env["T212_ENVIRONMENT"] ?? "demo") as "demo" | "live";
   const apiSecret = process.env["T212_API_SECRET"] ?? "";
+  const env = (process.env["T212_ENVIRONMENT"] ?? "live") as "demo" | "live";
   const accountType = (process.env["T212_ACCOUNT_TYPE"] ?? "isa") as "invest" | "isa" | "both";
 
   if (!apiKey) return null;
@@ -395,7 +447,7 @@ export async function updateStopOnT212(
   let cancelledOrderId: number | null = null;
   const orders = await getPendingOrders(settings);
   const existingStop = orders.find(
-    (o) => o.ticker === t212Ticker && (o.type === "STOP" || o.type === "STOP_LIMIT"),
+    (o) => normalizeTicker(o.ticker) === normalizeTicker(t212Ticker) && isStopOrderType(o.type),
   );
   if (existingStop) {
     await cancelOrder(settings, existingStop.id);

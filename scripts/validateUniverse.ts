@@ -1,27 +1,61 @@
-// Validates the universe — checks which tickers Yahoo Finance
-// can actually fetch data for, and which fail.
-// Run with: npm run validate
+// Validates data/universe.csv — checks for duplicate tickers
+// and invalid sector values.
+// Run with: npm run validate:universe
 
-import { HIGH_RISK_UNIVERSE } from "../src/lib/universe/tickers";
-import { fetchEODQuotes } from "../src/lib/data/fetchQuotes";
+import fs from "fs";
+import path from "path";
+import Papa from "papaparse";
 
-async function validateUniverse() {
-  console.log(`Validating ${HIGH_RISK_UNIVERSE.length} tickers...\n`);
+const ALLOWED_SECTORS = [
+  "Technology",
+  "Biotech",
+  "Healthcare",
+  "Energy",
+  "Financial Services",
+  "Consumer Discretionary",
+  "Industrials",
+  "Real Estate",
+];
 
-  const results = await fetchEODQuotes(HIGH_RISK_UNIVERSE);
-
-  const valid = Object.keys(results);
-  const failed = HIGH_RISK_UNIVERSE.filter((t) => !valid.includes(t));
-
-  console.log(`✓ Valid: ${valid.length} tickers`);
-  console.log(`✗ Failed: ${failed.length} tickers\n`);
-
-  if (failed.length > 0) {
-    console.log("Failed tickers (remove or check symbol):");
-    failed.forEach((t) => console.log(`  - ${t}`));
-  }
-
-  console.log("\nDone.");
+interface UniverseRow {
+  ticker: string;
+  name: string;
+  sector: string;
+  market_cap: string;
 }
 
-validateUniverse();
+const csvPath = path.resolve(__dirname, "..", "data", "universe.csv");
+const csvText = fs.readFileSync(csvPath, "utf-8");
+const { data } = Papa.parse<UniverseRow>(csvText, {
+  header: true,
+  skipEmptyLines: true,
+});
+
+let issues = 0;
+
+// Check for duplicate tickers
+const seen = new Map<string, number>();
+for (const row of data) {
+  const count = (seen.get(row.ticker) ?? 0) + 1;
+  seen.set(row.ticker, count);
+}
+for (const [ticker, count] of seen) {
+  if (count > 1) {
+    console.log(`DUPLICATE: ${ticker} appears ${count} times`);
+    issues++;
+  }
+}
+
+// Check sector values
+const sectorsFound = new Set<string>();
+for (const row of data) {
+  sectorsFound.add(row.sector);
+  if (!ALLOWED_SECTORS.includes(row.sector)) {
+    console.log(`BAD SECTOR: "${row.sector}" on ticker ${row.ticker}`);
+    issues++;
+  }
+}
+
+console.log(
+  `\n${data.length} tickers, ${sectorsFound.size} sectors, ${issues} issues found`,
+);

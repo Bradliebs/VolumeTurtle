@@ -86,11 +86,39 @@ export async function PUT(request: NextRequest) {
 
     // Save T212 connection settings
     if (t212) {
+      // Write credentials to .env.local and update process.env so they take effect immediately
+      if (t212.apiKey) {
+        const fs = await import("fs");
+        const path = await import("path");
+        const envLocalPath = path.resolve(process.cwd(), ".env.local");
+
+        const lines: string[] = [];
+        lines.push(`T212_API_KEY=${t212.apiKey}`);
+        if (t212.apiSecret != null) lines.push(`T212_API_SECRET=${t212.apiSecret}`);
+        if (t212.environment) lines.push(`T212_ENVIRONMENT=${t212.environment}`);
+        if (t212.accountType) lines.push(`T212_ACCOUNT_TYPE=${t212.accountType}`);
+
+        // Read existing .env.local, strip old T212 lines, append new ones
+        let existing = "";
+        try { existing = fs.readFileSync(envLocalPath, "utf-8"); } catch { /* file doesn't exist yet */ }
+        const kept = existing.split("\n").filter((l: string) => !l.startsWith("T212_"));
+        const merged = [...kept.filter((l: string) => l.trim() !== ""), ...lines].join("\n") + "\n";
+        fs.writeFileSync(envLocalPath, merged, "utf-8");
+
+        // Update process.env in-memory so it takes effect without restart
+        process.env["T212_API_KEY"] = t212.apiKey;
+        if (t212.apiSecret != null) process.env["T212_API_SECRET"] = t212.apiSecret;
+        if (t212.environment) process.env["T212_ENVIRONMENT"] = t212.environment;
+        if (t212.accountType) process.env["T212_ACCOUNT_TYPE"] = t212.accountType;
+
+        log.info("T212 credentials saved to .env.local");
+      }
+
       await prisma.t212Connection.upsert({
         where: { id: "default" },
         create: {
           id: "default",
-          environment: t212.environment ?? "demo",
+          environment: t212.environment ?? "live",
           apiKey: "ENV:T212_API_KEY",
           accountType: t212.accountType ?? "isa",
         },

@@ -27,12 +27,19 @@ describe("calculateTickerRegime", () => {
     expect(result.pctAboveMA50!).toBeLessThan(0);
   });
 
-  it("returns INSUFFICIENT_DATA when fewer than 50 quotes", () => {
-    const quotes = generateQuotes(30);
+  it("returns INSUFFICIENT_DATA when fewer than 30 quotes", () => {
+    const quotes = generateQuotes(20);
     const result = calculateTickerRegime("TEST", quotes);
     expect(result.tickerTrend).toBe("INSUFFICIENT_DATA");
     expect(result.ma50).toBeNull();
     expect(result.pctAboveMA50).toBeNull();
+  });
+
+  it("uses adaptive MA period with 30-49 quotes", () => {
+    const quotes = generateQuotes(35);
+    const result = calculateTickerRegime("TEST", quotes);
+    expect(result.tickerTrend).not.toBe("INSUFFICIENT_DATA");
+    expect(result.maPeriod).toBe(35);
   });
 
   it("handles empty quotes", () => {

@@ -124,6 +124,14 @@ export interface DashboardData {
   lastBackupAt: string | null;
   t212Portfolio: T212PortfolioPosition[] | null;
   t212Prices: Record<string, { currentPrice: number; ppl: number; stopLoss: number | null }>;
+  momentumSummary?: {
+    topSector: string | null;
+    topSectorScore: number | null;
+    signalCount: number;
+    nearMissCount: number;
+    gradeBreakdown: { A: number; B: number; C: number; D: number };
+    convergenceCount: number;
+  };
 }
 
 export interface EquityCurveData {

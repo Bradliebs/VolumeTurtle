@@ -1,0 +1,209 @@
+ticker,name,sector,market_cap
+IONQ,IonQ Inc,Technology,3500000000
+RXRX,Recursion Pharmaceuticals,Biotech,2000000000
+CELH,Celsius Holdings,Consumer Discretionary,3000000000
+SMCI,Super Micro Computer,Technology,15000000000
+UPST,Upstart Holdings,Financial Services,3500000000
+AFRM,Affirm Holdings,Financial Services,12000000000
+HOOD,Robinhood Markets,Financial Services,8000000000
+SOFI,SoFi Technologies,Financial Services,7000000000
+OPEN,Opendoor Technologies,Real Estate,1500000000
+RBLX,Roblox Corporation,Technology,18000000000
+U,Unity Software,Technology,5000000000
+DKNG,DraftKings Inc,Consumer Discretionary,14000000000
+PENN,PENN Entertainment,Consumer Discretionary,2500000000
+WYNN,Wynn Resorts,Consumer Discretionary,8000000000
+MGM,MGM Resorts International,Consumer Discretionary,9000000000
+CVNA,Carvana Co,Consumer Discretionary,20000000000
+RIVN,Rivian Automotive,Consumer Discretionary,14000000000
+LCID,Lucid Group,Consumer Discretionary,6000000000
+BLNK,Blink Charging,Energy,300000000
+CHPT,ChargePoint Holdings,Energy,900000000
+PLUG,Plug Power,Energy,1500000000
+FCEL,FuelCell Energy,Energy,400000000
+BE,Bloom Energy,Energy,2500000000
+NOVA,Sunnova Energy International,Energy,700000000
+SPWR,SunPower Corporation,Energy,400000000
+RUN,Sunrun Inc,Energy,3000000000
+ENPH,Enphase Energy,Energy,12000000000
+SEDG,SolarEdge Technologies,Energy,3000000000
+MAXN,Maxeon Solar Technologies,Energy,200000000
+STEM,Stem Inc,Energy,300000000
+AMRC,Ameresco Inc,Energy,800000000
+ARRY,Array Technologies,Energy,1200000000
+HIMS,Hims & Hers Health,Healthcare,3500000000
+ACCD,Accolade Inc,Healthcare,500000000
+DOCS,Doximity Inc,Healthcare,6000000000
+TDOC,Teladoc Health,Healthcare,1800000000
+BEAM,Beam Therapeutics,Biotech,1500000000
+EDIT,Editas Medicine,Biotech,500000000
+NTLA,Intellia Therapeutics,Biotech,2000000000
+CRSP,CRISPR Therapeutics,Biotech,3000000000
+FATE,Fate Therapeutics,Biotech,600000000
+KYMR,Kymera Therapeutics,Biotech,2000000000
+VRTX,Vertex Pharmaceuticals,Biotech,120000000000
+ALNY,Alnylam Pharmaceuticals,Biotech,30000000000
+IMVT,Immunovant Inc,Biotech,4000000000
+LGND,Ligand Pharmaceuticals,Biotech,1500000000
+ARQT,Arcutis Biotherapeutics,Biotech,700000000
+TGTX,TG Therapeutics,Biotech,3000000000
+MORF,Morphic Therapeutic,Biotech,1500000000
+NUVL,Nuvalent Inc,Biotech,4000000000
+RVMD,Revolution Medicines,Biotech,6000000000
+PRCT,PROCEPT BioRobotics,Healthcare,3000000000
+INSP,Inspire Medical Systems,Healthcare,4000000000
+TMDX,TransMedics Group,Healthcare,2500000000
+RYTM,Rhythm Pharmaceuticals,Biotech,3000000000
+KRYS,Krystal Biotech,Biotech,4000000000
+VERA,Vera Therapeutics,Biotech,1500000000
+IMCR,Immunocore Holdings,Biotech,1500000000
+DAWN,Day One Biopharmaceuticals,Biotech,1000000000
+IOVA,Iovance Biotherapeutics,Biotech,2000000000
+AGIO,Agios Pharmaceuticals,Biotech,2500000000
+ACLX,Arcellx Inc,Biotech,3000000000
+CERT,Certara Inc,Healthcare,3000000000
+ACVA,ACV Auctions,Technology,1800000000
+ALKT,Alkami Technology,Technology,2500000000
+APPN,Appian Corporation,Technology,2000000000
+BRZE,Braze Inc,Technology,4000000000
+CFLT,Confluent Inc,Technology,7000000000
+CWAN,Clearwater Analytics,Technology,5000000000
+DOCN,DigitalOcean Holdings,Technology,3000000000
+DV,DoubleVerify Holdings,Technology,4000000000
+ESTC,Elastic NV,Technology,5000000000
+FROG,JFrog Ltd,Technology,3500000000
+GTLB,GitLab Inc,Technology,7000000000
+HUBS,HubSpot Inc,Technology,20000000000
+JAMF,Jamf Holding Corp,Technology,1500000000
+KVYO,Klaviyo Inc,Technology,8000000000
+MNDY,Monday.com,Technology,12000000000
+PDFS,PDF Solutions,Technology,600000000
+PEGA,Pegasystems Inc,Technology,3500000000
+RDDT,Reddit Inc,Technology,15000000000
+SMAR,Smartsheet Inc,Technology,5000000000
+SPSC,SPS Commerce,Technology,3500000000
+TASK,TaskUs Inc,Technology,700000000
+TOST,Toast Inc,Technology,12000000000
+WEAV,Weave Communications,Technology,500000000
+ZI,ZoomInfo Technologies,Technology,4000000000
+ASAN,Asana Inc,Technology,3000000000
+BILL,Bill Holdings,Technology,5000000000
+DDOG,Datadog Inc,Technology,40000000000
+FRSH,Freshworks Inc,Technology,4000000000
+MGNI,Magnite Inc,Technology,1200000000
+MQ,Marqeta Inc,Technology,2500000000
+NCNO,nCino Inc,Technology,3000000000
+S,SentinelOne Inc,Technology,15000000000
+VERX,Vertex Inc,Technology,4000000000
+BIGC,BigCommerce Holdings,Technology,600000000
+BOX,Box Inc,Technology,4000000000
+EGHT,8x8 Inc,Technology,700000000
+DOMO,Domo Inc,Technology,500000000
+MSTR,MicroStrategy,Technology,20000000000
+MARA,Marathon Digital Holdings,Technology,4000000000
+RIOT,Riot Platforms,Technology,3000000000
+HUT,Hut 8 Mining,Technology,1000000000
+BTBT,Bit Digital,Technology,300000000
+CIFR,Cipher Mining,Technology,400000000
+WULF,TeraWulf Inc,Technology,800000000
+CLSK,CleanSpark Inc,Technology,1500000000
+BITF,Bitfarms Ltd,Technology,700000000
+IREN,Iris Energy,Technology,900000000
+CORZ,Core Scientific,Technology,3000000000
+WOLF,Wolfspeed Inc,Technology,1500000000
+LASR,nLIGHT Inc,Technology,500000000
+COHU,Cohu Inc,Technology,700000000
+ACLS,Axcelis Technologies,Technology,2500000000
+ONTO,Onto Innovation,Technology,4000000000
+FORM,FormFactor Inc,Technology,1500000000
+AEIS,Advanced Energy Industries,Technology,3000000000
+AMBA,Ambarella Inc,Technology,2000000000
+SLAB,Silicon Laboratories,Technology,3000000000
+ALGM,Allegro MicroSystems,Technology,3500000000
+POWI,Power Integrations,Technology,3000000000
+DIOD,Diodes Incorporated,Technology,1500000000
+SSYS,Stratasys Ltd,Technology,800000000
+XMTR,Xometry Inc,Technology,700000000
+FARO,FARO Technologies,Technology,700000000
+HIMX,Himax Technologies,Technology,700000000
+SILC,Silicom Ltd,Technology,300000000
+CEVA,CEVA Inc,Technology,500000000
+KOPN,Kopin Corporation,Technology,100000000
+KLIC,Kulicke & Soffa Industries,Technology,2000000000
+IPGP,IPG Photonics,Technology,8000000000
+LITE,Lumentum Holdings,Technology,3000000000
+ACMR,ACM Research,Technology,1000000000
+HLIT,Harmonic Inc,Technology,1500000000
+GENI,Genius Sports,Technology,1200000000
+SKLZ,Skillz Inc,Technology,200000000
+VUZI,Vuzix Corporation,Technology,100000000
+PCVX,Vaxcyte Inc,Biotech,8000000000
+NVAX,Novavax Inc,Biotech,1500000000
+VXRT,Vaxart Inc,Biotech,200000000
+INO,Inovio Pharmaceuticals,Biotech,400000000
+BNTX,BioNTech SE,Biotech,30000000000
+MRNA,Moderna Inc,Biotech,15000000000
+APLS,Apellis Pharmaceuticals,Biotech,5000000000
+RCKT,Rocket Pharmaceuticals,Biotech,1000000000
+FOLD,Amicus Therapeutics,Biotech,3000000000
+ACAD,ACADIA Pharmaceuticals,Biotech,4000000000
+PTCT,PTC Therapeutics,Biotech,2500000000
+SRRK,Scholar Rock,Biotech,1500000000
+ABUS,Arbutus Biopharma,Biotech,500000000
+SPPI,Spectrum Pharmaceuticals,Biotech,200000000
+AVDL,Avadel Pharmaceuticals,Biotech,1000000000
+XNCR,Xencor Inc,Biotech,1500000000
+ARDX,Ardelyx Inc,Biotech,1000000000
+PRAX,Praxis Precision Medicine,Biotech,1000000000
+KPTI,Karyopharm Therapeutics,Biotech,300000000
+OCGN,Ocugen Inc,Biotech,400000000
+LNTH,Lantheus Holdings,Healthcare,5000000000
+GRAL,Grail Inc,Healthcare,3000000000
+CLOV,Clover Health Investments,Healthcare,700000000
+ONEM,1Life Healthcare,Healthcare,2000000000
+XRAY,Dentsply Sirona,Healthcare,4000000000
+RDFN,Redfin Corporation,Real Estate,900000000
+COMP,Compass Inc,Real Estate,2000000000
+HOUS,Anywhere Real Estate,Real Estate,600000000
+EXPI,eXp World Holdings,Real Estate,1200000000
+PTON,Peloton Interactive,Consumer Discretionary,2000000000
+BYND,Beyond Meat,Consumer Discretionary,400000000
+FRPT,Freshpet Inc,Consumer Discretionary,3000000000
+XPEV,XPeng Inc,Consumer Discretionary,12000000000
+NIO,NIO Inc,Consumer Discretionary,10000000000
+LI,Li Auto Inc,Consumer Discretionary,20000000000
+NKLA,Nikola Corporation,Consumer Discretionary,400000000
+SKIN,BeautyHealth Company,Consumer Discretionary,200000000
+LULU,Lululemon Athletica,Consumer Discretionary,40000000000
+FUBO,fuboTV Inc,Consumer Discretionary,700000000
+SPCE,Virgin Galactic Holdings,Consumer Discretionary,300000000
+FLNC,Fluence Energy,Energy,1500000000
+GEVO,Gevo Inc,Energy,200000000
+GPRE,Green Plains,Energy,700000000
+CTRA,Coterra Energy,Energy,18000000000
+VTLE,Vital Energy,Energy,2000000000
+CIVI,Civitas Resources,Energy,4000000000
+NOG,Northern Oil and Gas,Energy,3000000000
+SM,SM Energy,Energy,3500000000
+MTDR,Matador Resources,Energy,6000000000
+TALO,Talos Energy,Energy,1200000000
+MGY,Magnolia Oil & Gas,Energy,3500000000
+CPE,Callon Petroleum,Energy,2000000000
+QS,QuantumScape Corporation,Energy,2500000000
+MVST,Microvast Holdings,Energy,300000000
+AESI,Atlas Energy Solutions,Energy,1500000000
+OESX,Orion Energy Systems,Energy,100000000
+ACHR,Archer Aviation,Industrials,2000000000
+JOBY,Joby Aviation,Industrials,5000000000
+EVEX,Eve Holding,Industrials,500000000
+APOG,Apogee Enterprises,Industrials,1200000000
+ATSG,Air Transport Services,Industrials,1000000000
+SNDR,Schneider National,Industrials,4000000000
+ARCB,ArcBest Corporation,Industrials,1500000000
+SAIA,Saia Inc,Industrials,6000000000
+KNSL,Kinsale Capital Group,Financial Services,8000000000
+RYAN,Ryan Specialty Holdings,Financial Services,10000000000
+STEP,StepStone Group,Financial Services,4000000000
+GCMG,GCM Grosvenor,Financial Services,2000000000
+TREE,LendingTree Inc,Financial Services,500000000
+CURO,CURO Group Holdings,Financial Services,300000000

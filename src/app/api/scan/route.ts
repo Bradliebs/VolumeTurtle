@@ -223,7 +223,8 @@ export async function GET(request: NextRequest) {
               status: "COMPLETED",
               durationMs,
               marketRegime: marketRegime.marketRegime,
-              vixLevel: marketRegime.vixLevel,
+              vixLevel: marketRegime.vixLevel != null ? String(marketRegime.vixLevel) : null,
+              vixValue: marketRegime.vixLevel,
               qqqVs200MA: marketRegime.qqqPctAboveMA,
             },
           });
