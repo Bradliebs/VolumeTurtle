@@ -124,6 +124,7 @@ export interface DashboardData {
   lastBackupAt: string | null;
   t212Portfolio: T212PortfolioPosition[] | null;
   t212Prices: Record<string, { currentPrice: number; ppl: number; stopLoss: number | null }>;
+  gbpUsdRate?: number;
   momentumSummary?: {
     topSector: string | null;
     topSectorScore: number | null;

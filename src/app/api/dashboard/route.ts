@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
-import { getCurrencySymbol } from "@/lib/currency";
+import { getCurrencySymbol, getGbpUsdRate } from "@/lib/currency";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import type { RegimeState } from "@/lib/signals/regimeFilter";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
@@ -96,6 +96,14 @@ export async function GET(req: Request) {
     regime = await calculateMarketRegime();
   } catch (err) {
     log.warn({ err }, "Market regime fetch failed, continuing without");
+  }
+
+  // Fetch GBP/USD rate for exposure conversion
+  let gbpUsdRate = 1.27;
+  try {
+    gbpUsdRate = await getGbpUsdRate();
+  } catch {
+    // Use fallback
   }
 
   // Calculate equity curve state
@@ -548,6 +556,9 @@ export async function GET(req: Request) {
       },
     },
     t212Portfolio,
+
+    // FX rate for exposure conversion
+    gbpUsdRate,
 
     // Momentum summary — convergence with volume engine
     momentumSummary: await buildMomentumSummary(recentSignals),

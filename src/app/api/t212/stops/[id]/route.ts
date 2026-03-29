@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
-import { loadT212Settings, updateStopOnT212 } from "@/lib/t212/client";
+import { loadT212Settings, updateStopOnT212, getPositionsWithStopsMapped } from "@/lib/t212/client";
 import { enforceMonotonicStop } from "@/lib/trades/utils";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
@@ -68,6 +68,37 @@ export async function POST(
 
     // MONOTONIC ENFORCEMENT: stop can only go up
     const effectiveStop = enforceMonotonicStop(requestedStop, currentStop);
+
+    // T212 FLOOR: check if T212 already has a higher stop
+    let t212CurrentStop: number | null = null;
+    try {
+      const positions = await getPositionsWithStopsMapped(t212Settings);
+      const t212Pos = positions.find((p) => p.ticker === trade.ticker);
+      t212CurrentStop = t212Pos?.stopLoss ?? null;
+    } catch {
+      // If we can't check T212, proceed with the push
+    }
+
+    if (t212CurrentStop != null && effectiveStop < t212CurrentStop - 0.01) {
+      log.warn({ ticker: trade.ticker, computed: effectiveStop, t212Stop: t212CurrentStop }, "Blocked push — would downgrade T212 stop");
+      return NextResponse.json({
+        error: `Computed stop $${effectiveStop.toFixed(2)} is below T212 stop $${t212CurrentStop.toFixed(2)} — push would downgrade your stop`,
+        t212Stop: t212CurrentStop,
+        computedStop: effectiveStop,
+      }, { status: 409 });
+    }
+
+    if (t212CurrentStop != null && effectiveStop <= t212CurrentStop + 0.01) {
+      return NextResponse.json({
+        success: true,
+        ticker: trade.ticker,
+        stopPrice: t212CurrentStop,
+        message: `T212 stop already at $${t212CurrentStop.toFixed(2)}, no update needed`,
+        cancelledOrderId: null,
+        newOrderId: null,
+        actionedStopHistoryId: null,
+      });
+    }
 
     // Push to T212
     const result = await updateStopOnT212(

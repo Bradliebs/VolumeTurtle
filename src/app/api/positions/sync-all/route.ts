@@ -208,6 +208,18 @@ export async function POST(_request: Request) {
       }
     }
 
+    // Save balance from T212 as AccountSnapshot
+    if (t212Balance != null) {
+      await prisma.accountSnapshot.create({
+        data: {
+          date: now,
+          balance: t212Balance,
+          openTrades: openTrades.length,
+        },
+      });
+      log.info({ balance: t212Balance }, "Balance auto-synced from T212");
+    }
+
     return NextResponse.json({
       results,
       syncedAt: now.toISOString(),

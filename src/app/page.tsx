@@ -29,7 +29,7 @@ export default function Home() {
     placingTicker, exitingTradeId, exitPrice,
     editingBalance, balanceInput,
     expandedTradeId,
-    syncingTradeId, syncingAll, syncData, exitFlash,
+    syncingTradeId, syncingAll, syncData, exitFlash, lastSyncAt,
     pushingStopTradeId,
     pushingStopTicker,
     pendingStopPush,
@@ -79,6 +79,37 @@ export default function Home() {
       : (hasStopAction || hasStopMismatch)
         ? "needs_update"
         : "aligned";
+
+  // Ratchet stops state
+  const [ratcheting, setRatcheting] = React.useState(false);
+  const [ratchetMsg, setRatchetMsg] = React.useState<string | null>(null);
+
+  async function handleRatchet() {
+    setRatcheting(true);
+    setRatchetMsg(null);
+    try {
+      const res = await fetch("/api/trades/ratchet", { method: "POST" });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.ratcheted > 0) {
+          const moved = d.results.filter((r: { ratcheted: boolean }) => r.ratcheted)
+            .map((r: { ticker: string; oldStop: number; newStop: number }) => `${r.ticker} $${r.oldStop.toFixed(2)}\u2192$${r.newStop.toFixed(2)}`)
+            .join(" \u00B7 ");
+          setRatchetMsg(`\u2713 ${d.ratcheted} updated: ${moved}${d.pushed > 0 ? ` \u00B7 ${d.pushed} pushed to T212` : ""}`);
+        } else {
+          setRatchetMsg("\u2014 No change \u2014 all stops already current");
+        }
+        // Refresh dashboard to show updated stops
+        syncAllPositions();
+      } else {
+        setRatchetMsg("\u2717 Failed");
+      }
+    } catch {
+      setRatchetMsg("\u2717 Network error");
+    }
+    setRatcheting(false);
+    setTimeout(() => setRatchetMsg(null), 8000);
+  }
 
   return (
     <main className="min-h-screen p-4 max-w-[1400px] mx-auto">
@@ -161,6 +192,11 @@ export default function Home() {
               title="Click to edit balance"
             >
               {fmtMoney(balance)}
+            </span>
+          )}
+          {lastSyncAt && !editingBalance && (
+            <span className={`text-[10px] ml-1 ${Date.now() - new Date(lastSyncAt).getTime() > 86400_000 ? "text-[var(--amber)]" : "text-[var(--dim)]"}`} style={mono}>
+              T212 {fmtTime(lastSyncAt)}
             </span>
           )}
         </span>
@@ -468,7 +504,24 @@ export default function Home() {
 
       {/* ── OPEN POSITIONS ── */}
       <section className="mb-6">
-        <h2 className="text-sm font-semibold text-[var(--dim)] mb-2 tracking-widest">OPEN POSITIONS</h2>
+        <div className="flex items-center gap-3 mb-2">
+          <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">OPEN POSITIONS</h2>
+          {openCount > 0 && (
+            <button
+              onClick={handleRatchet}
+              disabled={ratcheting}
+              className="px-3 py-0.5 text-[10px] border border-[var(--border)] text-[var(--dim)] hover:text-[var(--green)] hover:border-[var(--green)] transition-colors disabled:opacity-40"
+              style={mono}
+            >
+              {ratcheting ? "RATCHETING\u2026" : "\u25B6 RATCHET STOPS"}
+            </button>
+          )}
+          {ratchetMsg && (
+            <span className={`text-[10px] ${ratchetMsg.startsWith("\u2713") ? "text-[var(--green)]" : ratchetMsg.startsWith("\u2717") ? "text-[var(--red)]" : "text-[var(--dim)]"}`} style={mono}>
+              {ratchetMsg}
+            </span>
+          )}
+        </div>
         <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
           <table className="w-full text-sm" style={mono}>
             <thead>
@@ -543,18 +596,28 @@ export default function Home() {
                         <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                           {t212?.stopLoss != null ? (
                             <div>
-                              <span className={t212.stopLoss >= activeStop - 0.01 ? "text-[var(--green)]" : "text-[var(--amber)]"}>
-                                {fmtPrice(t212.stopLoss, c)}
-                              </span>
-                              {t212.stopLoss < activeStop - 0.01 && (
-                                <button
-                                  onClick={() => pushStopToT212(t.id)}
-                                  disabled={pushingStopTradeId === t.id}
+                              {t212.stopLoss > activeStop + 0.01 ? (
+                                <>
+                                  <span className="text-[var(--green)]">{fmtPrice(t212.stopLoss, c)}</span>
+                                  <span className="block text-[8px] text-[var(--green)]">{"\u25B2"} BETTER</span>
+                                </>
+                              ) : t212.stopLoss >= activeStop - 0.01 ? (
+                                <>
+                                  <span className="text-[var(--green)]">{fmtPrice(t212.stopLoss, c)}</span>
+                                  <span className="block text-[8px] text-[var(--green)]">{"\u2713"} ALIGNED</span>
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-[var(--amber)]">{fmtPrice(t212.stopLoss, c)}</span>
+                                  <button
+                                    onClick={() => pushStopToT212(t.id)}
+                                    disabled={pushingStopTradeId === t.id}
                                   className="block mx-auto mt-0.5 px-1.5 py-0 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
                                   style={mono}
                                 >
-                                  {pushingStopTradeId === t.id ? "…" : "↑ FIX"}
+                                  {pushingStopTradeId === t.id ? "\u2026" : "\u2191 FIX"}
                                 </button>
+                                </>
                               )}
                             </div>
                           ) : t212 ? (

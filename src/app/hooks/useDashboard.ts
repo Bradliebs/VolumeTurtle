@@ -323,6 +323,11 @@ export function useDashboard() {
         const syncedAt = json.syncedAt ?? new Date().toISOString();
         dispatch({ type: "SYNC_ALL_DONE", results, syncedAt });
         if (results.some((r) => r.instruction?.type === "EXIT")) triggerExitFlash(dispatch);
+        // Update balance from T212 if available
+        if (json.t212?.balance != null) {
+          dispatch({ type: "SET_ERROR", msg: `Synced \u2014 Balance updated to \u00A3${json.t212.balance.toFixed(2)}` });
+          setTimeout(() => dispatch({ type: "CLEAR_ERROR" }), 4000);
+        }
         fetchDashboard(true);
       } else {
         dispatch({ type: "SYNC_ALL_FAIL" });
@@ -539,7 +544,13 @@ export function useDashboard() {
   const closedTrades = state.data?.closedTrades ?? [];
   const balance = state.data?.account?.balance ?? 0;
   const openCount = openTrades.length;
-  const totalExposure = openTrades.reduce((s, t) => s + t.entryPrice * t.shares, 0);
+  const gbpUsdRate = state.data?.gbpUsdRate ?? 1.27;
+  const totalExposure = openTrades.reduce((s, t) => {
+    const posValue = t.entryPrice * t.shares;
+    // Convert USD positions to GBP for a GBP-denominated account
+    const isUsd = !t.ticker.endsWith(".L") && !t.ticker.endsWith(".AS") && !t.ticker.endsWith(".HE") && !t.ticker.endsWith(".ST") && !t.ticker.endsWith(".CO");
+    return s + (isUsd ? posValue / gbpUsdRate : posValue);
+  }, 0);
   const exposurePct = balance > 0 ? ((totalExposure / balance) * 100).toFixed(1) : "0.0";
 
   const wins = closedTrades.filter((t) => (t.rMultiple ?? 0) > 0).length;
