@@ -9,6 +9,7 @@ interface MomentumSummaryData {
   nearMissCount: number;
   gradeBreakdown: { A: number; B: number; C: number; D: number };
   convergenceCount: number;
+  convergenceTickers?: string[];
 }
 
 export function MomentumSummaryPanel({ data }: { data: MomentumSummaryData | null }) {
@@ -51,6 +52,11 @@ export function MomentumSummaryPanel({ data }: { data: MomentumSummaryData | nul
           <span className="text-cyan-400 font-bold">
             ⚡ CONVERGENCE — {data.convergenceCount} ticker{data.convergenceCount > 1 ? "s" : ""} flagged by both engines
           </span>
+          {data.convergenceTickers && data.convergenceTickers.length > 0 && (
+            <div className="mt-1 text-cyan-300">
+              {data.convergenceTickers.join(" · ")}
+            </div>
+          )}
         </div>
       )}
     </section>

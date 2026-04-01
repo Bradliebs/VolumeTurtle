@@ -1,24 +1,29 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 :: ─────────────────────────────────────────────────────────
-::  TradeCore — One-Click Installer
-::  
+::  VolumeTurtle — First-Time Installer
+::
+::  Run this ONCE to set up everything.
+::  After that, use START.bat for daily use.
+::
 ::  This script:
 ::   1. Checks you have Node.js and Docker installed
-::   2. Starts the database (PostgreSQL via Docker)
-::   3. Installs dependencies (npm install)
-::   4. Sets up the database tables
-::   5. Starts the app
+::   2. Sets up your configuration (.env)
+::   3. Starts the database (PostgreSQL via Docker)
+::   4. Installs dependencies (npm install)
+::   5. Sets up the database tables (Prisma)
+::   6. Starts the app and opens your browser
 ::
 ::  If anything fails, it tells you exactly what to do.
 :: ─────────────────────────────────────────────────────────
 
-title TradeCore Installer
+title VolumeTurtle — Installer
 
 echo.
 echo  ╔═══════════════════════════════════════════╗
-echo  ║       TradeCore — One-Click Setup         ║
+echo  ║     VolumeTurtle — First-Time Setup       ║
 echo  ╚═══════════════════════════════════════════╝
 echo.
 
@@ -69,7 +74,7 @@ if errorlevel 1 (
 )
 echo         Found Docker
 
-:: Check Docker is running
+:: Check Docker is actually running
 docker info >nul 2>nul
 if errorlevel 1 (
   echo.
@@ -94,15 +99,13 @@ if not exist ".env" (
   if exist ".env.example" (
     copy ".env.example" ".env" >nul
     echo         Created .env from template
+    echo         You can edit .env later to customise settings.
   ) else (
-    echo         WARNING: No .env.example found, creating minimal .env
-    (
-      echo DATABASE_URL=postgresql://postgres:postgres@localhost:5433/volume_turtle
-      echo VOLUME_TURTLE_BALANCE=1000
-      echo MAX_POSITIONS=5
-      echo RISK_PER_TRADE_PCT=2
-      echo SCHEDULED_SCAN_TOKEN=tradecore-local-token-change-me
-    ) > ".env"
+    echo.
+    echo  ERROR: .env.example is missing from the project.
+    echo  The repository may be incomplete. Re-download and try again.
+    pause
+    exit /b 1
   )
 ) else (
   echo         .env already exists, keeping it
@@ -113,25 +116,26 @@ if not exist ".env" (
 :: ─────────────────────────────────────────
 echo  [4/6] Starting database...
 docker compose up -d 2>nul
-if errorlevel 1 (
-  docker-compose up -d 2>nul
-  if errorlevel 1 (
-    echo.
-    echo  ERROR: Could not start the database.
-    echo  Make sure Docker Desktop is running and try again.
-    pause
-    exit /b 1
-  )
-)
+if not errorlevel 1 goto db_started
+docker-compose up -d 2>nul
+if not errorlevel 1 goto db_started
+echo.
+echo  ERROR: Could not start the database.
+echo  Make sure Docker Desktop is fully loaded and try again.
+pause
+exit /b 1
 
-:: Wait for database to be ready
-echo         Waiting for PostgreSQL to start...
+:db_started
+
+:: Wait for database to be ready (max 60s)
+echo         Waiting for PostgreSQL to be ready...
 set RETRIES=0
 :wait_db
 set /a RETRIES+=1
-if %RETRIES% gtr 30 (
-  echo         ERROR: Database did not start in 30 seconds.
-  echo         Check Docker Desktop for errors.
+if !RETRIES! gtr 60 (
+  echo.
+  echo  ERROR: Database did not start within 60 seconds.
+  echo  Open Docker Desktop and check the volumeturtle-db container for errors.
   pause
   exit /b 1
 )
@@ -145,7 +149,7 @@ echo         Database is ready
 :: ─────────────────────────────────────────
 :: Step 5: Install dependencies + setup DB
 :: ─────────────────────────────────────────
-echo  [5/6] Installing dependencies (this takes 1-2 minutes)...
+echo  [5/6] Installing dependencies (this may take 1-2 minutes)...
 call npm install --loglevel=error
 if errorlevel 1 (
   echo.
@@ -156,12 +160,21 @@ if errorlevel 1 (
 )
 echo         Dependencies installed
 
-echo         Setting up database tables...
-call npx prisma generate >nul 2>nul
-call npx prisma db push --accept-data-loss >nul 2>nul
+echo         Generating Prisma client...
+call npx prisma generate
 if errorlevel 1 (
   echo.
-  echo  ERROR: Database setup failed.
+  echo  ERROR: Prisma client generation failed.
+  echo  Check the output above for details.
+  pause
+  exit /b 1
+)
+
+echo         Creating database tables...
+call npx prisma db push
+if errorlevel 1 (
+  echo.
+  echo  ERROR: Database schema push failed.
   echo  Make sure the database is running (check Docker Desktop).
   pause
   exit /b 1
@@ -171,22 +184,23 @@ echo         Database tables created
 :: ─────────────────────────────────────────
 :: Step 6: Start the app
 :: ─────────────────────────────────────────
-echo  [6/6] Starting TradeCore...
 echo.
 echo  ╔═══════════════════════════════════════════╗
 echo  ║                                           ║
-echo  ║   TradeCore is starting!                  ║
+echo  ║   Setup complete! Starting VolumeTurtle   ║
 echo  ║                                           ║
-echo  ║   Open your browser to:                   ║
-echo  ║   http://localhost:3000                    ║
+echo  ║   Your browser will open automatically.   ║
+echo  ║   If not, go to: http://localhost:3000    ║
 echo  ║                                           ║
 echo  ║   Press Ctrl+C in this window to stop.    ║
+echo  ║                                           ║
+echo  ║   Next time, just use START.bat           ║
 echo  ║                                           ║
 echo  ╚═══════════════════════════════════════════╝
 echo.
 
-:: Open browser automatically after a short delay
-start "" cmd /c "timeout /t 5 /nobreak >nul && start http://localhost:3000"
+:: Open browser once server is ready
+start "" cmd /c "timeout /t 8 /nobreak >nul && start http://localhost:3000"
 
 :: Start the dev server (keeps this window open)
 call npx next dev

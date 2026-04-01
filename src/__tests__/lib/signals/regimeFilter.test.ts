@@ -71,6 +71,7 @@ describe("assessRegime", () => {
       close: 100,
       ma50: 95,
       pctAboveMA50: 5.26,
+      maPeriod: 50,
       ...overrides,
     };
   }

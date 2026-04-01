@@ -38,6 +38,7 @@ export interface ScanResult {
   compositeScore: number | null;
   compositeGrade: string | null;
   actionTaken: string | null;
+  signalSource?: string;
 }
 
 export interface StopHistoryEntry {

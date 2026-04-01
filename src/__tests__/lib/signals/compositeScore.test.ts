@@ -25,6 +25,7 @@ function makeRegimeAssessment(overrides: Partial<{
     close: 100,
     ma50: 95,
     pctAboveMA50: overrides.pctAboveMA50 ?? 5.26,
+    maPeriod: 50,
   };
 
   return {

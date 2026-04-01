@@ -16,6 +16,7 @@ import { GradeLegend } from "./components/GradeLegend";
 import { SignalPill } from "./components/SignalPill";
 import { AlertPanel } from "./components/AlertPanel";
 import { MomentumSummaryPanel } from "./components/MomentumSummaryPanel";
+import CruiseControlPanel from "./components/CruiseControlPanel";
 import { useDashboard } from "./hooks/useDashboard";
 
 // ---------------------------------------------------------------------------
@@ -265,6 +266,9 @@ export default function Home() {
 
       {/* ── REGIME BANNER ── */}
       <RegimeBanner regime={data?.regime ?? null} />
+
+      {/* ── CRUISE CONTROL ── */}
+      <CruiseControlPanel />
 
       {/* ── EQUITY CURVE ── */}
       <EquityCurvePanel data={data?.equityCurve ?? null} snapshots={data?.sparklineSnapshots ?? []} />
@@ -566,6 +570,7 @@ export default function Home() {
                   const currentPrice = t212?.currentPrice ?? sd?.latestClose ?? null;
                   const pnl = t212 ? t212.ppl : (currentPrice != null ? (currentPrice - t.entryPrice) * t.shares : null);
                   const isSyncing = syncingTradeId === t.id;
+                  const displayedActiveStop = Math.max(activeStop, t212?.stopLoss ?? 0);
                   return (
                     <React.Fragment key={t.id}>
                       <tr
@@ -590,8 +595,8 @@ export default function Home() {
                         <td className="px-3 py-2 text-right">{t.shares >= 1 ? t.shares : t.shares.toFixed(4)}</td>
                         <td className="px-3 py-2 text-right text-[var(--red)]">{fmtPrice(t.hardStop, c)}</td>
                         <td className="px-3 py-2 text-right text-[var(--amber)]">{fmtPrice(t.trailingStop, c)}</td>
-                        <td className={`px-3 py-2 text-right ${ratcheted ? "text-[var(--green)]" : "text-[var(--dim)]"}`}>
-                          {fmtPrice(activeStop, c)}
+                        <td className={`px-3 py-2 text-right ${displayedActiveStop > activeStop ? "text-[var(--green)]" : ratcheted ? "text-[var(--green)]" : "text-[var(--dim)]"}`}>
+                          {fmtPrice(displayedActiveStop, c)}
                         </td>
                         <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                           {t212?.stopLoss != null ? (
@@ -1034,6 +1039,7 @@ export default function Home() {
                 <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
                   <th className="text-left px-3 py-2">DATE</th>
                   <th className="text-left px-3 py-2">TICKER</th>
+                  <th className="text-center px-3 py-2">SOURCE</th>
                   <th className="text-center px-3 py-2">GRADE</th>
                   <th className="text-right px-3 py-2">VOL RATIO</th>
                   <th className="text-right px-3 py-2">RANGE POS</th>
@@ -1042,23 +1048,22 @@ export default function Home() {
               </thead>
               <tbody>
                 {loading ? (
-                  <SkeletonRows cols={6} />
-                ) : recentSignals.filter((s) => s.signalFired).length === 0 ? (
+                  <SkeletonRows cols={7} />
+                ) : recentSignals.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
-                      No signals in the last 14 days
+                    <td colSpan={7} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                      No scan signals in the last 30 days
                     </td>
                   </tr>
                 ) : (
-                  recentSignals
-                    .filter((s) => s.signalFired)
-                    .map((s) => {
+                  recentSignals.map((s) => {
                       const actionColor =
-                        s.actionTaken === "ENTERED"
-                          ? "var(--green)"
-                          : s.actionTaken === "SKIPPED_MAX_POSITIONS" || s.actionTaken === "SKIPPED_EQUITY_PAUSE"
-                            ? "var(--amber)"
-                            : "var(--dim)";
+                        s.actionTaken === "ENTERED" ? "var(--green)"
+                          : s.actionTaken === "SKIPPED_MAX_POSITIONS" ? "var(--amber)"
+                            : s.actionTaken === "SKIPPED_EQUITY_PAUSE" ? "var(--red)"
+                              : s.actionTaken === "IMPORTED" ? "var(--dim)"
+                                : s.actionTaken === "SIGNAL_FIRED" ? "var(--amber)"
+                                  : "var(--dim)";
                       const gradeColor =
                         s.compositeGrade === "A" ? "#00ff88"
                           : s.compositeGrade === "B" ? "var(--green)"
@@ -1068,20 +1073,27 @@ export default function Home() {
                       const actionLabel =
                         s.actionTaken === "SKIPPED_EQUITY_PAUSE" ? "PAUSED"
                           : s.actionTaken === "SKIPPED_MAX_POSITIONS" ? "MAX POS"
-                            : s.actionTaken ?? "—";
+                            : s.actionTaken === "SIGNAL_FIRED" ? "NOT ENTERED"
+                              : s.actionTaken === "IMPORTED" ? "IMPORTED"
+                                : s.actionTaken === "MANUAL" ? "MANUAL"
+                                  : s.actionTaken ?? "\u2014";
+                      const source = (s as unknown as { signalSource?: string }).signalSource ?? "volume";
                       return (
                         <tr key={s.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
                           <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(s.scanDate)}</td>
                           <td className="px-3 py-2 font-semibold">{s.ticker}</td>
                           <td className="px-3 py-2 text-center">
+                            <SignalPill source={source} />
+                          </td>
+                          <td className="px-3 py-2 text-center">
                             {s.compositeGrade ? (
                               <span className="font-bold" style={{ color: gradeColor }}>{s.compositeGrade}</span>
                             ) : (
-                              <span className="text-[var(--dim)]">—</span>
+                              <span className="text-[var(--dim)]">{"\u2014"}</span>
                             )}
                           </td>
                           <td className="px-3 py-2 text-right text-[var(--green)]">
-                            {s.volumeRatio != null ? s.volumeRatio.toFixed(1) + "x" : "—"}
+                            {s.volumeRatio != null ? s.volumeRatio.toFixed(1) + "x" : "\u2014"}
                           </td>
                           <td
                             className="px-3 py-2 text-right"
@@ -1092,7 +1104,7 @@ export default function Home() {
                                   : "var(--dim)",
                             }}
                           >
-                            {s.rangePosition != null ? s.rangePosition.toFixed(2) : "—"}
+                            {s.rangePosition != null ? s.rangePosition.toFixed(2) : "\u2014"}
                           </td>
                           <td className="px-3 py-2 text-center">
                             <Badge label={actionLabel} color={actionColor} />
@@ -1215,15 +1227,16 @@ export default function Home() {
                 <th className="text-right px-3 py-2">ENTRY PRICE</th>
                 <th className="text-right px-3 py-2">EXIT PRICE</th>
                 <th className="text-right px-3 py-2">R-MULTIPLE</th>
+                <th className="text-right px-3 py-2">P/L</th>
                 <th className="text-center px-3 py-2">RESULT</th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows cols={7} />
+                <SkeletonRows cols={8} />
               ) : closedTrades.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                  <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
                     No closed trades yet
                   </td>
                 </tr>
@@ -1232,6 +1245,7 @@ export default function Home() {
                   const r = t.rMultiple ?? 0;
                   const isWin = r > 0;
                   const c = tickerCurrency(t.ticker);
+                  const pl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : null;
                   return (
                     <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
                       <td className="px-3 py-2 font-semibold">{t.ticker}</td>
@@ -1245,6 +1259,12 @@ export default function Home() {
                       >
                         {isWin ? "+" : ""}
                         {r.toFixed(2)}R
+                      </td>
+                      <td
+                        className="px-3 py-2 text-right font-semibold"
+                        style={{ color: pl != null && pl >= 0 ? "var(--green)" : "var(--red)" }}
+                      >
+                        {pl != null ? `${pl >= 0 ? "+" : ""}${c}${Math.abs(pl).toFixed(2)}` : "—"}
                       </td>
                       <td className="px-3 py-2 text-center">
                         <Badge label={isWin ? "WIN" : "LOSS"} color={isWin ? "var(--green)" : "var(--red)"} />

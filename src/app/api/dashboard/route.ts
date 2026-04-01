@@ -41,8 +41,8 @@ export async function GET(req: Request) {
   const signalsPage = parseInt(url.searchParams.get("signalsPage") ?? "1", 10);
   const pageSize = config.dashboardPageSize;
 
-  const fourteenDaysAgo = new Date();
-  fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - config.dashboardLookbackDays);
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
     await Promise.all([
@@ -53,7 +53,7 @@ export async function GET(req: Request) {
         include: { stopHistory: { orderBy: { date: "asc" } } },
       }),
       prisma.scanResult.findMany({
-        where: { scanDate: { gte: fourteenDaysAgo } },
+        where: { scanDate: { gte: thirtyDaysAgo }, signalFired: true },
         orderBy: { scanDate: "desc" },
         distinct: ["ticker", "scanDate"],
         take: pageSize,
@@ -87,7 +87,7 @@ export async function GET(req: Request) {
   // Get total counts for pagination
   const [totalClosedTrades, totalSignals] = await Promise.all([
     prisma.trade.count({ where: { status: "CLOSED" } }),
-    prisma.scanResult.count({ where: { scanDate: { gte: fourteenDaysAgo } } }),
+    prisma.scanResult.count({ where: { scanDate: { gte: thirtyDaysAgo }, signalFired: true } }),
   ]);
 
   // Fetch current market regime (QQQ + VIX)
@@ -493,10 +493,35 @@ export async function GET(req: Request) {
     }
   }
 
+  // Build synthetic signal log entries for imported/manual trades not in ScanResult
+  const signalTickers = new Set(recentSignals.map((s) => s.ticker));
+  const allTrades = [...openTrades, ...closedTrades];
+  const syntheticSignals = allTrades
+    .filter((t) => !signalTickers.has(t.ticker) && (t.importedFromT212 || t.manualEntry))
+    .map((t) => ({
+      id: `synth-${t.id}`,
+      scanDate: t.entryDate,
+      ticker: t.ticker,
+      signalFired: true,
+      volumeRatio: t.volumeRatio > 0 ? t.volumeRatio : null,
+      rangePosition: t.rangePosition > 0 ? t.rangePosition : null,
+      atr20: t.atr20 > 0 ? t.atr20 : null,
+      compositeScore: (t as unknown as { signalScore?: number }).signalScore ?? null,
+      compositeGrade: (t as unknown as { signalGrade?: string }).signalGrade ?? null,
+      actionTaken: t.importedFromT212 ? "IMPORTED" : "MANUAL",
+      signalSource: t.importedFromT212 ? "import" : (t as unknown as { signalSource?: string }).signalSource ?? "manual",
+    }));
+
+  const combinedSignals = [...recentSignals.map((s) => ({
+    ...s,
+    scanDate: s.scanDate,
+    signalSource: "volume" as string,
+  })), ...syntheticSignals];
+
   return NextResponse.json({
     account,
     openTrades,
-    recentSignals,
+    recentSignals: combinedSignals,
     closedTrades,
     lastScanTime: lastScan?.createdAt?.toISOString() ?? null,
     actions,
@@ -596,9 +621,9 @@ async function buildMomentumSummary(recentSignals: Array<{ ticker: string; signa
     recentSignals.filter((s) => s.signalFired).map((s) => s.ticker),
   );
   const momentumTickers = new Set(recentMomentum.map((s) => s.ticker));
-  let convergenceCount = 0;
+  const convergenceTickers: string[] = [];
   for (const t of momentumTickers) {
-    if (volumeTickers.has(t)) convergenceCount++;
+    if (volumeTickers.has(t)) convergenceTickers.push(t);
   }
 
   return {
@@ -607,6 +632,7 @@ async function buildMomentumSummary(recentSignals: Array<{ ticker: string; signa
     signalCount: recentMomentum.length,
     nearMissCount,
     gradeBreakdown,
-    convergenceCount,
+    convergenceCount: convergenceTickers.length,
+    convergenceTickers,
   };
 }
