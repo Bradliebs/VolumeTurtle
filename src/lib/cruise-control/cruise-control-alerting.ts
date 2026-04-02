@@ -45,6 +45,14 @@ const db = prisma as unknown as {
       orderBy?: Record<string, string>;
       take?: number;
     }) => Promise<CruiseControlAlertRecord[]>;
+    update: (args: {
+      where: { id: number };
+      data: Record<string, unknown>;
+    }) => Promise<CruiseControlAlertRecord>;
+    updateMany: (args: {
+      where: Record<string, unknown>;
+      data: Record<string, unknown>;
+    }) => Promise<{ count: number }>;
   };
 };
 
@@ -114,7 +122,7 @@ export async function sendAlert(
 // ── Alert Retrieval ─────────────────────────────────────────────────────────
 
 /**
- * Get recent alerts, optionally filtered by hours and type.
+ * Get recent unacknowledged alerts, optionally filtered by hours and type.
  */
 export async function getRecentAlerts(
   hours = 24,
@@ -125,6 +133,7 @@ export async function getRecentAlerts(
 
   const where: Record<string, unknown> = {
     createdAt: { gte: since },
+    acknowledgedAt: null,
   };
   if (type) {
     where["alertType"] = type;
@@ -135,4 +144,25 @@ export async function getRecentAlerts(
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+}
+
+/**
+ * Acknowledge a single alert by ID.
+ */
+export async function acknowledgeAlert(id: number): Promise<void> {
+  await db.cruiseControlAlert.update({
+    where: { id },
+    data: { acknowledgedAt: new Date() },
+  });
+}
+
+/**
+ * Acknowledge all unacknowledged alerts.
+ */
+export async function acknowledgeAllAlerts(): Promise<number> {
+  const result = await db.cruiseControlAlert.updateMany({
+    where: { acknowledgedAt: null },
+    data: { acknowledgedAt: new Date() },
+  });
+  return result.count;
 }

@@ -54,6 +54,24 @@ export default function CruiseControlPanel() {
     setAlerts(data)
   }
 
+  const acknowledgeAlert = async (id: number) => {
+    await fetch('/api/cruise-control/alerts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    setAlerts(prev => prev.filter(a => a.id !== id))
+  }
+
+  const acknowledgeAll = async () => {
+    await fetch('/api/cruise-control/alerts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    })
+    setAlerts([])
+  }
+
   const fetchAll = () => {
     fetchState()
     fetchActivity()
@@ -140,13 +158,30 @@ export default function CruiseControlPanel() {
 
       {alerts.length > 0 && (
         <div className="space-y-2">
-          <p className="text-sm font-semibold text-red-400">⚠ Active Alerts</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-red-400">⚠ Active Alerts</p>
+            <button
+              onClick={acknowledgeAll}
+              className="text-xs text-gray-500 hover:text-white transition-colors"
+            >
+              Clear All
+            </button>
+          </div>
           {alerts.map(alert => (
-            <div key={alert.id} className="bg-red-900/40 border border-red-700 rounded-lg px-3 py-2 text-sm text-red-300">
-              {alert.message}
-              <span className="ml-2 text-xs text-red-500">
-                {new Date(alert.createdAt).toLocaleTimeString('en-GB')}
+            <div key={alert.id} className="flex items-start gap-2 bg-red-900/40 border border-red-700 rounded-lg px-3 py-2 text-sm text-red-300">
+              <span className="flex-1">
+                {alert.message}
+                <span className="ml-2 text-xs text-red-500">
+                  {new Date(alert.createdAt).toLocaleTimeString('en-GB')}
+                </span>
               </span>
+              <button
+                onClick={() => acknowledgeAlert(alert.id)}
+                className="text-red-500 hover:text-white shrink-0 ml-1"
+                title="Dismiss"
+              >
+                ✕
+              </button>
             </div>
           ))}
         </div>

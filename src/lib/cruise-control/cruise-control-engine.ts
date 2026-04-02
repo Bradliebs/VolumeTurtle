@@ -158,8 +158,15 @@ async function updateState(data: Record<string, unknown>): Promise<void> {
  * Tracks consecutive ghost detections per ticker.
  * First detection = warning. ≥2 consecutive = critical alert + auto-close.
  * Cleared when a ticker is no longer ghost.
+ * Uses globalThis to survive HMR in development.
  */
-const ghostTracker: Map<string, number> = new Map();
+const gTrackers = globalThis as unknown as {
+  __ccGhostTracker?: Map<string, number>;
+  __ccRetryQueue?: Map<string, RetryItem>;
+  __ccRetryTimerRef?: ReturnType<typeof setInterval> | null;
+};
+if (!gTrackers.__ccGhostTracker) gTrackers.__ccGhostTracker = new Map();
+const ghostTracker: Map<string, number> = gTrackers.__ccGhostTracker;
 
 // ── Retry Queue ─────────────────────────────────────────────────────────────
 
@@ -172,18 +179,21 @@ interface RetryItem {
   attempts: number;
 }
 
-const retryQueue: Map<string, RetryItem> = new Map();
-let retryTimerRef: ReturnType<typeof setInterval> | null = null;
+if (!gTrackers.__ccRetryQueue) gTrackers.__ccRetryQueue = new Map();
+const retryQueue: Map<string, RetryItem> = gTrackers.__ccRetryQueue;
+let retryTimerRef: ReturnType<typeof setInterval> | null = gTrackers.__ccRetryTimerRef ?? null;
 
 function startRetryTimer(): void {
   if (retryTimerRef) return;
   retryTimerRef = setInterval(processRetryQueue, 10 * 60 * 1000); // every 10 minutes
+  gTrackers.__ccRetryTimerRef = retryTimerRef;
 }
 
 function stopRetryTimer(): void {
   if (retryTimerRef) {
     clearInterval(retryTimerRef);
     retryTimerRef = null;
+    gTrackers.__ccRetryTimerRef = null;
   }
 }
 
