@@ -7,14 +7,17 @@ interface RateLimitEntry {
 
 const store = new Map<string, RateLimitEntry>();
 
-// Clean stale entries periodically
-const cleanupTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of store) {
-    if (now > entry.resetAt) store.delete(key);
-  }
-}, 60_000);
-cleanupTimer.unref();
+// Clean stale entries periodically — HMR-safe via globalThis guard
+const gRL = globalThis as unknown as { __rateLimitCleanup?: ReturnType<typeof setInterval> };
+if (!gRL.__rateLimitCleanup) {
+  gRL.__rateLimitCleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of store) {
+      if (now > entry.resetAt) store.delete(key);
+    }
+  }, 60_000);
+  gRL.__rateLimitCleanup.unref();
+}
 
 /**
  * In-memory rate limiter for API routes.

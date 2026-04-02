@@ -152,6 +152,15 @@ async function updateState(data: Record<string, unknown>): Promise<void> {
   });
 }
 
+// ── Ghost Position Tracking ──────────────────────────────────────────────────
+
+/**
+ * Tracks consecutive ghost detections per ticker.
+ * First detection = warning. ≥2 consecutive = critical alert + auto-close.
+ * Cleared when a ticker is no longer ghost.
+ */
+const ghostTracker: Map<string, number> = new Map();
+
 // ── Retry Queue ─────────────────────────────────────────────────────────────
 
 interface RetryItem {
@@ -183,14 +192,18 @@ async function processRetryQueue(): Promise<void> {
 
   for (const [key, item] of retryQueue) {
     if (item.attempts >= 5) {
-      // Max retries — mark as failed, alert
+      // Max retries — alert but don't panic; next poll cycle will recalculate
       retryQueue.delete(key);
-      await sendAlert("critical", `T212 retry-failed after 5 attempts: ${item.position.ticker}`, {
+      await sendAlert("warning", `T212 stop update failed after 5 attempts: ${item.position.ticker} — will retry next poll cycle`, {
         ticker: item.position.ticker,
         positionType: item.positionType,
         newStop: item.newStop,
         attempts: item.attempts,
       });
+      log.warn(
+        { ticker: item.position.ticker, newStop: item.newStop },
+        "[CRUISE-CONTROL] Retry exhausted — stop is saved in DB, will re-attempt on next poll",
+      );
       continue;
     }
 
@@ -317,10 +330,54 @@ export async function runSinglePoll(): Promise<PollResult> {
           orphaned: recon.orphaned,
         });
       }
-      if (recon.ghost.length > 0) {
-        await sendAlert("critical", `Ghost positions detected (in DB, not in T212): ${recon.ghost.join(", ")}`, {
-          ghost: recon.ghost,
-        });
+
+      // ── Ghost position handling (deduplication + auto-close) ──────────
+      // Clear ghosts that resolved themselves
+      for (const tracked of ghostTracker.keys()) {
+        if (!recon.ghost.includes(tracked)) {
+          ghostTracker.delete(tracked);
+          log.info({ ticker: tracked }, "[CRUISE-CONTROL] Ghost resolved — ticker reappeared in T212");
+        }
+      }
+
+      for (const ghostTicker of recon.ghost) {
+        const prevCount = ghostTracker.get(ghostTicker) ?? 0;
+        const newCount = prevCount + 1;
+        ghostTracker.set(ghostTicker, newCount);
+
+        if (newCount === 1) {
+          // First detection — warn only, could be transient cache staleness
+          await sendAlert("warning", `Possible ghost position: ${ghostTicker} is in DB but not in T212 — monitoring`, {
+            ticker: ghostTicker,
+            consecutiveDetections: newCount,
+          });
+        } else if (newCount === 2) {
+          // Confirmed ghost — auto-close in DB
+          const ghostTrade = openTrades.find(
+            (t) => t.ticker.toUpperCase() === ghostTicker,
+          );
+          if (ghostTrade) {
+            await db.trade.update({
+              where: { id: ghostTrade.id },
+              data: {
+                status: "CLOSED",
+                exitDate: new Date(),
+                exitReason: "T212_STOP",
+              },
+            });
+            await sendAlert("critical", `Ghost confirmed & auto-closed: ${ghostTicker} — position stopped out on T212 but DB was stale`, {
+              ticker: ghostTicker,
+              tradeId: ghostTrade.id,
+              consecutiveDetections: newCount,
+            });
+            log.warn(
+              { ticker: ghostTicker, tradeId: ghostTrade.id },
+              "[CRUISE-CONTROL] Ghost position auto-closed in DB",
+            );
+          }
+          ghostTracker.delete(ghostTicker);
+        }
+        // No further alerts for count > 2 (already closed)
       }
     }
 
@@ -644,6 +701,7 @@ export async function stopCruiseControl(): Promise<void> {
 
   stopRetryTimer();
   retryQueue.clear();
+  ghostTracker.clear();
 
   await updateState({ isEnabled: false, disabledAt: new Date() });
   await sendAlert("info", "Cruise control turned OFF");
