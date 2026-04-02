@@ -8,6 +8,7 @@ import { mono, fmtDate, fmtMoney, fmtPrice, tickerCurrency, fmtTime } from "./co
 import { SkeletonRows } from "./components/SkeletonRows";
 import { Badge } from "./components/Badge";
 import { ConfirmModal } from "./components/ConfirmModal";
+import { BuyConfirmModal } from "./components/BuyConfirmModal";
 import { EquityCurvePanel } from "./components/EquityCurvePanel";
 import { RegimeBanner } from "./components/RegimeBanner";
 import { ScanHistorySection } from "./components/ScanHistorySection";
@@ -37,6 +38,7 @@ export default function Home() {
     importingTicker,
     importingAll,
     errorMsg,
+    successMsg,
     // derived
     openTrades, recentSignals, closedTrades,
     balance, openCount, exposurePct, winRate, avgR,
@@ -50,8 +52,13 @@ export default function Home() {
     pushStopByTicker,
     importT212Position,
     importAllT212Positions,
+    requestBuy,
+    confirmBuy,
+    cancelBuy,
+    buyingSignal,
+    buyingTicker,
     // UI actions
-    dismissError, openConfirm, closeConfirm,
+    dismissError, dismissSuccess, openConfirm, closeConfirm,
     startBalanceEdit, cancelBalanceEdit, setBalanceInput,
     startExit, cancelExit, setExitPrice,
     toggleExpand,
@@ -123,6 +130,17 @@ export default function Home() {
         >
           {errorMsg}
           <button onClick={dismissError} className="ml-3 text-white/70 hover:text-white">✕</button>
+        </div>
+      )}
+      {/* ── SUCCESS TOAST ── */}
+      {successMsg && (
+        <div
+          role="status"
+          className="fixed top-4 right-4 z-50 px-4 py-2 text-sm text-white bg-green-600/90 border border-green-500 rounded shadow-lg backdrop-blur-sm animate-fade-in"
+          style={mono}
+        >
+          {successMsg}
+          <button onClick={dismissSuccess} className="ml-3 text-white/70 hover:text-white">✕</button>
         </div>
       )}
       {/* ── HEADER ── */}
@@ -1170,8 +1188,11 @@ export default function Home() {
                       signal={s}
                       dryRun={scanResult.dryRun}
                       onMarkPlaced={markPlaced}
+                      onBuyNow={requestBuy}
                       placing={placingTicker === s.ticker}
+                      buying={buyingTicker === s.ticker}
                       equityCurve={scanResult.equityCurve}
+                      t212Configured={data?.t212Portfolio != null}
                     />
                   ))}
 
@@ -1291,6 +1312,16 @@ export default function Home() {
             closeConfirm();
             runScan(false);
           }}
+        />
+      )}
+
+      {/* ── BUY CONFIRM MODAL ── */}
+      {buyingSignal && (
+        <BuyConfirmModal
+          signal={buyingSignal}
+          onCancel={cancelBuy}
+          onConfirm={confirmBuy}
+          buying={buyingTicker != null}
         />
       )}
 

@@ -37,6 +37,9 @@ interface DashboardState {
   importProgress: string;
   exitFlash: boolean;
   errorMsg: string | null;
+  successMsg: string | null;
+  buyingSignal: SignalFired | null;
+  buyingTicker: string | null;
 }
 
 const initialState: DashboardState = {
@@ -66,6 +69,9 @@ const initialState: DashboardState = {
   importProgress: "",
   exitFlash: false,
   errorMsg: null,
+  successMsg: null as string | null,
+  buyingSignal: null,
+  buyingTicker: null,
 };
 
 // ── Actions ───────────────────────────────────────────────────────────────────
@@ -111,7 +117,14 @@ type Action =
   | { type: "IMPORT_ALL_FAIL" }
   | { type: "EXIT_FLASH"; active: boolean }
   | { type: "SET_ERROR"; msg: string }
-  | { type: "CLEAR_ERROR" };
+  | { type: "CLEAR_ERROR" }
+  | { type: "SET_SUCCESS"; msg: string }
+  | { type: "CLEAR_SUCCESS" }
+  | { type: "BUY_CONFIRM"; signal: SignalFired }
+  | { type: "BUY_CANCEL" }
+  | { type: "BUY_START"; ticker: string }
+  | { type: "BUY_DONE" }
+  | { type: "BUY_FAIL" };
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
 
@@ -228,6 +241,21 @@ function reducer(state: DashboardState, action: Action): DashboardState {
       return { ...state, errorMsg: action.msg };
     case "CLEAR_ERROR":
       return { ...state, errorMsg: null };
+    case "SET_SUCCESS":
+      return { ...state, successMsg: action.msg };
+    case "CLEAR_SUCCESS":
+      return { ...state, successMsg: null };
+
+    case "BUY_CONFIRM":
+      return { ...state, buyingSignal: action.signal };
+    case "BUY_CANCEL":
+      return { ...state, buyingSignal: null };
+    case "BUY_START":
+      return { ...state, buyingTicker: action.ticker };
+    case "BUY_DONE":
+      return { ...state, buyingSignal: null, buyingTicker: null };
+    case "BUY_FAIL":
+      return { ...state, buyingTicker: null };
 
     default:
       return state;
@@ -502,7 +530,11 @@ export function useDashboard() {
         }),
       });
       if (res.ok) {
+        const json = await res.json().catch(() => ({}));
         dispatch({ type: "IMPORT_ONE_DONE" });
+        const grade = json.matchedSignal?.grade ? ` (grade ${json.matchedSignal.grade})` : "";
+        dispatch({ type: "SET_SUCCESS", msg: `✓ ${position.ticker} imported${grade}` });
+        setTimeout(() => dispatch({ type: "CLEAR_SUCCESS" }), 5000);
         await syncAllPositions();
       } else {
         const json = await res.json().catch(() => ({ error: "Failed" }));
@@ -534,6 +566,54 @@ export function useDashboard() {
     } catch {
       showError("Failed to import positions");
       dispatch({ type: "IMPORT_ALL_FAIL" });
+    }
+  }
+
+  function requestBuy(signal: SignalFired) {
+    dispatch({ type: "BUY_CONFIRM", signal });
+  }
+
+  function cancelBuy() {
+    dispatch({ type: "BUY_CANCEL" });
+  }
+
+  async function confirmBuy() {
+    const signal = state.buyingSignal;
+    if (!signal || !signal.positionSize) return;
+
+    dispatch({ type: "BUY_START", ticker: signal.ticker });
+    try {
+      const res = await fetch("/api/t212/buy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: signal.ticker,
+          shares: signal.positionSize.shares,
+          suggestedEntry: signal.suggestedEntry,
+          hardStop: signal.hardStop,
+          riskPerShare: signal.riskPerShare,
+          volumeRatio: signal.volumeRatio,
+          rangePosition: signal.rangePosition,
+          atr20: signal.atr20,
+          signalSource: "volume",
+          signalScore: signal.compositeScore?.total ?? undefined,
+          signalGrade: signal.compositeScore?.grade ?? undefined,
+        }),
+      });
+      if (res.ok) {
+        dispatch({ type: "BUY_DONE" });
+        const grade = signal.compositeScore?.grade ? ` (grade ${signal.compositeScore.grade})` : "";
+        dispatch({ type: "SET_SUCCESS", msg: `✓ ${signal.ticker} bought on T212${grade} — stop set at ${signal.hardStop.toFixed(2)}` });
+        setTimeout(() => dispatch({ type: "CLEAR_SUCCESS" }), 6000);
+        fetchDashboard(true);
+      } else {
+        const json = await res.json().catch(() => ({ error: "Failed" }));
+        showError(json.error ?? "Failed to buy on T212");
+        dispatch({ type: "BUY_FAIL" });
+      }
+    } catch {
+      showError("Failed to buy on T212");
+      dispatch({ type: "BUY_FAIL" });
     }
   }
 
@@ -611,9 +691,13 @@ export function useDashboard() {
     pushStopByTicker,
     importT212Position,
     importAllT212Positions,
+    requestBuy,
+    confirmBuy,
+    cancelBuy,
 
     // UI actions
     dismissError: () => dispatch({ type: "CLEAR_ERROR" }),
+    dismissSuccess: () => dispatch({ type: "CLEAR_SUCCESS" }),
     openConfirm: () => dispatch({ type: "SHOW_CONFIRM" }),
     closeConfirm: () => dispatch({ type: "HIDE_CONFIRM" }),
     startBalanceEdit: (current: number) =>

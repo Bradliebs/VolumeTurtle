@@ -460,3 +460,69 @@ export async function updateStopOnT212(
   const placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
   return { cancelled: cancelledOrderId, placed };
 }
+
+/**
+ * Place a market buy order on T212.
+ * POST /api/v0/equity/orders/market
+ * quantity must be positive for a buy.
+ */
+export async function placeMarketOrder(
+  settings: T212Settings,
+  t212Ticker: string,
+  quantity: number,
+): Promise<T212Order> {
+  return t212Fetch("/equity/orders/market", settings, {
+    method: "POST",
+    body: {
+      ticker: t212Ticker,
+      quantity: Math.abs(quantity),
+    },
+  }) as Promise<T212Order>;
+}
+
+/**
+ * Buy a stock on T212 by Yahoo ticker, then set the stop loss.
+ * Flow:
+ *   1. Map Yahoo ticker → T212 internal ticker
+ *   2. Place market buy order
+ *   3. Wait 2.5s for order to fill + rate limit
+ *   4. Place stop-loss order
+ *
+ * Returns the market order and stop order results.
+ */
+export async function buyWithStop(
+  settings: T212Settings,
+  yahooTicker: string,
+  quantity: number,
+  stopPriceGBP: number,
+): Promise<{ marketOrder: T212Order; stopOrder: T212Order }> {
+  // Load instruments
+  if (!instrumentCachePromise) {
+    instrumentCachePromise = getInstruments(settings);
+  }
+  const instruments = await instrumentCachePromise;
+
+  const t212Ticker = yahooToT212Ticker(yahooTicker, instruments);
+  if (!t212Ticker) {
+    throw new Error(`No T212 instrument found for ${yahooTicker}`);
+  }
+
+  // Place market buy
+  const marketOrder = await placeMarketOrder(settings, t212Ticker, quantity);
+
+  // Wait for fill + rate limit buffer
+  await sleep(2500);
+
+  // Convert GBP → GBX (pence) if instrument is priced in pence
+  const pence = isT212Pence(t212Ticker, instruments);
+  const stopPrice = pence ? stopPriceGBP * 100 : stopPriceGBP;
+
+  // Place stop-loss order
+  const stopOrder = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
+
+  // Invalidate position cache so next fetch sees the new position
+  sharedT212Cache = [];
+  sharedT212CacheAt = 0;
+
+  return { marketOrder, stopOrder };
+}

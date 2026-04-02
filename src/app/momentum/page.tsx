@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { mono, fmtDate } from "../components/helpers";
+import { mono, fmtDate, fmtMoney } from "../components/helpers";
 import { GradeBadge } from "../components/GradeBadge";
 import { AlertPanel } from "../components/AlertPanel";
 
@@ -173,6 +173,9 @@ export default function MomentumPage() {
   const [submitting, setSubmitting] = useState(false);
   const [addedTickers, setAddedTickers] = useState<Set<string>>(new Set());
   const [flashMsg, setFlashMsg] = useState<string | null>(null);
+  const [t212Configured, setT212Configured] = useState(false);
+  const [buyConfirmSignal, setBuyConfirmSignal] = useState<MomentumSignalRow | null>(null);
+  const [buying, setBuying] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -197,6 +200,12 @@ export default function MomentumPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  useEffect(() => {
+    fetch("/api/t212/status").then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.connected) setT212Configured(true);
+    }).catch(() => {});
+  }, []);
 
   async function runMomentumScan() {
     setScanning(true);
@@ -283,6 +292,54 @@ export default function MomentumPage() {
       alert("Network error");
     }
     setSubmitting(false);
+  }
+
+  function requestBuyNow(signal: MomentumSignalRow) {
+    setBuyConfirmSignal(signal);
+  }
+
+  async function confirmBuyNow() {
+    if (!buyConfirmSignal) return;
+    const signal = buyConfirmSignal;
+    const ep = parseFloat(entryPrice);
+    const { price: hs } = computeStop(signal);
+    const qty = parseFloat(quantity);
+    if (!qty || !ep || qty <= 0 || ep <= 0) return;
+
+    setBuying(true);
+    try {
+      const res = await fetch("/api/t212/buy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ticker: signal.ticker,
+          shares: qty,
+          suggestedEntry: ep,
+          hardStop: hs,
+          riskPerShare: ep - hs,
+          volumeRatio: signal.volRatio,
+          rangePosition: 0,
+          atr20: signal.atr > 0 ? signal.atr : ep * 0.08 / 1.5,
+          signalSource: "momentum",
+          signalScore: signal.compositeScore,
+          signalGrade: signal.grade,
+        }),
+      });
+      if (res.ok) {
+        setAddedTickers(prev => new Set(prev).add(signal.ticker));
+        setEntryTicker(null);
+        setBuyConfirmSignal(null);
+        setFlashMsg(`\u2713 ${signal.ticker} bought on T212 \u2014 stop set at $${hs.toFixed(2)}`);
+        setTimeout(() => setFlashMsg(null), 6000);
+      } else {
+        const d = await res.json().catch(() => ({ error: "Failed" }));
+        alert(d.error ?? "Failed to buy on T212");
+      }
+    } catch {
+      alert("Network error");
+    }
+    setBuying(false);
+    setBuyConfirmSignal(null);
   }
 
   const gc = (g: string) =>
@@ -567,6 +624,13 @@ export default function MomentumPage() {
                             className="px-4 py-1.5 border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors text-[10px] font-bold disabled:opacity-30">
                             {submitting ? "ADDING\u2026" : "\u25B6 CONFIRM ADD"}
                           </button>
+                          {t212Configured && (
+                            <button onClick={() => requestBuyNow(s)}
+                              disabled={submitting || buying || sizeResult?.systemState === "PAUSE" || !quantity || !entryPrice}
+                              className="px-4 py-1.5 border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors text-[10px] font-bold disabled:opacity-30">
+                              {buying ? "BUYING\u2026" : "\u26A1 BUY NOW"}
+                            </button>
+                          )}
                           <button onClick={closeEntryPanel} className="px-3 py-1.5 text-[10px] text-[var(--dim)] hover:text-white">
                             {"\u2715"} CANCEL
                           </button>
@@ -618,6 +682,58 @@ export default function MomentumPage() {
 
         </div>
       </div>
+
+      {/* ── BUY CONFIRM MODAL ── */}
+      {buyConfirmSignal && (() => {
+        const sig = buyConfirmSignal;
+        const { price: hs, isFallback } = computeStop(sig);
+        const ep = parseFloat(entryPrice) || sig.price;
+        const qty = parseFloat(quantity) || 0;
+        const exposure = qty * ep;
+        const risk = qty * (ep - hs);
+        const stopPct = ep > 0 ? (((hs - ep) / ep) * 100).toFixed(1) : "0.0";
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" role="dialog" aria-modal="true" aria-labelledby="mom-buy-title">
+            <div className="border border-[var(--red)] bg-[#111] p-6 w-full max-w-md">
+              <h3 id="mom-buy-title" className="text-lg font-semibold text-[var(--red)] mb-4" style={mono}>
+                ⚠ CONFIRM BUY ORDER
+              </h3>
+              <p className="text-sm text-[var(--dim)] mb-4">
+                This will place a <span className="text-white font-semibold">real market buy</span> on Trading 212 and set a stop loss.
+              </p>
+              <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs mb-4" style={mono}>
+                <span className="text-[var(--dim)]">Ticker</span>
+                <span className="text-[var(--green)] font-bold text-sm">{sig.ticker}</span>
+                <span className="text-[var(--dim)]">Shares</span>
+                <span className="text-white">{qty >= 1 ? qty : qty.toFixed(4)}</span>
+                <span className="text-[var(--dim)]">Entry (market)</span>
+                <span className="text-white">≈ ${ep.toFixed(2)}</span>
+                <span className="text-[var(--dim)]">Hard stop</span>
+                <span className="text-[var(--red)]">${hs.toFixed(2)} ({stopPct}%){isFallback ? " (est.)" : ""}</span>
+                <span className="text-[var(--dim)]">Exposure</span>
+                <span className="text-white">{fmtMoney(exposure)}</span>
+                <span className="text-[var(--dim)]">Risk</span>
+                <span className="text-[var(--red)]">{fmtMoney(risk)}</span>
+                <span className="text-[var(--dim)]">Grade</span>
+                <span className="font-bold" style={{ color: gc(sig.grade) }}>{sig.grade}</span>
+              </div>
+              <p className="text-[10px] text-[var(--dim)] mb-6" style={mono}>
+                Market orders fill at the current ask price which may differ from the suggested entry.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <button onClick={() => setBuyConfirmSignal(null)} disabled={buying}
+                  className="px-4 py-2 text-sm border border-[#333] text-[var(--dim)] hover:text-white transition-colors disabled:opacity-50" style={mono}>
+                  CANCEL
+                </button>
+                <button onClick={confirmBuyNow} disabled={buying}
+                  className="px-4 py-2 text-sm border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors font-semibold disabled:opacity-50" style={mono}>
+                  {buying ? "BUYING…" : "CONFIRM — BUY NOW"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </main>
   );
 }

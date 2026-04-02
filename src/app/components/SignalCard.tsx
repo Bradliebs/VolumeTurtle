@@ -7,14 +7,20 @@ export function SignalCard({
   signal,
   dryRun,
   onMarkPlaced,
+  onBuyNow,
   placing,
+  buying,
   equityCurve,
+  t212Configured,
 }: {
   signal: SignalFired;
   dryRun: boolean;
   onMarkPlaced: (signal: SignalFired) => void;
+  onBuyNow?: (signal: SignalFired) => void;
   placing: boolean;
+  buying: boolean;
   equityCurve?: EquityCurveData | null;
+  t212Configured?: boolean;
 }) {
   const stopPct = pctChange(signal.suggestedEntry, signal.hardStop);
   const pos = signal.positionSize;
@@ -171,19 +177,31 @@ export function SignalCard({
           )}
         </div>
       )}
-      <button
-        onClick={() => onMarkPlaced(signal)}
-        disabled={dryRun || placing || !pos || equityCurve?.systemState === "PAUSE"}
-        className={`w-full px-4 py-2 text-xs border font-semibold transition-colors ${
-          dryRun || equityCurve?.systemState === "PAUSE"
-            ? "border-[#333] text-[#555] cursor-not-allowed"
-            : "border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black"
-        }`}
-        style={mono}
-        title={equityCurve?.systemState === "PAUSE" ? "System paused — manage exits only" : undefined}
-      >
-        {placing ? "SAVING…" : dryRun ? "DRY RUN — not written" : equityCurve?.systemState === "PAUSE" ? "PAUSED — exits only" : "MARK AS PLACED"}
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onMarkPlaced(signal)}
+          disabled={dryRun || placing || !pos || equityCurve?.systemState === "PAUSE"}
+          className={`flex-1 px-4 py-2 text-xs border font-semibold transition-colors ${
+            dryRun || equityCurve?.systemState === "PAUSE"
+              ? "border-[#333] text-[#555] cursor-not-allowed"
+              : "border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black"
+          }`}
+          style={mono}
+          title={equityCurve?.systemState === "PAUSE" ? "System paused — manage exits only" : undefined}
+        >
+          {placing ? "SAVING…" : dryRun ? "DRY RUN — not written" : equityCurve?.systemState === "PAUSE" ? "PAUSED — exits only" : "MARK AS PLACED"}
+        </button>
+        {t212Configured && !dryRun && equityCurve?.systemState !== "PAUSE" && (
+          <button
+            onClick={() => onBuyNow?.(signal)}
+            disabled={!pos || buying}
+            className="px-4 py-2 text-xs border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            style={mono}
+          >
+            {buying ? "BUYING…" : "BUY NOW"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
