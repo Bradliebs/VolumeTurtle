@@ -93,19 +93,28 @@ export async function POST(req: NextRequest) {
       importNote = `Matched to signal from ${recentSignal.scanDate.toISOString().slice(0, 10)} — volume ${volumeRatio.toFixed(1)}x, grade ${compositeGrade ?? "?"}`;
     }
 
+    // Use matched signal date as entry if available, otherwise now
+    const entryDate = recentSignal ? recentSignal.scanDate : new Date();
+    const signalSource = recentSignal ? "volume" : "manual";
+
     // Create Trade record
     const trade = await prisma.trade.create({
       data: {
         ticker,
-        entryDate: new Date(),
+        entryDate,
         entryPrice: avgPrice,
         shares: quantity,
         hardStop,
+        hardStopPrice: hardStop,
         trailingStop: currentStop,
+        trailingStopPrice: currentStop,
         status: "OPEN",
         volumeRatio,
         rangePosition,
         atr20,
+        signalSource,
+        signalScore: compositeScore,
+        signalGrade: compositeGrade,
         importedFromT212: true,
         importedAt: new Date(),
       },

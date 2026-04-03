@@ -77,7 +77,8 @@ export default function Home() {
     const activeStop = Math.max(t.hardStop, t.trailingStop);
     const stopLoss = syncData[t.id]?.t212?.stopLoss ?? data?.t212Prices?.[t.ticker]?.stopLoss ?? null;
     if (stopLoss == null) return true;
-    return stopLoss < activeStop - 0.01;
+    const tol = activeStop * 0.002;
+    return stopLoss < activeStop - tol;
   });
 
   const stopAlignmentState = openTrades.length === 0
@@ -91,6 +92,8 @@ export default function Home() {
   // Ratchet stops state
   const [ratcheting, setRatcheting] = React.useState(false);
   const [ratchetMsg, setRatchetMsg] = React.useState<string | null>(null);
+  // Trade history filter
+  const [tradeFilter, setTradeFilter] = React.useState<"ALL" | "OPEN" | "CLOSED">("ALL");
 
   async function handleRatchet() {
     setRatcheting(true);
@@ -524,10 +527,68 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ── P&L SUMMARY BAR ── */}
+      {!loading && (openCount > 0 || closedTrades.length > 0) && (() => {
+        const rate = data?.gbpUsdRate ?? 1.27;
+        const isUsdTicker = (ticker: string) =>
+          !ticker.endsWith(".L") && !ticker.endsWith(".AS") && !ticker.endsWith(".HE") && !ticker.endsWith(".ST") && !ticker.endsWith(".CO");
+
+        // Unrealised P&L from open positions (using sync/T212 data when available)
+        // Convert USD P&L to GBP so total is in £
+        const unrealisedPnl = openTrades.reduce((sum, t) => {
+          const sd = syncData[t.id];
+          const t212 = sd?.t212 ?? (data?.t212Prices?.[t.ticker] ? { ...data.t212Prices[t.ticker], quantity: t.shares, averagePrice: t.entryPrice, confirmed: true } : null);
+          const currentPrice = t212?.currentPrice ?? sd?.latestClose ?? null;
+          const pnl = t212?.ppl ?? (currentPrice != null ? (currentPrice - t.entryPrice) * t.shares : 0);
+          const pnlGbp = isUsdTicker(t.ticker) ? (pnl ?? 0) / rate : (pnl ?? 0);
+          return sum + pnlGbp;
+        }, 0);
+
+        // This month's closed trades — convert USD P&L to GBP
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const thisMonthClosed = closedTrades.filter((t) => t.exitDate && new Date(t.exitDate) >= monthStart);
+        const realisedPnl = thisMonthClosed.reduce((sum, t) => {
+          const pl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : 0;
+          const plGbp = isUsdTicker(t.ticker) ? pl / rate : pl;
+          return sum + plGbp;
+        }, 0);
+
+        return (
+          <section className="mb-4">
+            <div className="grid grid-cols-4 gap-3" style={mono}>
+              <div className="border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+                <p className="text-[10px] text-[var(--dim)] tracking-widest mb-1">OPEN POSITIONS</p>
+                <p className="text-lg font-bold text-white">{openCount}</p>
+              </div>
+              <div className="border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+                <p className="text-[10px] text-[var(--dim)] tracking-widest mb-1">UNREALISED P&amp;L</p>
+                <p className={`text-lg font-bold ${unrealisedPnl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                  {unrealisedPnl >= 0 ? "+" : ""}{fmtMoney(Math.abs(unrealisedPnl))}
+                </p>
+              </div>
+              <div className="border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+                <p className="text-[10px] text-[var(--dim)] tracking-widest mb-1">CLOSED THIS MONTH</p>
+                <p className="text-lg font-bold text-white">{thisMonthClosed.length}</p>
+              </div>
+              <div className="border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+                <p className="text-[10px] text-[var(--dim)] tracking-widest mb-1">REALISED P&amp;L (MTD)</p>
+                <p className={`text-lg font-bold ${realisedPnl >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}`}>
+                  {realisedPnl >= 0 ? "+" : ""}{fmtMoney(Math.abs(realisedPnl))}
+                </p>
+              </div>
+            </div>
+          </section>
+        );
+      })()}
+
       {/* ── OPEN POSITIONS ── */}
       <section className="mb-6">
         <div className="flex items-center gap-3 mb-2">
-          <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">OPEN POSITIONS</h2>
+          <div>
+            <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">OPEN POSITIONS</h2>
+            <p className="text-[10px] text-[#444]">TradeCore positions — managed stops &amp; signals</p>
+          </div>
           {openCount > 0 && (
             <button
               onClick={handleRatchet}
@@ -617,33 +678,43 @@ export default function Home() {
                           {fmtPrice(displayedActiveStop, c)}
                         </td>
                         <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                          {t212?.stopLoss != null ? (
-                            <div>
-                              {t212.stopLoss > activeStop + 0.01 ? (
-                                <>
+                          {t212?.stopLoss != null ? (() => {
+                            const diff = t212.stopLoss - activeStop;
+                            const tol = activeStop * 0.002; // 0.2% tolerance for "aligned"
+                            if (diff > tol) {
+                              // T212 stop is meaningfully ABOVE system stop
+                              return (
+                                <div>
                                   <span className="text-[var(--green)]">{fmtPrice(t212.stopLoss, c)}</span>
                                   <span className="block text-[8px] text-[var(--green)]">{"\u25B2"} BETTER</span>
-                                </>
-                              ) : t212.stopLoss >= activeStop - 0.01 ? (
-                                <>
+                                </div>
+                              );
+                            } else if (diff >= -tol) {
+                              // Within tolerance — effectively equal
+                              return (
+                                <div>
                                   <span className="text-[var(--green)]">{fmtPrice(t212.stopLoss, c)}</span>
                                   <span className="block text-[8px] text-[var(--green)]">{"\u2713"} ALIGNED</span>
-                                </>
-                              ) : (
-                                <>
+                                </div>
+                              );
+                            } else {
+                              // T212 stop is BELOW system stop
+                              return (
+                                <div>
                                   <span className="text-[var(--amber)]">{fmtPrice(t212.stopLoss, c)}</span>
+                                  <span className="block text-[8px] text-[var(--amber)]">{"\u26A0"} BEHIND</span>
                                   <button
                                     onClick={() => pushStopToT212(t.id)}
                                     disabled={pushingStopTradeId === t.id}
-                                  className="block mx-auto mt-0.5 px-1.5 py-0 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
-                                  style={mono}
-                                >
-                                  {pushingStopTradeId === t.id ? "\u2026" : "\u2191 FIX"}
-                                </button>
-                                </>
-                              )}
-                            </div>
-                          ) : t212 ? (
+                                    className="block mx-auto mt-0.5 px-1.5 py-0 text-[9px] border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors disabled:opacity-50 whitespace-nowrap"
+                                    style={mono}
+                                  >
+                                    {pushingStopTradeId === t.id ? "\u2026" : "\u2191 FIX"}
+                                  </button>
+                                </div>
+                              );
+                            }
+                          })() : t212 ? (
                             <div>
                               <span className="text-[var(--red)] text-[10px]">not set</span>
                               <button
@@ -788,10 +859,10 @@ export default function Home() {
                 {data?.t212Portfolio?.filter((p) => !p.tracked).map((p) => {
                   const c = tickerCurrency(p.ticker);
                   return (
-                    <tr key={`t212-${p.ticker}`} className="border-b border-[var(--border)] hover:bg-[#1a1a1a] opacity-80">
-                      <td className="px-3 py-2 font-semibold text-[var(--green)]">
+                    <tr key={`t212-${p.ticker}`} className="border-b border-[var(--border)] hover:bg-[#1a1a1a] opacity-50 border-l-2 border-l-[var(--amber)]">
+                      <td className="px-3 py-2 font-semibold text-[var(--dim)]">
                         {p.ticker}
-                        <span className="text-[var(--amber)] text-[8px] ml-1">T212</span>
+                        <span className="text-[var(--amber)] text-[8px] ml-1">UNTRACKED</span>
                       </td>
                       <td className="px-3 py-2 text-[var(--dim)]">
                         {p.lastSignalDate ? (
@@ -867,9 +938,12 @@ export default function Home() {
         return (
         <section className="mb-6">
           <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">
-              TRADING 212 PORTFOLIO — {data.t212Portfolio!.length} position{data.t212Portfolio!.length > 1 ? "s" : ""}
-            </h2>
+            <div>
+              <h2 className="text-sm font-semibold text-[var(--dim)] tracking-widest">
+                TRADING 212 PORTFOLIO — {data.t212Portfolio!.length} position{data.t212Portfolio!.length > 1 ? "s" : ""}
+              </h2>
+              <p className="text-[10px] text-[#444]">Trading 212 portfolio — raw feed (source of truth)</p>
+            </div>
             {untrackedCount > 0 && (
               <button
                 onClick={importAllT212Positions}
@@ -1237,65 +1311,119 @@ export default function Home() {
               </span>
             </span>
           )}
+          <div className="flex gap-1 ml-auto" style={mono}>
+            {(["ALL", "OPEN", "CLOSED"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setTradeFilter(f)}
+                className={`px-3 py-0.5 text-[10px] border transition-colors ${
+                  tradeFilter === f
+                    ? "border-[var(--green)] text-[var(--green)]"
+                    : "border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[#555]"
+                }`}
+              >
+                {f}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
-          <table className="w-full text-sm" style={mono}>
-            <thead>
-              <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
-                <th className="text-left px-3 py-2">TICKER</th>
-                <th className="text-left px-3 py-2">ENTRY</th>
-                <th className="text-left px-3 py-2">EXIT</th>
-                <th className="text-right px-3 py-2">ENTRY PRICE</th>
-                <th className="text-right px-3 py-2">EXIT PRICE</th>
-                <th className="text-right px-3 py-2">R-MULTIPLE</th>
-                <th className="text-right px-3 py-2">P/L</th>
-                <th className="text-center px-3 py-2">RESULT</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <SkeletonRows cols={8} />
-              ) : closedTrades.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
-                    No closed trades yet
-                  </td>
-                </tr>
-              ) : (
-                closedTrades.map((t) => {
-                  const r = t.rMultiple ?? 0;
-                  const isWin = r > 0;
-                  const c = tickerCurrency(t.ticker);
-                  const pl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : null;
-                  return (
-                    <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
-                      <td className="px-3 py-2 font-semibold">{t.ticker}</td>
-                      <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
-                      <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.exitDate)}</td>
-                      <td className="px-3 py-2 text-right">{fmtPrice(t.entryPrice, c)}</td>
-                      <td className="px-3 py-2 text-right">{t.exitPrice != null ? fmtPrice(t.exitPrice, c) : "—"}</td>
-                      <td
-                        className="px-3 py-2 text-right"
-                        style={{ color: isWin ? "var(--green)" : "var(--red)" }}
-                      >
-                        {isWin ? "+" : ""}
-                        {r.toFixed(2)}R
-                      </td>
-                      <td
-                        className="px-3 py-2 text-right font-semibold"
-                        style={{ color: pl != null && pl >= 0 ? "var(--green)" : "var(--red)" }}
-                      >
-                        {pl != null ? `${pl >= 0 ? "+" : ""}${c}${Math.abs(pl).toFixed(2)}` : "—"}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        <Badge label={isWin ? "WIN" : "LOSS"} color={isWin ? "var(--green)" : "var(--red)"} />
+          {(() => {
+            const allTrades = [...openTrades.map((t) => ({ ...t, _isOpen: true as const })), ...closedTrades.map((t) => ({ ...t, _isOpen: false as const }))];
+            const filtered = tradeFilter === "OPEN"
+              ? allTrades.filter((t) => t._isOpen)
+              : tradeFilter === "CLOSED"
+                ? allTrades.filter((t) => !t._isOpen)
+                : allTrades;
+            const sorted = [...filtered].sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
+
+            return (
+              <table className="w-full text-sm" style={mono}>
+                <thead>
+                  <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                    <th className="text-left px-3 py-2">TICKER</th>
+                    <th className="text-left px-3 py-2">ENTRY</th>
+                    <th className="text-left px-3 py-2">EXIT</th>
+                    <th className="text-right px-3 py-2">ENTRY PRICE</th>
+                    <th className="text-right px-3 py-2">EXIT PRICE</th>
+                    <th className="text-right px-3 py-2">R-MULTIPLE</th>
+                    <th className="text-right px-3 py-2">P/L</th>
+                    <th className="text-center px-3 py-2">RESULT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <SkeletonRows cols={8} />
+                  ) : sorted.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                        {tradeFilter === "OPEN" ? "No open trades" : tradeFilter === "CLOSED" ? "No closed trades yet" : "No trades yet"}
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                  ) : (
+                    sorted.map((t) => {
+                      const r = t.rMultiple ?? 0;
+                      const c = tickerCurrency(t.ticker);
+                      if (t._isOpen) {
+                        // Open trade — show current unrealised P&L
+                        const sd = syncData[t.id];
+                        const t212d = sd?.t212 ?? (data?.t212Prices?.[t.ticker] ? { ...data.t212Prices[t.ticker] } : null);
+                        const curPrice = t212d?.currentPrice ?? sd?.latestClose ?? null;
+                        const uPnl = curPrice != null ? (curPrice - t.entryPrice) * t.shares : null;
+                        return (
+                          <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                            <td className="px-3 py-2 font-semibold text-[var(--green)]">{t.ticker}</td>
+                            <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
+                            <td className="px-3 py-2 text-[var(--dim)]">—</td>
+                            <td className="px-3 py-2 text-right">{fmtPrice(t.entryPrice, c)}</td>
+                            <td className="px-3 py-2 text-right text-[var(--dim)]">{curPrice != null ? fmtPrice(curPrice, c) : "—"}</td>
+                            <td className="px-3 py-2 text-right text-[var(--dim)]">—</td>
+                            <td className="px-3 py-2 text-right font-semibold"
+                              style={{ color: uPnl != null && uPnl >= 0 ? "var(--green)" : "var(--red)" }}
+                            >
+                              {uPnl != null ? `${uPnl >= 0 ? "+" : ""}${c}${Math.abs(uPnl).toFixed(2)}` : "—"}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <Badge label="OPEN" color="var(--amber)" />
+                            </td>
+                          </tr>
+                        );
+                      }
+                      // Closed trade
+                      const isWin = r > 0;
+                      const isFlat = r === 0;
+                      const pl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : null;
+                      return (
+                        <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                          <td className="px-3 py-2 font-semibold">{t.ticker}</td>
+                          <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
+                          <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.exitDate)}</td>
+                          <td className="px-3 py-2 text-right">{fmtPrice(t.entryPrice, c)}</td>
+                          <td className="px-3 py-2 text-right">{t.exitPrice != null ? fmtPrice(t.exitPrice, c) : "—"}</td>
+                          <td
+                            className="px-3 py-2 text-right"
+                            style={{ color: isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)" }}
+                          >
+                            {isWin ? "+" : ""}
+                            {r.toFixed(2)}R
+                          </td>
+                          <td
+                            className="px-3 py-2 text-right font-semibold"
+                            style={{ color: pl != null && pl > 0 ? "var(--green)" : pl != null && pl < 0 ? "var(--red)" : "var(--dim)" }}
+                          >
+                            {pl != null ? `${pl >= 0 ? "+" : ""}${c}${Math.abs(pl).toFixed(2)}` : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <Badge label={isFlat ? "B/E" : isWin ? "WIN" : "LOSS"} color={isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)"} />
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       </section>
 

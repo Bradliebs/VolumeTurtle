@@ -461,9 +461,18 @@ export function useDashboard() {
     if (!trade) return;
     const instr = state.data?.instructions?.find((i) => i.ticker === trade.ticker);
     const currentStop = Math.max(trade.hardStop, trade.trailingStop);
-    const newStop = instr?.newStop ?? currentStop;
+    const rawNewStop = instr?.newStop ?? currentStop;
     const t212Stop = instr?.t212Stop ?? null;
     const currency = instr?.currency ?? "$";
+
+    // Monotonic guard: never propose a stop lower than T212's current stop
+    const newStop = t212Stop != null ? Math.max(rawNewStop, t212Stop) : rawNewStop;
+
+    if (t212Stop != null && newStop <= t212Stop + 0.01) {
+      showError(`T212 stop already at ${currency}${t212Stop.toFixed(2)} — no update needed`);
+      return;
+    }
+
     dispatch({
       type: "T212_STOP_CONFIRM",
       payload: { tradeId, ticker: trade.ticker, currentStop, newStop, t212Stop, currency },

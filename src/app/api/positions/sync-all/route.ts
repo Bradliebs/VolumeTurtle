@@ -87,7 +87,7 @@ export async function POST(_request: Request) {
         if (stopChanged) {
           await prisma.trade.update({
             where: { id: trade.id },
-            data: { trailingStop: newTrailingStop, atr20 },
+            data: { trailingStop: newTrailingStop, trailingStopPrice: newTrailingStop, atr20 },
           });
         } else {
           await prisma.trade.update({
@@ -122,15 +122,49 @@ export async function POST(_request: Request) {
           }
         }
 
-        const actuallyExited = breachQuote !== null;
+        const eodBreached = breachQuote !== null;
         const c = getCurrencySymbol(trade.ticker);
         let instruction: { type: string; message: string; urgent: boolean };
 
         // Check if position is gone from T212 (stop hit intraday or manually sold)
         const t212Match = t212Loaded ? t212Positions.find((p) => p.ticker === trade.ticker) : undefined;
-        const goneFromT212 = t212Loaded && !actuallyExited && !t212Match;
+        const goneFromT212 = t212Loaded && !eodBreached && !t212Match;
 
-        if (actuallyExited) {
+        // Sync shares and entry price from T212 if they differ
+        if (t212Match && (t212Match.quantity !== trade.shares || t212Match.averagePrice !== trade.entryPrice)) {
+          const syncData: Record<string, unknown> = { lastSyncedAt: now };
+          if (t212Match.quantity !== trade.shares) {
+            log.info({ ticker: trade.ticker, dbShares: trade.shares, t212Shares: t212Match.quantity }, "Syncing shares from T212");
+            syncData.shares = t212Match.quantity;
+          }
+          if (t212Match.averagePrice !== trade.entryPrice) {
+            log.info({ ticker: trade.ticker, dbEntry: trade.entryPrice, t212Entry: t212Match.averagePrice }, "Syncing entry price from T212");
+            syncData.entryPrice = t212Match.averagePrice;
+          }
+          await prisma.trade.update({ where: { id: trade.id }, data: syncData });
+        } else if (t212Match) {
+          await prisma.trade.update({ where: { id: trade.id }, data: { lastSyncedAt: now } });
+        }
+
+        // Only auto-close if T212 confirms position is gone.
+        // If T212 position is still held, flag as EXIT instruction but do NOT
+        // close the trade — the user needs to confirm the exit manually.
+        const t212StillHeld = t212Loaded && t212Match != null;
+        const actuallyExited = eodBreached && !t212StillHeld;
+
+        if (eodBreached && t212StillHeld) {
+          // EOD data shows stop breach but T212 position is still open —
+          // flag for user attention, do NOT auto-close
+          log.warn(
+            { ticker: trade.ticker, low: breachQuote!.low, stop: newCurrentStop },
+            "EOD breach detected but T212 position still held — flagging for manual exit",
+          );
+          instruction = {
+            type: "EXIT",
+            message: `STOP BREACHED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${breachQuote!.date}. T212 position still open — confirm exit manually.`,
+            urgent: true,
+          };
+        } else if (actuallyExited) {
           // Auto-close the trade with the exit price
           const breachClose = breachQuote!.close;
           const exitPrice = breachClose < newCurrentStop ? breachClose : newCurrentStop;

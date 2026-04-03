@@ -163,6 +163,7 @@ model Trade {
   importedFromT212  Boolean   @default(false)
   importedAt        DateTime?
   manualEntry       Boolean   @default(false)
+  lastSyncedAt      DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 

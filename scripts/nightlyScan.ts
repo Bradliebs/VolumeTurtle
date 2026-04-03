@@ -228,7 +228,7 @@ async function main() {
         if (newTrailingStop > trade.trailingStop) {
           await prisma.trade.update({
             where: { id: trade.id },
-            data: { trailingStop: newTrailingStop, atr20 },
+            data: { trailingStop: newTrailingStop, trailingStopPrice: newTrailingStop, atr20 },
           });
         }
         await prisma.trade.update({
@@ -255,7 +255,7 @@ async function main() {
     if (stopChanged && !DRY_RUN) {
       await prisma.trade.update({
         where: { id: trade.id },
-        data: { trailingStop: newTrailingStop, atr20 },
+        data: { trailingStop: newTrailingStop, trailingStopPrice: newTrailingStop, atr20 },
       });
 
       await prisma.stopHistory.create({

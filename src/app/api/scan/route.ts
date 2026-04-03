@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
       if (newTrailingStop !== trade.trailingStop && !dryRun) {
         await prisma.trade.update({
           where: { id: trade.id },
-          data: { trailingStop: newTrailingStop },
+          data: { trailingStop: newTrailingStop, trailingStopPrice: newTrailingStop },
         });
       }
 

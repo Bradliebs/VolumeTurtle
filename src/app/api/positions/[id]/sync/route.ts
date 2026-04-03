@@ -53,6 +53,7 @@ export async function POST(
         where: { id },
         data: {
           trailingStop: newTrailingStop,
+          trailingStopPrice: newTrailingStop,
           atr20,
         },
       });
@@ -110,6 +111,23 @@ export async function POST(
         if (t212Match) {
           const brokerStop = t212Match.stopLoss ?? null;
 
+          // Sync shares and entry price from T212 if they differ
+          const syncData: Record<string, unknown> = { lastSyncedAt: now };
+          if (t212Match.quantity !== trade.shares) {
+            log.info({ ticker: trade.ticker, dbShares: trade.shares, t212Shares: t212Match.quantity }, "Syncing shares from T212");
+            syncData.shares = t212Match.quantity;
+          }
+          if (t212Match.averagePrice !== trade.entryPrice) {
+            log.info({ ticker: trade.ticker, dbEntry: trade.entryPrice, t212Entry: t212Match.averagePrice }, "Syncing entry price from T212");
+            syncData.entryPrice = t212Match.averagePrice;
+          }
+          if (Object.keys(syncData).length > 1) {
+            // More than just lastSyncedAt — actual data changed
+            await prisma.trade.update({ where: { id }, data: syncData });
+          } else {
+            await prisma.trade.update({ where: { id }, data: { lastSyncedAt: now } });
+          }
+
           // If T212 stop is HIGHER than our system stop, pull system up to match
           if (brokerStop !== null && brokerStop > newCurrentStop) {
             log.info(
@@ -118,7 +136,7 @@ export async function POST(
             );
             await prisma.trade.update({
               where: { id },
-              data: { trailingStop: brokerStop },
+              data: { trailingStop: brokerStop, trailingStopPrice: brokerStop },
             });
             // Also write stop history for the pull-up
             await prisma.stopHistory.create({
@@ -156,8 +174,24 @@ export async function POST(
 
     const goneFromT212 = t212Loaded && !exitTriggered && !t212Data;
 
-    if (exitTriggered) {
-      // Auto-close the trade with the exit price
+    // If T212 position is still held, don't auto-close — flag for manual exit instead
+    const t212StillHeld = t212Loaded && t212Data != null;
+
+    if (exitTriggered && t212StillHeld) {
+      // EOD data shows stop breach but T212 position is still open —
+      // flag for user attention, do NOT auto-close
+      const bq = breachQuote ?? latestQuote;
+      log.warn(
+        { ticker: trade.ticker, low: bq.low, stop: newCurrentStop },
+        "EOD breach detected but T212 position still held — flagging for manual exit",
+      );
+      instruction = {
+        type: "EXIT",
+        message: `STOP BREACHED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${bq.date}. T212 position still open — confirm exit manually.`,
+        urgent: true,
+      };
+    } else if (exitTriggered) {
+      // Auto-close the trade with the exit price (T212 not loaded or position gone)
       const bq = breachQuote ?? latestQuote;
       const exitPrice = bq.close < newCurrentStop ? bq.close : newCurrentStop;
       const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);

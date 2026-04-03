@@ -14,6 +14,7 @@ interface RatchetEvent {
   id: number
   ticker: string
   positionType: string
+  positionId: string
   oldStop: number
   newStop: number
   ratchetPct: number
@@ -27,6 +28,11 @@ interface Alert {
   alertType: string
   message: string
   createdAt: string
+}
+
+const dtFmt: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' };
+function fmtDt(ts: string) {
+  return new Date(ts).toLocaleString('en-GB', dtFmt);
 }
 
 export default function CruiseControlPanel() {
@@ -137,12 +143,15 @@ export default function CruiseControlPanel() {
         <div className="bg-gray-800 rounded-xl p-3">
           <p className="text-gray-400">Total ratchets</p>
           <p className="font-bold text-lg text-white">{state.totalRatchets}</p>
+          {activity.length > 0 && activity.length < state.totalRatchets && (
+            <p className="text-[10px] text-gray-500">showing {activity.length} recent</p>
+          )}
         </div>
         <div className="bg-gray-800 rounded-xl p-3">
           <p className="text-gray-400">Last poll</p>
           <p className="text-white text-xs">
             {state.lastPollAt
-              ? new Date(state.lastPollAt).toLocaleTimeString('en-GB')
+              ? fmtDt(state.lastPollAt)
               : '—'}
           </p>
         </div>
@@ -150,7 +159,7 @@ export default function CruiseControlPanel() {
           <p className="text-gray-400">Next poll</p>
           <p className="text-white text-xs">
             {state.nextPollAt
-              ? new Date(state.nextPollAt).toLocaleTimeString('en-GB')
+              ? fmtDt(state.nextPollAt)
               : '—'}
           </p>
         </div>
@@ -199,9 +208,12 @@ export default function CruiseControlPanel() {
             <span className="text-gray-400">
               {event.oldStop.toFixed(2)} → <span className="text-green-400">{event.newStop.toFixed(2)}</span>
             </span>
+            <span className="text-gray-400">
+              @{event.currentPrice.toFixed(2)}
+            </span>
             <span className="text-green-400">+{event.ratchetPct.toFixed(2)}%</span>
             <span className="text-gray-500">
-              {new Date(event.pollTimestamp).toLocaleTimeString('en-GB')}
+              {fmtDt(event.pollTimestamp)}
             </span>
           </div>
         ))}
