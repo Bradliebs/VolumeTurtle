@@ -415,6 +415,7 @@ export default function SettingsPage() {
         <h1 className="text-xl font-bold tracking-tight text-[var(--green)]" style={mono}>VolumeTurtle</h1>
         <nav className="flex items-center gap-4 text-sm ml-4" style={mono}>
           <Link href="/" className="text-[var(--dim)] hover:text-white transition-colors">DASHBOARD</Link>
+          <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">SETTINGS</span>

@@ -18,6 +18,7 @@ import { SignalPill } from "./components/SignalPill";
 import { AlertPanel } from "./components/AlertPanel";
 import { MomentumSummaryPanel } from "./components/MomentumSummaryPanel";
 import CruiseControlPanel from "./components/CruiseControlPanel";
+import { PortfolioSummaryCard } from "./components/PortfolioSummaryCard";
 import { useDashboard } from "./hooks/useDashboard";
 
 // ---------------------------------------------------------------------------
@@ -153,6 +154,7 @@ export default function Home() {
         </h1>
         <nav className="flex items-center gap-4 text-sm mr-2" style={mono}>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">DASHBOARD</span>
+          <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
@@ -526,6 +528,17 @@ export default function Home() {
           )}
         </div>
       </section>
+
+      {/* ── PORTFOLIO SUMMARY CARD ── */}
+      {!loading && (openCount > 0 || closedTrades.length > 0) && (
+        <PortfolioSummaryCard
+          openTrades={openTrades}
+          closedTrades={closedTrades}
+          syncData={syncData}
+          t212Prices={data?.t212Prices ?? {}}
+          gbpUsdRate={data?.gbpUsdRate ?? 1.27}
+        />
+      )}
 
       {/* ── P&L SUMMARY BAR ── */}
       {!loading && (openCount > 0 || closedTrades.length > 0) && (() => {

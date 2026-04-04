@@ -360,6 +360,7 @@ export default function MomentumPage() {
         <h1 className="text-xl font-bold tracking-tight mr-2 text-[var(--green)]" style={mono}>VolumeTurtle</h1>
         <nav className="flex items-center gap-4 text-sm mr-2" style={mono}>
           <Link href="/" className="text-[var(--dim)] hover:text-white transition-colors">DASHBOARD</Link>
+          <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">MOMENTUM</span>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>

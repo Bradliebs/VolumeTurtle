@@ -88,6 +88,7 @@ export default function WatchlistPage() {
         <h1 className="text-xl font-bold tracking-tight mr-2 text-[var(--green)]" style={mono}>VolumeTurtle</h1>
         <nav className="flex items-center gap-4 text-sm mr-2" style={mono}>
           <Link href="/" className="text-[var(--dim)] hover:text-white transition-colors">DASHBOARD</Link>
+          <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">WATCHLIST</span>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
