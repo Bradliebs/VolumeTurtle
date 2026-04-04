@@ -1,0 +1,71 @@
+VUSA
+VUAG.L
+EQQQ.L
+CNDX
+IWMO
+WSML
+VAGS.L
+INRG
+EIMI
+VWO
+AIAI
+RBOT
+BTEE
+SGLN
+SSLN
+REMX
+PICK
+CMOD.L
+COMF.L
+
+SQQQ
+SH
+SPXS
+VXX
+
+# ========== BOND ETFs ==========
+TLT
+IGLT.L
+
+# ========== SECTOR ETFs ==========
+XLE
+XLF
+XLV
+XLK
+XLI
+XLY
+XLP
+XLU
+XLB
+XLRE
+
+# ========== GLOBAL / GEOGRAPHIC ETFs ==========
+VEA
+EEM
+EFA
+VGK
+
+# ========== STYLE / FACTOR ETFs ==========
+QQQ
+IWM
+VUG
+VTV
+
+# ========== REAL ASSETS / DEFENSIVE ETFs ==========
+GLD
+VNQ
+
+# ========== MOMENTUM & FACTOR ETFs ==========
+MTUM
+IIND.L
+XDWD.L
+HMWO.L
+SMH
+IGF
+VGT
+SOXX
+VIS
+ITA
+GRID
+SPY
+IWY

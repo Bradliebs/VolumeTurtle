@@ -20,7 +20,7 @@ function toNumber(value: string | undefined): number {
 export async function loadUniverse(): Promise<UniverseRow[]> {
   // 1. Parse CSV for metadata
   const csvPath = path.join(process.cwd(), "data", "universe.csv");
-  const raw = await fs.readFile(csvPath, "utf8");
+  const raw = (await fs.readFile(csvPath, "utf8")).replace(/\r\n/g, "\n");
 
   const parsed = Papa.parse<Record<string, string>>(raw, {
     header: true,
@@ -28,8 +28,13 @@ export async function loadUniverse(): Promise<UniverseRow[]> {
     transformHeader: (header) => header.trim().toLowerCase(),
   });
 
-  if (parsed.errors.length > 0) {
-    throw new Error(`Failed to parse universe.csv: ${parsed.errors[0]?.message ?? "unknown error"}`);
+  // Only throw on critical errors that prevent any data from being parsed.
+  // TooManyFields / TooFewFields on a single row are non-fatal warnings.
+  const fatalErrors = parsed.errors.filter(
+    (e) => e.type !== "FieldMismatch",
+  );
+  if (fatalErrors.length > 0) {
+    throw new Error(`Failed to parse universe.csv: ${fatalErrors[0]?.message ?? "unknown error"}`);
   }
 
   const csvRows = parsed.data

@@ -8,7 +8,10 @@ import { runAlertCheck } from "@/lib/hbme/alertEngine";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { saveSectorResults, saveMomentumSignals, updateMomentumTrailingStops } from "@/lib/hbme/scanHelpers";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { createLogger } from "@/lib/logger";
 import type { Candle } from "@/lib/hbme/types";
+
+const log = createLogger("momentum-scan");
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function POST(req: NextRequest) {
@@ -26,18 +29,19 @@ export async function POST(req: NextRequest) {
   }
 
   const startTime = Date.now();
-
-  const scanRun = await prisma.scanRun.create({
-    data: {
-      startedAt: new Date(),
-      status: "RUNNING",
-      trigger: "MANUAL",
-      market: "ALL",
-      scanType: "momentum",
-    },
-  });
+  let scanRunId: number | null = null;
 
   try {
+    const scanRun = await prisma.scanRun.create({
+      data: {
+        startedAt: new Date(),
+        status: "RUNNING",
+        trigger: "MANUAL",
+        market: "ALL",
+        scanType: "momentum",
+      },
+    });
+    scanRunId = scanRun.id;
     const t0 = Date.now();
     const regime = await calculateMarketRegime();
     const tRegime = Date.now() - t0;
@@ -89,7 +93,7 @@ export async function POST(req: NextRequest) {
 
     const durationMs = Date.now() - startTime;
     await prisma.scanRun.update({
-      where: { id: scanRun.id },
+      where: { id: scanRunId },
       data: {
         status: "COMPLETED",
         completedAt: new Date(),
@@ -101,7 +105,7 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json({
-      scanRunId: scanRun.id,
+      scanRunId,
       universeSize: universe.length,
       tickersWithData,
       tickersWithoutData: universe.length - tickersWithData,
@@ -124,14 +128,17 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
-    await prisma.scanRun.update({
-      where: { id: scanRun.id },
-      data: {
-        status: "FAILED",
-        completedAt: new Date(),
-        error: String(err),
-      },
-    });
+    log.error({ err, scanRunId }, "Momentum scan failed");
+    if (scanRunId) {
+      await prisma.scanRun.update({
+        where: { id: scanRunId },
+        data: {
+          status: "FAILED",
+          completedAt: new Date(),
+          error: String(err),
+        },
+      }).catch((updateErr) => log.error({ updateErr }, "Failed to update ScanRun status"));
+    }
     return NextResponse.json(
       { error: "Momentum scan failed", detail: String(err) },
       { status: 500 },

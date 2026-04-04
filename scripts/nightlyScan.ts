@@ -31,6 +31,7 @@ import { scoreSectors } from "../src/lib/hbme/sectorEngine";
 import { findBreakouts } from "../src/lib/hbme/breakoutEngine";
 import { runAlertCheck } from "../src/lib/hbme/alertEngine";
 import type { Candle } from "../src/lib/hbme/types";
+import { isTradingDay } from "../src/lib/cruise-control/market-hours";
 
 
 // ---------------------------------------------------------------------------
@@ -38,6 +39,7 @@ import type { Candle } from "../src/lib/hbme/types";
 // ---------------------------------------------------------------------------
 
 const DRY_RUN = process.argv.includes("--dry-run");
+const FORCE = process.argv.includes("--force");
 
 const connectionString = process.env["DATABASE_URL"];
 if (!connectionString) {
@@ -74,6 +76,12 @@ const summary: ScanSummary = {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Guard: skip non-trading days (weekends + holidays)
+  if (!FORCE && !isTradingDay(today)) {
+    console.log(`[nightlyScan] ${todayStr} — not a trading day, skipping (use --force to override)`);
+    process.exit(0);
+  }
+
   console.log(`[nightlyScan] ${todayStr} — starting${DRY_RUN ? " (DRY RUN)" : ""}…`);
 
   // 1. Load account balance
@@ -276,6 +284,29 @@ async function main() {
     }
   }
 
+  // 6b. Filter out signals for tickers that still have open trades (prevents duplicates)
+  const exitedTickers = new Set(summary.tradesExited.map((e) => e.ticker));
+  const stillOpenTickers = new Set(
+    openTrades.map((t) => t.ticker).filter((t) => !exitedTickers.has(t)),
+  );
+  const preFilterCount = signals.length;
+  for (let i = signals.length - 1; i >= 0; i--) {
+    const sig = signals[i]!;
+    if (stillOpenTickers.has(sig.ticker)) {
+      console.log(`  [SKIP] ${sig.ticker} — already has an open trade`);
+      if (!DRY_RUN) {
+        await prisma.scanResult.updateMany({
+          where: { scanDate: today, ticker: sig.ticker },
+          data: { actionTaken: "SKIPPED_ALREADY_OPEN" },
+        });
+      }
+      signals.splice(i, 1);
+    }
+  }
+  if (signals.length < preFilterCount) {
+    console.log(`[nightlyScan] Filtered ${preFilterCount - signals.length} signals for tickers with open trades`);
+  }
+
   // 7. Enter new trades (after exits — openCount is now accurate)
   if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) {
     console.log(`[nightlyScan] MAX POSITIONS REACHED (${equityCurveState.maxPositions} allowed in ${equityCurveState.systemState} state) — no new entries today`);
@@ -301,6 +332,19 @@ async function main() {
       summary.tradesEntered.push(position);
 
       if (!DRY_RUN) {
+        // Safety net: re-check DB for existing open trade (race condition guard)
+        const existingOpen = await prisma.trade.findFirst({
+          where: { ticker: signal.ticker, status: "OPEN" },
+        });
+        if (existingOpen) {
+          console.log(`  [SKIP] ${signal.ticker} — duplicate open trade detected (race condition guard)`);
+          await prisma.scanResult.updateMany({
+            where: { scanDate: today, ticker: signal.ticker },
+            data: { actionTaken: "SKIPPED_ALREADY_OPEN" },
+          });
+          continue;
+        }
+
         await prisma.scanResult.updateMany({
           where: { scanDate: today, ticker: signal.ticker },
           data: { actionTaken: "ENTERED" },

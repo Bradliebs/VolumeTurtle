@@ -120,3 +120,33 @@ export function isMarketOpen(now: Date = new Date()): boolean {
 
   return false;
 }
+
+/**
+ * Check if a date is a valid trading day (weekday + not a holiday).
+ * Unlike isMarketOpen(), does NOT check intraday hours — suitable for
+ * post-close scripts like nightlyScan.
+ */
+export function isTradingDay(now: Date = new Date()): boolean {
+  const fmtPart = (part: string) =>
+    new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", [part]: "numeric" } as Intl.DateTimeFormatOptions)
+      .format(now);
+
+  const year = parseInt(fmtPart("year"), 10);
+  const month = parseInt(fmtPart("month"), 10);
+  const day = parseInt(fmtPart("day"), 10);
+
+  const weekday = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", weekday: "short" })
+    .format(now);
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  let dayOfWeek = weekdayMap[weekday] ?? -1;
+  if (dayOfWeek === -1) dayOfWeek = now.getUTCDay();
+
+  if (dayOfWeek === 0 || dayOfWeek === 6) return false;
+
+  const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+  // Both UK and US markets closed → not a trading day
+  if (UK_BANK_HOLIDAYS.has(dateStr) && US_HOLIDAYS.has(dateStr)) return false;
+
+  return true;
+}

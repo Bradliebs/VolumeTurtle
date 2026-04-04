@@ -14,23 +14,25 @@ if "%SCHEDULED_SCAN_TOKEN%"=="" (
 REM --- Create log directory ---
 mkdir "%USERPROFILE%\VolumeTurtle\logs" 2>nul
 
-REM --- LSE Scan: 17:30 daily ---
+REM --- LSE Scan: 17:30 weekdays ---
 schtasks /create /tn "VolumeTurtle_LSE_Scan" ^
   /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=LSE\" > \"%USERPROFILE%\VolumeTurtle\logs\lse_scan.log\" 2>&1" ^
-  /sc daily ^
+  /sc weekly ^
+  /d MON,TUE,WED,THU,FRI ^
   /st 17:30 ^
   /f
 
-echo LSE scan scheduled at 17:30
+echo LSE scan scheduled at 17:30 (weekdays only)
 
-REM --- US Scan: 22:00 daily ---
+REM --- US Scan: 22:00 weekdays ---
 schtasks /create /tn "VolumeTurtle_US_Scan" ^
   /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=US\" > \"%USERPROFILE%\VolumeTurtle\logs\us_scan.log\" 2>&1" ^
-  /sc daily ^
+  /sc weekly ^
+  /d MON,TUE,WED,THU,FRI ^
   /st 22:00 ^
   /f
 
-echo US scan scheduled at 22:00
+echo US scan scheduled at 22:00 (weekdays only)
 
 REM --- Start app on Windows login ---
 schtasks /create /tn "VolumeTurtle_Startup" ^
