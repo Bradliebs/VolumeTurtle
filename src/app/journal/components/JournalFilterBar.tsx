@@ -6,7 +6,6 @@ const FILTERS: { label: string; value: SignalSourceFilter }[] = [
   { label: "All", value: "all" },
   { label: "Volume", value: "volume" },
   { label: "Momentum", value: "momentum" },
-  { label: "Manual", value: "manual" },
 ];
 
 interface Props {

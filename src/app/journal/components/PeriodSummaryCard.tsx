@@ -153,6 +153,7 @@ export function PeriodSummaryCard({ title, stats }: Props) {
       <div className="flex items-center gap-2 pt-1">
         <CountBadge count={stats.wins} color="#22c55e" />
         <CountBadge count={stats.breakeven} color="#6b7280" />
+        <CountBadge count={stats.open} color="#3b82f6" />
         <CountBadge count={stats.losses} color="#ef4444" />
       </div>
     </div>

@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { getGbpUsdRate, convertToGbp } from "@/lib/currency";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
+import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
+import type { T212Position } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 import type {
@@ -13,6 +16,8 @@ import type {
 } from "@/app/journal/types";
 
 const log = createLogger("api/journal");
+
+export const dynamic = "force-dynamic";
 
 const db = prisma as unknown as {
   trade: {
@@ -73,12 +78,20 @@ function startOfYear(d: Date): Date {
 }
 
 function computePeriodStats(
-  trades: Array<{
+  closed: Array<{
     rMultiple: number | null;
     exitPrice: number | null;
     entryPrice: number;
     shares: number;
     ticker: string;
+    hardStop: number;
+  }>,
+  open: Array<{
+    entryPrice: number;
+    shares: number;
+    ticker: string;
+    hardStop: number;
+    currentPrice: number | null;
   }>,
   gbpUsdRate: number,
 ): PeriodStats {
@@ -88,7 +101,8 @@ function computePeriodStats(
   let losses = 0;
   let breakeven = 0;
 
-  for (const t of trades) {
+  // Closed trades
+  for (const t of closed) {
     const r = t.rMultiple ?? 0;
     totalRR += r;
     const rawPnl =
@@ -100,18 +114,30 @@ function computePeriodStats(
     else breakeven++;
   }
 
-  const total = trades.length;
-  const winRate = total > 0 ? (wins / total) * 100 : 0;
-  const pctReturn = 0; // placeholder — computed with balance context in caller
+  // Open trades (unrealised)
+  for (const t of open) {
+    if (t.currentPrice == null) continue;
+    const riskPerShare = t.entryPrice - t.hardStop;
+    const r = riskPerShare > 0
+      ? (t.currentPrice - t.entryPrice) / riskPerShare
+      : 0;
+    totalRR += r;
+    const rawPnl = (t.currentPrice - t.entryPrice) * t.shares;
+    profitGBP += convertToGbp(rawPnl, t.ticker, gbpUsdRate);
+  }
+
+  const closedTotal = closed.length;
+  const winRate = closedTotal > 0 ? (wins / closedTotal) * 100 : 0;
 
   return {
     totalRR: Math.round(totalRR * 100) / 100,
-    pctReturn,
+    pctReturn: 0, // computed with balance context in caller
     profitGBP: Math.round(profitGBP * 100) / 100,
     winRate: Math.round(winRate * 100) / 100,
     wins,
     losses,
     breakeven,
+    open: open.length,
   };
 }
 
@@ -146,6 +172,32 @@ export async function GET(req: Request) {
     const openTrades = allTrades.filter((t) => t.status === "OPEN");
     const closedTrades = allTrades.filter((t) => t.status === "CLOSED");
 
+    // Fetch current prices for open trades (needed for both period stats and sidebar)
+    const openTickers = openTrades.map((t) => t.ticker);
+    let quoteMap: Record<string, Array<{ close: number }>> = {};
+    if (openTickers.length > 0) {
+      try {
+        quoteMap = await fetchEODQuotes(openTickers);
+      } catch (err) {
+        log.warn({ err }, "Quote fetch failed for open trades");
+      }
+    }
+
+    // Build open trades with current prices for period stats
+    function getCurrentPrice(ticker: string): number | null {
+      const quotes = quoteMap[ticker];
+      if (quotes && quotes.length > 0) return quotes[quotes.length - 1]!.close;
+      return null;
+    }
+
+    const openWithPrices = openTrades.map((t) => ({
+      entryPrice: t.entryPrice,
+      shares: t.shares,
+      ticker: t.ticker,
+      hardStop: t.hardStop,
+      currentPrice: getCurrentPrice(t.ticker),
+    }));
+
     // ── Period stats ──
     const now = new Date();
     const weekStart = startOfWeek(now);
@@ -162,10 +214,30 @@ export async function GET(req: Request) {
       (t) => t.exitDate && new Date(t.exitDate) >= yearStart,
     );
 
-    const weekStats = computePeriodStats(closedThisWeek, gbpUsdRate);
-    const monthStats = computePeriodStats(closedThisMonth, gbpUsdRate);
-    const yearStats = computePeriodStats(closedThisYear, gbpUsdRate);
-    const allTimeStats = computePeriodStats(closedTrades, gbpUsdRate);
+    // Open trades by entry date
+    const openThisWeek = openWithPrices.filter(
+      (t) => {
+        const entry = openTrades.find((o) => o.ticker === t.ticker);
+        return entry && new Date(entry.entryDate) >= weekStart;
+      },
+    );
+    const openThisMonth = openWithPrices.filter(
+      (t) => {
+        const entry = openTrades.find((o) => o.ticker === t.ticker);
+        return entry && new Date(entry.entryDate) >= monthStart;
+      },
+    );
+    const openThisYear = openWithPrices.filter(
+      (t) => {
+        const entry = openTrades.find((o) => o.ticker === t.ticker);
+        return entry && new Date(entry.entryDate) >= yearStart;
+      },
+    );
+
+    const weekStats = computePeriodStats(closedThisWeek, openThisWeek, gbpUsdRate);
+    const monthStats = computePeriodStats(closedThisMonth, openThisMonth, gbpUsdRate);
+    const yearStats = computePeriodStats(closedThisYear, openThisYear, gbpUsdRate);
+    const allTimeStats = computePeriodStats(closedTrades, openWithPrices, gbpUsdRate);
 
     // Compute pctReturn using balance context
     if (currentBalance > 0) {
@@ -193,7 +265,7 @@ export async function GET(req: Request) {
     const monthlyStats: MonthStat[] = [];
     for (const [key, trades] of monthlyMap) {
       const [yearStr, monthStr] = key.split("-");
-      const stats = computePeriodStats(trades, gbpUsdRate);
+      const stats = computePeriodStats(trades, [], gbpUsdRate);
       monthlyStats.push({
         year: Number(yearStr),
         month: Number(monthStr),
@@ -213,17 +285,30 @@ export async function GET(req: Request) {
 
     // ── Trade lists for sidebar ──
     const mapTrade = (t: (typeof allTrades)[0]): JournalTrade => {
+      // For open trades, use latest close price; for closed, use exitPrice
+      let currentPrice = t.exitPrice;
+      if (t.status === "OPEN" && !currentPrice) {
+        currentPrice = getCurrentPrice(t.ticker);
+      }
+
       const rawPnl =
-        t.exitPrice != null
-          ? (t.exitPrice - t.entryPrice) * t.shares
+        currentPrice != null
+          ? (currentPrice - t.entryPrice) * t.shares
           : 0;
       const profitGBP = convertToGbp(rawPnl, t.ticker, gbpUsdRate);
       const pctReturn =
-        t.entryPrice > 0
-          ? ((t.exitPrice ?? t.entryPrice) - t.entryPrice) /
-            t.entryPrice *
-            100
+        t.entryPrice > 0 && currentPrice != null
+          ? ((currentPrice - t.entryPrice) / t.entryPrice) * 100
           : 0;
+
+      // Compute current R:R for open trades
+      const riskPerShare = t.entryPrice - t.hardStop;
+      const currentRR =
+        t.rMultiple != null
+          ? t.rMultiple
+          : riskPerShare > 0 && currentPrice != null
+            ? (currentPrice - t.entryPrice) / riskPerShare
+            : null;
 
       return {
         id: t.id,
@@ -240,7 +325,7 @@ export async function GET(req: Request) {
             ? t.exitDate
             : new Date(t.exitDate as unknown as string).toISOString()
           : null,
-        rr: t.rMultiple != null ? Math.round(t.rMultiple * 100) / 100 : null,
+        rr: currentRR != null ? Math.round(currentRR * 100) / 100 : null,
         pctReturn: Math.round(pctReturn * 100) / 100,
         profitGBP: Math.round(profitGBP * 100) / 100,
         status: t.status as "OPEN" | "CLOSED",
@@ -250,13 +335,46 @@ export async function GET(req: Request) {
     const journalOpen = openTrades.map(mapTrade);
     const journalClosed = closedTrades.map(mapTrade);
 
+    // ── Merge untracked T212 positions into open trades ──
+    const t212Settings = loadT212Settings();
+    if (t212Settings) {
+      try {
+        const cached = await getCachedT212Positions(t212Settings);
+        const trackedTickers = new Set(journalOpen.map((t) => t.ticker));
+        for (const pos of cached.positions) {
+          // Skip positions already tracked as trades
+          if (trackedTickers.has(pos.ticker)) continue;
+          const rawPnl = pos.ppl ?? 0;
+          const profitGBP = convertToGbp(rawPnl, pos.ticker, gbpUsdRate);
+          const pctReturn =
+            pos.averagePrice > 0
+              ? ((pos.currentPrice - pos.averagePrice) / pos.averagePrice) * 100
+              : 0;
+          journalOpen.push({
+            id: `t212-${pos.ticker}`,
+            ticker: pos.ticker,
+            direction: "LONG",
+            strategy: "T212 Position",
+            signalGrade: null,
+            entryDate: new Date().toISOString(),
+            exitDate: null,
+            rr: null,
+            pctReturn: Math.round(pctReturn * 100) / 100,
+            profitGBP: Math.round(profitGBP * 100) / 100,
+            status: "OPEN",
+          });
+        }
+      } catch (err) {
+        log.warn({ err }, "T212 position merge failed");
+      }
+    }
+
     // ── Account metrics ──
     const equityCurve = calculateEquityCurveState(
       snapshots.map((s) => ({
         balance: s.balance,
         date: typeof s.date === "string" ? s.date : new Date(s.date as unknown as string).toISOString(),
       })),
-      currentBalance,
     );
 
     const tradeRisk = equityCurve.riskPctPerTrade;

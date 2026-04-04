@@ -8,6 +8,7 @@ export interface PeriodStats {
   wins: number;
   losses: number;
   breakeven: number;
+  open: number;
 }
 
 export interface MonthStat {
