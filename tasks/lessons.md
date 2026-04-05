@@ -12,6 +12,7 @@
 - When T212 stop is already at or above the requested level, return success (no-op) instead of an error — the user doesn't need to know it was a no-op.
 - System stops and T212 stops are two separate data sources — they can drift apart. T212 may be higher if the user manually raised it. Always treat T212's stop as a floor: if T212 > system, pull system up. Never instruct the user to lower a T212 stop.
 - The T212 portfolio table and daily instructions must use the SAME stop source for tracked positions (database trade stops, not fresh market calculations).
+- **CRITICAL**: Never auto-close a trade in the DB without checking T212 positions first. The scan routes were auto-closing on trailing stop breach without T212 verification, causing trades to show as CLOSED while the user still held the position. Always use `getCachedT212Positions()` and skip auto-close if T212 confirms position is still held.
 
 ## Prisma / Database
 - `prisma generate` only updates TypeScript types — it does NOT create or alter database tables. Always run `npm run db:push` (or `npx prisma db push`) after editing `prisma/schema.prisma`.

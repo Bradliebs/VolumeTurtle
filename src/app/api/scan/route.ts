@@ -18,6 +18,7 @@ import { calculateCompositeScore } from "@/lib/signals/compositeScore";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -154,6 +155,18 @@ export async function GET(request: NextRequest) {
     signals.sort((a, b) => (b.compositeScore?.total ?? 0) - (a.compositeScore?.total ?? 0));
 
     // 6. Process exits
+    // Load T212 positions to avoid auto-closing trades still held on T212
+    let t212Tickers: Set<string> | null = null;
+    const t212Settings = loadT212Settings();
+    if (t212Settings) {
+      try {
+        const cached = await getCachedT212Positions(t212Settings);
+        t212Tickers = new Set(cached.positions.map((p) => p.ticker));
+      } catch {
+        // T212 fetch failed — proceed without guard
+      }
+    }
+
     const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: ExitReason; rMultiple: number }> = [];
     for (const trade of openTrades) {
       const quotes = quoteMap[trade.ticker];
@@ -162,25 +175,26 @@ export async function GET(request: NextRequest) {
       const latestQuote = quotes[quotes.length - 1]!;
       const currentClose = latestQuote.close;
 
-      if (currentClose < trade.hardStop) {
-        const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
-        tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "HARD_STOP", rMultiple });
-        if (!dryRun) {
-          await prisma.trade.update({
-            where: { id: trade.id },
-            data: { status: "CLOSED", exitDate: today, exitPrice: currentClose, exitReason: "HARD_STOP", rMultiple },
-          });
-        }
-        continue;
-      }
+      const stopBreached = currentClose < trade.hardStop;
+      const trailingBreached = !stopBreached && shouldExit(currentClose, quotes);
 
-      if (shouldExit(currentClose, quotes)) {
+      if (stopBreached || trailingBreached) {
+        // If T212 says position is still held, skip auto-close
+        if (t212Tickers?.has(trade.ticker)) {
+          log.warn(
+            { ticker: trade.ticker, close: currentClose, stop: stopBreached ? trade.hardStop : trade.trailingStop },
+            "Stop breached but T212 position still held — skipping auto-close",
+          );
+          continue;
+        }
+
+        const exitReason: ExitReason = stopBreached ? "HARD_STOP" : "TRAILING_STOP";
         const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
-        tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "TRAILING_STOP", rMultiple });
+        tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason, rMultiple });
         if (!dryRun) {
           await prisma.trade.update({
             where: { id: trade.id },
-            data: { status: "CLOSED", exitDate: today, exitPrice: currentClose, exitReason: "TRAILING_STOP", rMultiple },
+            data: { status: "CLOSED", exitDate: today, exitPrice: currentClose, exitReason, rMultiple },
           });
         }
         continue;

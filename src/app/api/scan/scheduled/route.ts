@@ -15,6 +15,7 @@ const log = createLogger("api/scan/scheduled");
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
+import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -125,6 +126,18 @@ export async function GET(req: NextRequest) {
     });
 
     // 6. Process exits on open trades in this market
+    // Load T212 positions to avoid auto-closing trades still held on T212
+    let t212Tickers: Set<string> | null = null;
+    const t212Settings = loadT212Settings();
+    if (t212Settings) {
+      try {
+        const cached = await getCachedT212Positions(t212Settings);
+        t212Tickers = new Set(cached.positions.map((p) => p.ticker));
+      } catch {
+        // T212 fetch failed — proceed without guard
+      }
+    }
+
     const tradesExited: Array<{ ticker: string; exitPrice: number; exitReason: ExitReason; rMultiple: number }> = [];
     const marketOpenTrades = openTrades.filter((t) =>
       filterUniverseByMarket([t.ticker], market).length > 0,
@@ -138,6 +151,13 @@ export async function GET(req: NextRequest) {
       const currentClose = latestQuote.close;
 
       if (currentClose < trade.hardStop) {
+        if (t212Tickers?.has(trade.ticker)) {
+          log.warn(
+            { ticker: trade.ticker, close: currentClose, stop: trade.hardStop },
+            "Hard stop breached but T212 position still held — skipping auto-close",
+          );
+          continue;
+        }
         const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "HARD_STOP", rMultiple });
         await prisma.trade.update({
@@ -148,6 +168,13 @@ export async function GET(req: NextRequest) {
       }
 
       if (shouldExit(currentClose, quotes)) {
+        if (t212Tickers?.has(trade.ticker)) {
+          log.warn(
+            { ticker: trade.ticker, close: currentClose, stop: trade.trailingStop },
+            "Trailing stop breached but T212 position still held — skipping auto-close",
+          );
+          continue;
+        }
         const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
         tradesExited.push({ ticker: trade.ticker, exitPrice: currentClose, exitReason: "TRAILING_STOP", rMultiple });
         await prisma.trade.update({
