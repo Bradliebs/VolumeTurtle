@@ -67,6 +67,16 @@ export async function formatAlertMessage(alert: AlertFormatInput): Promise<strin
     );
   }
 
+  if (alert.type === "DATA_QUALITY") {
+    return (
+      `<b>⚠ DATA QUALITY FLAG</b>\n` +
+      `<code>${alert.ticker}</code> excluded from scan\n` +
+      `Reason: ${alert.message}\n` +
+      `Raw move: ${((alert.chgPct ?? 0) * 100).toFixed(1)}%\n` +
+      `<i>Verify manually before acting on this ticker</i>`
+    );
+  }
+
   if (alert.type === "BREAKOUT_TRIGGER") {
     if (alert.grade && alert.totalScore != null) {
       return (

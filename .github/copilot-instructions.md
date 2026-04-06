@@ -44,6 +44,7 @@ These core engine files are frozen. Extend functionality via new modules, never 
 
 - `src/lib/signals/regimeFilter.ts` — Market regime detection
 - `src/lib/signals/compositeScore.ts` — Signal scoring (A/B/C/D grades)
+- `src/lib/signals/dataValidator.ts` — Pre-signal data quality validation
 - `src/lib/risk/positionSizer.ts` — Position sizing logic
 - `src/lib/risk/ratchetStops.ts` — Nightly stop ratchet engine
 - `src/lib/hbme/scanHelpers.ts` — Scan engine helpers

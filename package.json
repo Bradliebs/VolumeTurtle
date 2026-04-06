@@ -17,6 +17,7 @@
     "scan:dry": "npx tsx scripts/nightlyScan.ts --dry-run",
     "validate": "npx tsx scripts/validateUniverse.ts",
     "validate:universe": "npx tsx scripts/validateUniverse.ts",
+    "universe:health": "npx tsx scripts/universeHealth.ts",
     "schedule:setup": "scripts\\setupScheduler.bat",
     "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
     "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",

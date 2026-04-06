@@ -20,6 +20,7 @@ interface MomentumSignalRow {
   R5: number; R20: number; price: number; compositeScore: number; grade: string;
   regimeScore: number; tickerTrend: string; sectorScore: number; sectorRank: number;
   status: string; createdAt: string; stopPrice: number; atr: number;
+  dataWarnings?: string | null;
 }
 
 interface RegimeInfo {
@@ -451,6 +452,9 @@ export default function MomentumPage() {
                             <div className="space-y-2">{signals.filter(sig => sig.sector === s.sector).map(sig => (
                               <div key={sig.id} className="flex items-center gap-3 text-xs border border-[var(--border)] p-2">
                                 <GradeBadge grade={sig.grade} />
+                                {sig.dataWarnings && (
+                                  <span className="text-[var(--amber)] cursor-help" title={JSON.parse(sig.dataWarnings).join("; ")}>⚠</span>
+                                )}
                                 <span className="font-bold text-white">{sig.ticker}</span>
                                 <span className={sig.chg1d >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>{sig.chg1d >= 0 ? "+" : ""}{(sig.chg1d * 100).toFixed(1)}%</span>
                                 <span className="text-[var(--dim)]">{sig.volRatio.toFixed(1)}&times; vol</span>
@@ -533,6 +537,9 @@ export default function MomentumPage() {
                         {/* Right side: grade + button */}
                         <div className="flex flex-col items-center gap-2 shrink-0">
                           <GradeBadge grade={s.grade} size="lg" />
+                          {s.dataWarnings && (
+                            <span className="text-[9px] text-[var(--amber)] cursor-help" title={JSON.parse(s.dataWarnings).join("; ")}>⚠ DATA WARNING</span>
+                          )}
                           {isAdded ? (
                             <span className="text-[9px] text-[var(--green)] font-bold">{"\u2713"} ADDED</span>
                           ) : (

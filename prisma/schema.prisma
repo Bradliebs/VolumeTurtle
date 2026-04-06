@@ -61,6 +61,9 @@ model ScanRun {
   regimeScore      Int?
   regimeAssessment String?
   scanType         String   @default("volume") // "volume" | "momentum" | "both"
+  validationBlocked  Int    @default(0)
+  validationWarnings Int    @default(0)
+  crossValidated     Int    @default(0)
 }
 
 model SectorScanResult {
@@ -101,6 +104,7 @@ model MomentumSignal {
   sectorRank     Int
   status         String   @default("active") // "active" | "near-miss" | "expired"
   scanRunId      Int?
+  dataWarnings   String?  // JSON array of validation warning strings, null if clean
 
   @@unique([ticker, scanRunId])
 }

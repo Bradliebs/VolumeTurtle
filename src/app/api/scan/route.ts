@@ -19,6 +19,7 @@ import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
+import { validateTicker } from "@/lib/signals/dataValidator";
 
 async function loadAccountBalance(): Promise<number> {
   const latest = await prisma.accountSnapshot.findFirst({
@@ -73,12 +74,25 @@ export async function GET(request: NextRequest) {
     });
     const openCount = openTrades.length;
 
-    // 5. Generate signals + collect near misses
+    // 5. Generate signals + collect near misses (with data validation)
     const signals: VolumeSignal[] = [];
     const nearMisses: Array<{ ticker: string; volumeRatio: number; rangePosition: number; failedOn: "VOLUME" | "RANGE" | "LIQUIDITY"; potentialScore: number; potentialGrade: string }> = [];
+    let validationBlocked = 0;
+    let validationWarnings = 0;
+    let crossValidatedCount = 0;
 
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
+
+      // Data validation gate
+      const validation = await validateTicker(ticker, quotes, null);
+      if (!validation.valid) {
+        validationBlocked++;
+        continue;
+      }
+      if (validation.warnings.length > 0) validationWarnings++;
+      if (validation.crossValidated) crossValidatedCount++;
+
       const signal = generateSignal(ticker, quotes, marketRegime);
 
       const pos = signal ? calculatePositionSize(signal, accountBalance, equityCurveState) : null;
@@ -240,6 +254,9 @@ export async function GET(request: NextRequest) {
               vixLevel: marketRegime.vixLevel != null ? String(marketRegime.vixLevel) : null,
               vixValue: marketRegime.vixLevel,
               qqqVs200MA: marketRegime.qqqPctAboveMA,
+              validationBlocked,
+              validationWarnings,
+              crossValidated: crossValidatedCount,
             },
           });
         }

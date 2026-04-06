@@ -32,6 +32,9 @@ import { findBreakouts } from "../src/lib/hbme/breakoutEngine";
 import { runAlertCheck } from "../src/lib/hbme/alertEngine";
 import type { Candle } from "../src/lib/hbme/types";
 import { isTradingDay } from "../src/lib/cruise-control/market-hours";
+import { validateTicker } from "../src/lib/signals/dataValidator";
+import type { ValidationResult } from "../src/lib/signals/dataValidator";
+import { formatAlertMessage, sendTelegram } from "../src/lib/telegram";
 
 
 // ---------------------------------------------------------------------------
@@ -61,6 +64,9 @@ interface ScanSummary {
   tradesExited: { ticker: string; rMultiple: number }[];
   openPositions: string[];
   accountBalance: number;
+  validationBlocked: number;
+  validationWarnings: number;
+  crossValidated: number;
 }
 
 const summary: ScanSummary = {
@@ -69,6 +75,9 @@ const summary: ScanSummary = {
   tradesExited: [],
   openPositions: [],
   accountBalance: 0,
+  validationBlocked: 0,
+  validationWarnings: 0,
+  crossValidated: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -138,10 +147,34 @@ async function main() {
     console.log("");
   }
 
-  // 4. Generate signals
+  // 4. Generate signals (with data validation)
   const signals: VolumeSignal[] = [];
   for (const ticker of liquidTickers) {
     const quotes = quoteMap[ticker]!;
+
+    // Data validation gate
+    const validation = await validateTicker(ticker, quotes, null);
+    if (!validation.valid) {
+      summary.validationBlocked++;
+      // Send Telegram alert for extreme move blocks (important for held positions)
+      for (const flag of validation.flags) {
+        if (flag.startsWith("EXTREME_MOVE") || flag.startsWith("SPLIT_SUSPECTED")) {
+          try {
+            const text = await formatAlertMessage({
+              type: "DATA_QUALITY",
+              ticker,
+              message: flag,
+              chgPct: validation.rawMove,
+            });
+            await sendTelegram({ text });
+          } catch { /* best effort */ }
+        }
+      }
+      continue;
+    }
+    if (validation.warnings.length > 0) summary.validationWarnings++;
+    if (validation.crossValidated) summary.crossValidated++;
+
     const signal = generateSignal(ticker, quotes, marketRegime);
 
     // Record scan result for every ticker
@@ -422,17 +455,42 @@ async function main() {
       const mQuoteMap = await fetchEODQuotes(mTickers);
 
       // 3. Convert to Map<string, Candle[]> for sector/breakout engines
+      //    with data validation — remove blocked tickers from priceMap
       const priceMap = new Map<string, Candle[]>();
+      let mValidationBlocked = 0;
+      let mValidationWarnings = 0;
+      let mCrossValidated = 0;
+      const tickerWarnings = new Map<string, string[]>();
       for (const [ticker, quotes] of Object.entries(mQuoteMap)) {
-        priceMap.set(ticker, quotes.map((q) => ({
+        const candles = quotes.map((q) => ({
           date: q.date,
           open: q.open,
           high: q.high,
           low: q.low,
           close: q.close,
           volume: q.volume,
-        })));
+        }));
+        const validation = await validateTicker(ticker, candles, null);
+        if (!validation.valid) {
+          mValidationBlocked++;
+          for (const flag of validation.flags) {
+            if (flag.startsWith("EXTREME_MOVE") || flag.startsWith("SPLIT_SUSPECTED")) {
+              try {
+                const text = await formatAlertMessage({ type: "DATA_QUALITY", ticker, message: flag, chgPct: validation.rawMove });
+                await sendTelegram({ text });
+              } catch { /* best effort */ }
+            }
+          }
+          continue;
+        }
+        if (validation.warnings.length > 0) {
+          mValidationWarnings++;
+          tickerWarnings.set(ticker, validation.warnings);
+        }
+        if (validation.crossValidated) mCrossValidated++;
+        priceMap.set(ticker, candles);
       }
+      console.log(`[momentum] Validated: ${priceMap.size} · Blocked: ${mValidationBlocked} · Warnings: ${mValidationWarnings}`);
 
       // 4. Run sector engine
       const sectors = scoreSectors(mUniverse, priceMap);
@@ -465,6 +523,7 @@ async function main() {
       // 7. Save MomentumSignal rows
       const signalRows: any[] = [];
       for (const c of candidates) {
+        const w = tickerWarnings.get(c.ticker);
         signalRows.push({
           createdAt: today,
           ticker: c.ticker,
@@ -485,6 +544,7 @@ async function main() {
           sectorRank: 0,
           status: "active",
           scanRunId: momentumScanRun.id,
+          dataWarnings: w ? JSON.stringify(w) : null,
         });
       }
       for (const nm of nearMisses) {
@@ -532,6 +592,9 @@ async function main() {
           tickersScanned: mUniverse.length,
           signalsFound: candidates.length,
           durationMs,
+          validationBlocked: mValidationBlocked,
+          validationWarnings: mValidationWarnings,
+          crossValidated: mCrossValidated,
         },
       });
 
@@ -591,6 +654,7 @@ function printSummary(): void {
   console.log(`  Date:             ${todayStr}`);
   console.log(`  Account Balance:  $${summary.accountBalance.toLocaleString()}`);
   console.log("───────────────────────────────────────────────────────");
+  console.log(`  Validated:        ${liquidTickers.length} · Blocked: ${summary.validationBlocked} · Warnings: ${summary.validationWarnings} · Cross-validated: ${summary.crossValidated}`);
 
   console.log(`  Signals Fired:    ${summary.signalsFired.length}`);
   for (const s of summary.signalsFired) {

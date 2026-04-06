@@ -10,6 +10,7 @@ import { saveSectorResults, saveMomentumSignals, updateMomentumTrailingStops } f
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { createLogger } from "@/lib/logger";
 import type { Candle } from "@/lib/hbme/types";
+import { validateTicker } from "@/lib/signals/dataValidator";
 
 const log = createLogger("momentum-scan");
 
@@ -59,15 +60,26 @@ export async function POST(req: NextRequest) {
     const tickersWithData = Object.keys(quoteMap).length;
 
     const priceMap = new Map<string, Candle[]>();
+    let validationBlocked = 0;
+    let validationWarnings = 0;
+    let crossValidatedCount = 0;
     for (const [ticker, quotes] of Object.entries(quoteMap)) {
-      priceMap.set(ticker, quotes.map((q) => ({
+      const candles = quotes.map((q) => ({
         date: q.date,
         open: q.open,
         high: q.high,
         low: q.low,
         close: q.close,
         volume: q.volume,
-      })));
+      }));
+      const validation = await validateTicker(ticker, candles, null);
+      if (!validation.valid) {
+        validationBlocked++;
+        continue;
+      }
+      if (validation.warnings.length > 0) validationWarnings++;
+      if (validation.crossValidated) crossValidatedCount++;
+      priceMap.set(ticker, candles);
     }
 
     const t3 = Date.now();
@@ -101,6 +113,9 @@ export async function POST(req: NextRequest) {
         signalsFound: candidates.length,
         durationMs,
         marketRegime: regime.marketRegime,
+        validationBlocked,
+        validationWarnings,
+        crossValidated: crossValidatedCount,
       },
     });
 
@@ -109,6 +124,8 @@ export async function POST(req: NextRequest) {
       universeSize: universe.length,
       tickersWithData,
       tickersWithoutData: universe.length - tickersWithData,
+      validationBlocked,
+      validationWarnings,
       sectorsRanked: sectors.length,
       hotSectors,
       signalCount: candidates.length,

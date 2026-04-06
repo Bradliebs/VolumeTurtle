@@ -16,8 +16,9 @@ import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
-import { sendTelegram } from "@/lib/telegram";
+import { sendTelegram, formatAlertMessage } from "@/lib/telegram";
 import { UK_BANK_HOLIDAYS, US_HOLIDAYS } from "@/lib/cruise-control/market-hours";
+import { validateTicker } from "@/lib/signals/dataValidator";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -91,11 +92,33 @@ export async function GET(req: NextRequest) {
       hasMinimumLiquidity(ticker, quoteMap[ticker]!),
     );
 
-    // 4. Generate signals
+    // 4. Generate signals (with data validation)
     const signals: VolumeSignal[] = [];
     const openCountForAction = await prisma.trade.count({ where: { status: "OPEN" } });
+    let validationBlocked = 0;
+    let validationWarnings = 0;
+    let crossValidatedCount = 0;
+
     for (const ticker of liquidTickers) {
       const quotes = quoteMap[ticker]!;
+
+      // Data validation gate
+      const validation = await validateTicker(ticker, quotes, null);
+      if (!validation.valid) {
+        validationBlocked++;
+        for (const flag of validation.flags) {
+          if (flag.startsWith("EXTREME_MOVE") || flag.startsWith("SPLIT_SUSPECTED")) {
+            try {
+              const text = await formatAlertMessage({ type: "DATA_QUALITY", ticker, message: flag, chgPct: validation.rawMove });
+              await sendTelegram({ text });
+            } catch { /* best effort */ }
+          }
+        }
+        continue;
+      }
+      if (validation.warnings.length > 0) validationWarnings++;
+      if (validation.crossValidated) crossValidatedCount++;
+
       const signal = generateSignal(ticker, quotes, marketRegime);
 
       const pos = signal ? calculatePositionSize(signal, accountBalance, equityCurveState) : null;
@@ -240,6 +263,9 @@ export async function GET(req: NextRequest) {
         vixLevel: marketRegime.vixLevel != null ? String(marketRegime.vixLevel) : null,
         vixValue: marketRegime.vixLevel,
         qqqVs200MA: marketRegime.qqqPctAboveMA,
+        validationBlocked,
+        validationWarnings,
+        crossValidated: crossValidatedCount,
       },
     });
 
@@ -251,6 +277,7 @@ export async function GET(req: NextRequest) {
         `Tickers: ${liquidTickers.length} | Signals: ${signals.length}`,
         `Exits: ${tradesExited.length} | Open: ${finalOpenCount}`,
         `Regime: ${marketRegime.marketRegime} | State: ${equityCurveState.systemState}`,
+        `Validated: ${liquidTickers.length} · Blocked: ${validationBlocked} · Warnings: ${validationWarnings}`,
       ];
 
       if (signals.length > 0) {
