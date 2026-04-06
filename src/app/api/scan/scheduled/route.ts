@@ -16,6 +16,8 @@ import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@/lib/trades/utils";
 import type { ExitReason } from "@/lib/trades/types";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
+import { sendTelegram } from "@/lib/telegram";
+import { UK_BANK_HOLIDAYS, US_HOLIDAYS } from "@/lib/cruise-control/market-hours";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -41,6 +43,21 @@ export async function GET(req: NextRequest) {
   const market: MarketFilter = marketParam === "LSE" || marketParam === "US" || marketParam === "EU" ? marketParam : "ALL";
   const startTime = Date.now();
   const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+
+  // Holiday check — skip scan and notify if target market is closed
+  const marketClosed =
+    (market === "LSE" && UK_BANK_HOLIDAYS.has(todayStr)) ||
+    (market === "US" && US_HOLIDAYS.has(todayStr));
+
+  if (marketClosed) {
+    try {
+      await sendTelegram({
+        text: `<b>SCAN SKIPPED — ${market}</b>\nMarket closed (holiday) on ${todayStr}`,
+      });
+    } catch { /* best effort */ }
+    return NextResponse.json({ success: true, market, skipped: true, reason: "market_holiday" });
+  }
 
   // Create ScanRun record
   const scanRun = await prisma.scanRun.create({
@@ -226,6 +243,38 @@ export async function GET(req: NextRequest) {
       },
     });
 
+    // 9. Send Telegram summary
+    try {
+      const lines = [
+        `<b>SCAN COMPLETE — ${market}</b>`,
+        ``,
+        `Tickers: ${liquidTickers.length} | Signals: ${signals.length}`,
+        `Exits: ${tradesExited.length} | Open: ${finalOpenCount}`,
+        `Regime: ${marketRegime.marketRegime} | State: ${equityCurveState.systemState}`,
+      ];
+
+      if (signals.length > 0) {
+        lines.push("", "<b>Signals:</b>");
+        for (const s of signals.slice(0, 5)) {
+          lines.push(`  <code>${s.ticker}</code> vol ${s.volumeRatio.toFixed(1)}x range ${(s.rangePosition * 100).toFixed(0)}%`);
+        }
+        if (signals.length > 5) lines.push(`  … +${signals.length - 5} more`);
+      }
+
+      if (tradesExited.length > 0) {
+        lines.push("", "<b>Exits:</b>");
+        for (const t of tradesExited) {
+          lines.push(`  <code>${t.ticker}</code> ${t.exitReason} R: ${t.rMultiple >= 0 ? "+" : ""}${t.rMultiple.toFixed(2)}`);
+        }
+      }
+
+      lines.push("", `Duration: ${(durationMs / 1000).toFixed(1)}s`);
+
+      await sendTelegram({ text: lines.join("\n") });
+    } catch (teleErr) {
+      log.warn({ err: teleErr }, "Telegram summary failed (scan succeeded)");
+    }
+
     return NextResponse.json({
       success: true,
       market,
@@ -253,6 +302,11 @@ export async function GET(req: NextRequest) {
       },
     });
     log.error({ err }, "Scheduled scan failed");
+    try {
+      await sendTelegram({
+        text: `<b>SCAN FAILED — ${market}</b>\n${err instanceof Error ? err.message : "Unknown error"}`,
+      });
+    } catch { /* best effort */ }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Scheduled scan failed" },
       { status: 500 },

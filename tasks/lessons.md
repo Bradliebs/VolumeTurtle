@@ -22,3 +22,7 @@
 - `data/universe.csv` had mixed line endings (CRLF for first ~208 lines, LF for the rest). PapaParse choked on this, treating the rest of the file as extra fields of one row (3811 fields).
 - Always normalize line endings when generating or editing CSV files. `loadUniverse()` now strips `\r\n` → `\n` before parsing as a safeguard.
 - Don't throw on PapaParse `FieldMismatch` errors — they're non-fatal warnings (e.g. a trailing comma on one row). Only throw on structural errors that prevent data from being parsed.
+
+## Position Sync / Stop Updates
+- **CRITICAL**: Exit checks in sync routes must compare price against the PREVIOUS stop (the one active when the bar traded), NOT the newly ratcheted stop. The sync-all and single-sync routes were: (1) calculating new trailing stop, (2) writing it to DB, (3) checking exit against the NEW higher stop → false closes. The scan routes had the correct order: check exit first, then update stop. Fixed 2026-04-06.
+- Rule: when ratcheting a stop upward AND checking exits in the same operation, always check exit against `previousStop = max(hardStop, oldTrailingStop)` before the ratchet.

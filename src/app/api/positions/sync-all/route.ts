@@ -102,7 +102,10 @@ export async function POST(_request: Request) {
           });
         }
 
-        const exitTriggered = latestClose < newCurrentStop || latestQuote.low < newCurrentStop;
+        // Exit check uses the PREVIOUS stop (the one active when these bars traded),
+        // NOT the newly ratcheted stop. Ratcheting the stop upward and then checking
+        // against the new value causes false closes.
+        const exitTriggered = latestClose < previousStop || latestQuote.low < previousStop;
 
         // Also check prior days — if stop was breached on a day we didn't sync,
         // find the first breach day and use that as exit
@@ -115,7 +118,7 @@ export async function POST(_request: Request) {
           for (const q of quotes) {
             const qDate = new Date(q.date);
             if (qDate <= lastSyncDate) continue;
-            if (q.low < newCurrentStop || q.close < newCurrentStop) {
+            if (q.low < previousStop || q.close < previousStop) {
               breachQuote = q;
               break; // Use the first breach day
             }
@@ -156,18 +159,18 @@ export async function POST(_request: Request) {
           // EOD data shows stop breach but T212 position is still open —
           // flag for user attention, do NOT auto-close
           log.warn(
-            { ticker: trade.ticker, low: breachQuote!.low, stop: newCurrentStop },
+            { ticker: trade.ticker, low: breachQuote!.low, stop: previousStop },
             "EOD breach detected but T212 position still held — flagging for manual exit",
           );
           instruction = {
             type: "EXIT",
-            message: `STOP BREACHED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${breachQuote!.date}. T212 position still open — confirm exit manually.`,
+            message: `STOP BREACHED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${breachQuote!.date}. T212 position still open — confirm exit manually.`,
             urgent: true,
           };
         } else if (actuallyExited) {
           // Auto-close the trade with the exit price
           const breachClose = breachQuote!.close;
-          const exitPrice = breachClose < newCurrentStop ? breachClose : newCurrentStop;
+          const exitPrice = breachClose < previousStop ? breachClose : previousStop;
           const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
           const exitReason: ExitReason = exitPrice < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
           const exitDate = new Date(breachQuote!.date);
@@ -177,7 +180,7 @@ export async function POST(_request: Request) {
           });
           instruction = {
             type: "EXIT",
-            message: `EXITED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${breachQuote!.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
+            message: `EXITED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${breachQuote!.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
             urgent: true,
           };
         } else if (goneFromT212) {

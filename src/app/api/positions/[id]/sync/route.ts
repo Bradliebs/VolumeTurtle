@@ -72,8 +72,9 @@ export async function POST(
       });
     }
 
-    // Determine instruction
-    let exitTriggered = latestClose < newCurrentStop || latestQuote.low < newCurrentStop;
+    // Determine instruction — exit check uses the PREVIOUS stop (the one active
+    // when these bars traded), NOT the newly ratcheted stop.
+    let exitTriggered = latestClose < previousStop || latestQuote.low < previousStop;
 
     // Also check prior days — if stop was breached on a day we didn't sync
     const tradeWithHistory = await prisma.trade.findUnique({
@@ -88,7 +89,7 @@ export async function POST(
       for (const q of quotes) {
         const qDate = new Date(q.date);
         if (qDate <= lastSyncDate) continue;
-        if (q.low < newCurrentStop || q.close < newCurrentStop) {
+        if (q.low < previousStop || q.close < previousStop) {
           breachQuote = q;
           exitTriggered = true;
           break;
@@ -182,18 +183,18 @@ export async function POST(
       // flag for user attention, do NOT auto-close
       const bq = breachQuote ?? latestQuote;
       log.warn(
-        { ticker: trade.ticker, low: bq.low, stop: newCurrentStop },
+        { ticker: trade.ticker, low: bq.low, stop: previousStop },
         "EOD breach detected but T212 position still held — flagging for manual exit",
       );
       instruction = {
         type: "EXIT",
-        message: `STOP BREACHED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${bq.date}. T212 position still open — confirm exit manually.`,
+        message: `STOP BREACHED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${bq.date}. T212 position still open — confirm exit manually.`,
         urgent: true,
       };
     } else if (exitTriggered) {
       // Auto-close the trade with the exit price (T212 not loaded or position gone)
       const bq = breachQuote ?? latestQuote;
-      const exitPrice = bq.close < newCurrentStop ? bq.close : newCurrentStop;
+      const exitPrice = bq.close < previousStop ? bq.close : previousStop;
       const rMultiple = calculateRMultiple(exitPrice, trade.entryPrice, trade.hardStop);
       const exitReason: ExitReason = exitPrice < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
       const exitDate = new Date(bq.date);
@@ -203,7 +204,7 @@ export async function POST(
       });
       instruction = {
         type: "EXIT",
-        message: `EXITED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${newCurrentStop.toFixed(2)} on ${bq.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
+        message: `EXITED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${bq.date}. Trade closed at ${c}${exitPrice.toFixed(2)}.`,
         urgent: true,
       };
     } else if (goneFromT212) {
