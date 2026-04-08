@@ -4,6 +4,7 @@ import { evaluateTrailingStop } from "@/lib/risk/trailingStop";
 import { loadT212Settings, updateStopOnT212, getCachedT212Positions } from "@/lib/t212/client";
 import { config } from "@/lib/config";
 import { createLogger } from "@/lib/logger";
+import { sendTelegram } from "@/lib/telegram";
 
 const log = createLogger("ratchetStops");
 
@@ -38,11 +39,20 @@ const db = prisma as unknown as {
       trailingStopPrice: number | null;
       peakClosePrice: number | null;
       stopSource: string | null;
+      isRunner: boolean;
+      runnerActivatedAt: Date | null;
+      runnerPeakProfit: number | null;
     }>>;
     update: (args: unknown) => Promise<unknown>;
   };
   alert: {
     create: (args: unknown) => Promise<unknown>;
+  };
+  appSettings: {
+    findFirst: (args?: unknown) => Promise<{
+      runnerProfitThreshold: number;
+      runnerLookbackDays: number;
+    } | null>;
   };
 };
 
@@ -81,6 +91,11 @@ export async function ratchetAllStops(pushToT212 = false): Promise<RatchetResult
     }
   }
 
+  // Load runner settings
+  const runnerSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+  const runnerThreshold = runnerSettings?.runnerProfitThreshold ?? 0.30;
+  const runnerLookbackDays = runnerSettings?.runnerLookbackDays ?? 20;
+
   for (const trade of openTrades) {
     result.processed++;
 
@@ -100,6 +115,140 @@ export async function ratchetAllStops(pushToT212 = false): Promise<RatchetResult
       });
       continue;
     }
+
+    // ── Runner branch ─────────────────────────────────────────────────
+    if (trade.isRunner) {
+      const hardStop = trade.hardStopPrice ?? trade.hardStop;
+      const currentTrailing = trade.trailingStopPrice ?? trade.trailingStop;
+      const latestClose = candles[candles.length - 1]!.close;
+      const profitPct = (latestClose - trade.entryPrice) / trade.entryPrice;
+
+      // Phase 1: Below threshold — hard stop only, no trailing ratchet
+      if (profitPct < runnerThreshold) {
+        log.info(
+          { ticker: trade.ticker, profitPct: +(profitPct * 100).toFixed(1) },
+          `RUNNER ${trade.ticker} in phase 1 (${(profitPct * 100).toFixed(1)}% profit, waiting for ${(runnerThreshold * 100).toFixed(0)}%)`,
+        );
+        result.skipped++;
+        result.results.push({
+          ticker: trade.ticker,
+          oldStop: currentTrailing,
+          newStop: currentTrailing,
+          activeStop: Math.max(hardStop, currentTrailing),
+          ratcheted: false,
+          pushed: false,
+          error: null,
+        });
+        continue;
+      }
+
+      // Phase 2: Above threshold — activate runner mode
+      if (!trade.runnerActivatedAt) {
+        await db.trade.update({
+          where: { id: trade.id },
+          data: { runnerActivatedAt: new Date() },
+        });
+        log.info({ ticker: trade.ticker, profitPct: +(profitPct * 100).toFixed(1) }, "RUNNER ACTIVATED");
+        try {
+          await sendTelegram({
+            text:
+              `🏃 <b>RUNNER ACTIVATED — ${trade.ticker}</b> +${(profitPct * 100).toFixed(1)}%\n` +
+              `Wide exit logic now active (${runnerLookbackDays}-day low)`,
+            parseMode: "HTML",
+          });
+        } catch { /* best effort */ }
+      }
+
+      // Runner uses configurable lookback (default 20-day low) instead of 10-day low
+      const runnerTrailingStop = calculate20DayLow(candles, runnerLookbackDays);
+      if (runnerTrailingStop <= 0) {
+        result.skipped++;
+        result.results.push({
+          ticker: trade.ticker,
+          oldStop: currentTrailing,
+          newStop: currentTrailing,
+          activeStop: Math.max(hardStop, currentTrailing),
+          ratcheted: false,
+          pushed: false,
+          error: "Insufficient candles for runner lookback",
+        });
+        continue;
+      }
+
+      // Update peak profit tracking
+      const peakProfit = Math.max(trade.runnerPeakProfit ?? 0, profitPct);
+
+      // Monotonic: stop never goes down
+      const ratcheted = runnerTrailingStop > currentTrailing;
+      const newTrailing = ratcheted ? runnerTrailingStop : currentTrailing;
+      let activeStop = Math.max(hardStop, newTrailing);
+
+      // T212 floor enforcement
+      const t212Stop = t212StopMap.get(trade.ticker);
+      if (t212Stop != null && t212Stop > activeStop) {
+        activeStop = t212Stop;
+      }
+
+      if (ratcheted || peakProfit > (trade.runnerPeakProfit ?? 0)) {
+        const updateData: Record<string, unknown> = {
+          runnerPeakProfit: peakProfit,
+        };
+        if (ratcheted) {
+          updateData.trailingStop = newTrailing;
+          updateData.trailingStopPrice = newTrailing;
+          updateData.stopSource = "runner_trailing";
+        }
+        await db.trade.update({
+          where: { id: trade.id },
+          data: updateData,
+        });
+      }
+
+      if (ratcheted) {
+        result.ratcheted++;
+        await db.alert.create({
+          data: {
+            type: "STATUS_CHANGE",
+            ticker: trade.ticker,
+            message: `Runner stop ratcheted $${currentTrailing.toFixed(2)} -> $${newTrailing.toFixed(2)} (${runnerLookbackDays}d low)`,
+            severity: "info",
+            price: newTrailing,
+            stopPrice: activeStop,
+            signalSource: null,
+          },
+        });
+      }
+
+      // Push to T212
+      let pushed = false;
+      let pushError: string | null = null;
+      if (ratcheted && t212Settings) {
+        if (t212Stop != null && activeStop <= t212Stop + 0.01) {
+          pushError = `T212 stop $${t212Stop.toFixed(2)} already at or above $${activeStop.toFixed(2)}`;
+        } else {
+          try {
+            await updateStopOnT212(t212Settings, trade.ticker, trade.shares, activeStop);
+            pushed = true;
+            result.pushed++;
+          } catch (err) {
+            pushError = err instanceof Error ? err.message : String(err);
+            log.warn({ ticker: trade.ticker, err: pushError }, "Failed to push runner stop to T212");
+          }
+        }
+      }
+
+      result.results.push({
+        ticker: trade.ticker,
+        oldStop: currentTrailing,
+        newStop: newTrailing,
+        activeStop,
+        ratcheted,
+        pushed,
+        error: pushError,
+      });
+      continue; // runner handled — skip normal ratchet
+    }
+    // ── End runner branch ──────────────────────────────────────────────
 
     const hardStop = trade.hardStopPrice ?? trade.hardStop;
     const currentTrailing = trade.trailingStopPrice ?? trade.trailingStop;
@@ -183,4 +332,18 @@ export async function ratchetAllStops(pushToT212 = false): Promise<RatchetResult
 
   log.info({ processed: result.processed, ratcheted: result.ratcheted, pushed: result.pushed }, "Ratchet complete");
   return result;
+}
+
+/**
+ * Calculate the lowest close over the last N candles.
+ * Used by runner positions for wider trailing stops.
+ * Minimum 5 candles required; returns 0 if insufficient data.
+ */
+function calculate20DayLow(
+  candles: Array<{ close: number }>,
+  lookbackDays = 20,
+): number {
+  if (candles.length < 5) return 0;
+  const window = candles.slice(-Math.max(1, lookbackDays));
+  return Math.min(...window.map((c) => c.close));
 }

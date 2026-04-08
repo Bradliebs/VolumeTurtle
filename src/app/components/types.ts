@@ -25,6 +25,11 @@ export interface Trade {
   atr20: number;
   importedFromT212: boolean;
   importedAt: string | null;
+  isRunner: boolean;
+  runnerActivatedAt: string | null;
+  runnerPeakProfit: number | null;
+  runnerExitProfit: number | null;
+  runnerCaptureRate: number | null;
 }
 
 export interface ScanResult {

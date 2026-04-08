@@ -230,6 +230,17 @@ export default function Home() {
         </span>
         <span className="text-[var(--border)]">|</span>
         <span className="text-sm text-[var(--dim)]">
+          Runner:{" "}
+          {(() => {
+            const runner = openTrades.find((t) => (t as unknown as { isRunner?: boolean }).isRunner);
+            if (runner) {
+              return <span className="text-[#00e5ff]" style={mono}>{runner.ticker}</span>;
+            }
+            return <span className="text-[#555]" style={mono}>NONE</span>;
+          })()}
+        </span>
+        <span className="text-[var(--border)]">|</span>
+        <span className="text-sm text-[var(--dim)]">
           Exposure: <span className="text-white" style={mono}>{exposurePct}%</span>
         </span>
         <span className="text-[var(--border)]">|</span>
@@ -504,23 +515,85 @@ export default function Home() {
                       ─── {inst.ticker}
                       {(() => {
                         const matchTrade = openTrades.find((t) => t.ticker === inst.ticker);
+                        const tradeIsRunner = (matchTrade as unknown as { isRunner?: boolean })?.isRunner === true;
+                        const runnerActivated = (matchTrade as unknown as { runnerActivatedAt?: string | null })?.runnerActivatedAt != null;
+                        if (tradeIsRunner) {
+                          return (
+                            <>
+                              <span className="ml-1.5 inline-flex items-center px-1.5 py-0 text-[9px] font-bold border border-[#00e5ff] text-[#00e5ff] rounded-none align-middle">RUN</span>
+                              <span className={`text-xs ml-2 ${runnerActivated ? "text-[#00e5ff]" : "text-[var(--amber)]"}`}>
+                                {runnerActivated ? "(🏃 Runner Active)" : "(🏃 Runner Phase 1)"}
+                              </span>
+                            </>
+                          );
+                        }
                         if (matchTrade?.importedFromT212) return <span className="text-[var(--amber)] text-xs ml-2">(📥 T212 Import)</span>;
                         return <span className="text-[var(--green)] text-xs ml-2">(📊 Signal)</span>;
                       })()}
                       {" "}───
                     </p>
-                    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#555]">
-                      <span>Status</span>
-                      <span>HOLD — no action needed today{inst.actioned ? " (stop updated ✓)" : ""}</span>
-                      <span>Your stop</span>
-                      <span>{inst.currency}{inst.currentStop.toFixed(2)}</span>
-                      <span>Trading 212 stop now</span>
-                      <span>{inst.t212Stop != null ? `${inst.currency}${inst.t212Stop.toFixed(2)}` : "not set"}</span>
-                      <span>Set on</span>
-                      <span>{inst.stopSetDate ? fmtDate(inst.stopSetDate) : "entry day"}</span>
-                      <span>Next check</span>
-                      <span>Tomorrow evening after scan</span>
-                    </div>
+                    {(() => {
+                      const matchTrade = openTrades.find((t) => t.ticker === inst.ticker);
+                      const tradeIsRunner = (matchTrade as unknown as { isRunner?: boolean })?.isRunner === true;
+                      const runnerActivated = (matchTrade as unknown as { runnerActivatedAt?: string | null })?.runnerActivatedAt != null;
+                      const runnerPeakProfit = (matchTrade as unknown as { runnerPeakProfit?: number | null })?.runnerPeakProfit;
+
+                      if (tradeIsRunner && !runnerActivated) {
+                        // Runner Phase 1
+                        const profitPct = matchTrade && inst.latestClose != null
+                          ? ((inst.latestClose - matchTrade.entryPrice) / matchTrade.entryPrice * 100)
+                          : null;
+                        return (
+                          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[var(--amber)]">
+                            <span>Status</span>
+                            <span>HOLD — runner position, hard stop only</span>
+                            <span>Current profit</span>
+                            <span>{profitPct != null ? `+${profitPct.toFixed(1)}%` : "—"}</span>
+                            <span>Waiting for</span>
+                            <span>30% to activate wide exit</span>
+                            <span>Hard stop</span>
+                            <span>{inst.currency}{matchTrade ? matchTrade.hardStop.toFixed(2) : "—"}</span>
+                          </div>
+                        );
+                      }
+
+                      if (tradeIsRunner && runnerActivated) {
+                        // Runner Phase 2
+                        const profitPct = matchTrade && inst.latestClose != null
+                          ? ((inst.latestClose - matchTrade.entryPrice) / matchTrade.entryPrice * 100)
+                          : null;
+                        return (
+                          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#00e5ff]">
+                            <span>Status</span>
+                            <span>HOLD — RUNNER ACTIVE, wide exit logic on</span>
+                            <span>Current profit</span>
+                            <span>{profitPct != null ? `+${profitPct.toFixed(1)}%` : "—"}{runnerPeakProfit != null ? ` Peak: +${(runnerPeakProfit * 100).toFixed(1)}%` : ""}</span>
+                            <span>20-day low stop</span>
+                            <span>{inst.currency}{inst.currentStop.toFixed(2)}</span>
+                            <span>Hard stop floor</span>
+                            <span>{inst.currency}{matchTrade ? matchTrade.hardStop.toFixed(2) : "—"}</span>
+                            <span>Next check</span>
+                            <span>Tomorrow evening after scan</span>
+                          </div>
+                        );
+                      }
+
+                      // Normal HOLD
+                      return (
+                        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#555]">
+                          <span>Status</span>
+                          <span>HOLD — no action needed today{inst.actioned ? " (stop updated ✓)" : ""}</span>
+                          <span>Your stop</span>
+                          <span>{inst.currency}{inst.currentStop.toFixed(2)}</span>
+                          <span>Trading 212 stop now</span>
+                          <span>{inst.t212Stop != null ? `${inst.currency}${inst.t212Stop.toFixed(2)}` : "not set"}</span>
+                          <span>Set on</span>
+                          <span>{inst.stopSetDate ? fmtDate(inst.stopSetDate) : "entry day"}</span>
+                          <span>Next check</span>
+                          <span>Tomorrow evening after scan</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -663,14 +736,26 @@ export default function Home() {
                   const pnl = t212 ? t212.ppl : (currentPrice != null ? (currentPrice - t.entryPrice) * t.shares : null);
                   const isSyncing = syncingTradeId === t.id;
                   const displayedActiveStop = Math.max(activeStop, t212?.stopLoss ?? 0);
+                  const tradeIsRunner = (t as unknown as { isRunner?: boolean }).isRunner === true;
+                  const runnerActivated = (t as unknown as { runnerActivatedAt?: string | null }).runnerActivatedAt != null;
                   return (
                     <React.Fragment key={t.id}>
                       <tr
-                        className={`border-b border-[var(--border)] hover:bg-[#1a1a1a] cursor-pointer ${isSyncing ? "opacity-50" : ""}`}
+                        className={`border-b border-[var(--border)] hover:bg-[#1a1a1a] cursor-pointer ${isSyncing ? "opacity-50" : ""} ${tradeIsRunner ? "border-l-2 border-l-[#00e5ff]" : ""}`}
                         onClick={() => toggleExpand(t.id)}
                       >
                         <td className="px-3 py-2 font-semibold text-[var(--green)]">
                           {t.ticker}
+                          {tradeIsRunner && (
+                            <span className="ml-1.5 inline-flex items-center px-1.5 py-0 text-[9px] font-bold border border-[#00e5ff] text-[#00e5ff] rounded-none align-middle">
+                              RUN
+                            </span>
+                          )}
+                          {tradeIsRunner && (
+                            <span className={`block text-[9px] mt-0.5 ${runnerActivated ? "text-[#00e5ff]" : "text-[var(--amber)]"}`}>
+                              {runnerActivated ? "PHASE 2 — wide exit active" : "PHASE 1 — waiting for 30%"}
+                            </span>
+                          )}
                           <span className="text-[var(--dim)] text-[10px] ml-1">{isExpanded ? "▲" : "▼"}</span>
                         </td>
                         <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
@@ -1439,6 +1524,86 @@ export default function Home() {
           })()}
         </div>
       </section>
+
+      {/* ── RUNNER HISTORY ── */}
+      {(() => {
+        const runnerTrades = closedTrades.filter((t) => (t as unknown as { isRunner?: boolean }).isRunner === true);
+        if (runnerTrades.length === 0) return null;
+
+        const avgHoldDays = runnerTrades.reduce((sum, t) => {
+          const hold = t.exitDate && t.entryDate
+            ? Math.floor((new Date(t.exitDate).getTime() - new Date(t.entryDate).getTime()) / (1000 * 60 * 60 * 24))
+            : 0;
+          return sum + hold;
+        }, 0) / runnerTrades.length;
+
+        const runnerWithData = runnerTrades as unknown as Array<{
+          id: string; ticker: string; entryDate: string; exitDate: string | null;
+          entryPrice: number; exitPrice: number | null; shares: number;
+          runnerPeakProfit: number | null; runnerExitProfit: number | null;
+          runnerCaptureRate: number | null; rMultiple: number | null;
+        }>;
+
+        const avgPeak = runnerWithData.reduce((s, t) => s + (t.runnerPeakProfit ?? 0), 0) / runnerWithData.length;
+        const avgCapture = runnerWithData.filter((t) => t.runnerCaptureRate != null).reduce((s, t) => s + (t.runnerCaptureRate ?? 0), 0) / (runnerWithData.filter((t) => t.runnerCaptureRate != null).length || 1);
+        const avgExitProfit = runnerWithData.reduce((s, t) => s + (t.runnerExitProfit ?? 0), 0) / runnerWithData.length;
+
+        return (
+          <section className="mb-6">
+            <h2 className="text-sm font-semibold text-[#00e5ff] mb-2 tracking-widest">🏃 RUNNER HISTORY</h2>
+            <div className="border border-[#00e5ff]/30 bg-[var(--card)] overflow-x-auto">
+              <table className="w-full text-sm" style={mono}>
+                <thead>
+                  <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                    <th className="text-left px-3 py-2">TICKER</th>
+                    <th className="text-left px-3 py-2">ENTRY</th>
+                    <th className="text-left px-3 py-2">EXIT</th>
+                    <th className="text-right px-3 py-2">HOLD DAYS</th>
+                    <th className="text-right px-3 py-2">PEAK PROFIT</th>
+                    <th className="text-right px-3 py-2">EXIT PROFIT</th>
+                    <th className="text-right px-3 py-2">CAPTURE RATE</th>
+                    <th className="text-center px-3 py-2">RESULT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {runnerWithData.map((t) => {
+                    const holdDays = t.exitDate && t.entryDate
+                      ? Math.floor((new Date(t.exitDate).getTime() - new Date(t.entryDate).getTime()) / (1000 * 60 * 60 * 24))
+                      : 0;
+                    const isWin = (t.runnerExitProfit ?? 0) > 0;
+                    const c = tickerCurrency(t.ticker);
+                    return (
+                      <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                        <td className="px-3 py-2 font-semibold text-[#00e5ff]">{t.ticker}</td>
+                        <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
+                        <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.exitDate)}</td>
+                        <td className="px-3 py-2 text-right">{holdDays}d</td>
+                        <td className="px-3 py-2 text-right text-[var(--green)]">
+                          {t.runnerPeakProfit != null ? `+${(t.runnerPeakProfit * 100).toFixed(1)}%` : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right" style={{ color: isWin ? "var(--green)" : "var(--red)" }}>
+                          {t.runnerExitProfit != null ? `${isWin ? "+" : ""}${(t.runnerExitProfit * 100).toFixed(1)}%` : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {t.runnerCaptureRate != null ? `${(t.runnerCaptureRate * 100).toFixed(0)}%` : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          <Badge label={isWin ? "WIN" : "LOSS"} color={isWin ? "var(--green)" : "var(--red)"} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {runnerWithData.length >= 5 && (
+                <div className="px-3 py-2 text-[10px] text-[var(--dim)] border-t border-[var(--border)]" style={mono}>
+                  Runners: {runnerWithData.length} closed · Avg hold: {avgHoldDays.toFixed(0)}d · Avg peak: +{(avgPeak * 100).toFixed(1)}% · Avg capture: {(avgCapture * 100).toFixed(0)}% · Avg exit profit: {avgExitProfit >= 0 ? "+" : ""}{(avgExitProfit * 100).toFixed(1)}%
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      })()}
 
       {/* ── SCAN HISTORY ── */}
       <ScanHistorySection entries={data?.scanHistory ?? []} loading={loading} />

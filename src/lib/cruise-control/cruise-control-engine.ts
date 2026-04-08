@@ -162,11 +162,14 @@ async function updateState(data: Record<string, unknown>): Promise<void> {
  */
 const gTrackers = globalThis as unknown as {
   __ccGhostTracker?: Map<string, number>;
+  __ccOrphanTracker?: Set<string>;
   __ccRetryQueue?: Map<string, RetryItem>;
   __ccRetryTimerRef?: ReturnType<typeof setInterval> | null;
 };
 if (!gTrackers.__ccGhostTracker) gTrackers.__ccGhostTracker = new Map();
+if (!gTrackers.__ccOrphanTracker) gTrackers.__ccOrphanTracker = new Set();
 const ghostTracker: Map<string, number> = gTrackers.__ccGhostTracker;
+const orphanTracker: Set<string> = gTrackers.__ccOrphanTracker;
 
 // ── Retry Queue ─────────────────────────────────────────────────────────────
 
@@ -335,9 +338,23 @@ export async function runSinglePoll(): Promise<PollResult> {
         t212Positions,
         openTrades.map((t) => ({ ticker: t.ticker, status: "OPEN" })),
       );
-      if (recon.orphaned.length > 0) {
-        await sendAlert("critical", `Orphaned T212 positions detected: ${recon.orphaned.join(", ")}`, {
-          orphaned: recon.orphaned,
+      // ── Orphan position handling (deduplication) ─────────────────
+      // Clear orphans that resolved themselves
+      for (const tracked of orphanTracker) {
+        if (!recon.orphaned.includes(tracked)) {
+          orphanTracker.delete(tracked);
+          log.info({ ticker: tracked }, "[CRUISE-CONTROL] Orphan resolved — ticker now tracked in DB");
+        }
+      }
+
+      // Only alert for newly-detected orphans
+      const newOrphans = recon.orphaned.filter((t) => !orphanTracker.has(t));
+      for (const ticker of recon.orphaned) {
+        orphanTracker.add(ticker);
+      }
+      if (newOrphans.length > 0) {
+        await sendAlert("warning", `Orphaned T212 positions detected: ${newOrphans.join(", ")}`, {
+          orphaned: newOrphans,
         });
       }
 

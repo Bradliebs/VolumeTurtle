@@ -168,6 +168,11 @@ model Trade {
   importedAt        DateTime?
   manualEntry       Boolean   @default(false)
   lastSyncedAt      DateTime?
+  isRunner          Boolean   @default(false)
+  runnerActivatedAt DateTime? // when 30% threshold crossed
+  runnerPeakProfit  Float?    // highest % profit seen as runner
+  runnerExitProfit  Float?    // % profit at exit (filled on close)
+  runnerCaptureRate Float?    // runnerExitProfit / runnerPeakProfit
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -269,6 +274,9 @@ model AppSettings {
   scoreWeightBreakout   Float    @default(0.30)
   scoreWeightSector     Float    @default(0.25)
   scoreWeightLiquidity  Float    @default(0.10)
+  runnerEnabled         Boolean  @default(true)
+  runnerProfitThreshold Float    @default(0.30)
+  runnerLookbackDays    Int      @default(20)
   updatedAt             DateTime @updatedAt
 }
 

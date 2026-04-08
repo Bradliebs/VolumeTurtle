@@ -14,6 +14,9 @@ const db = prisma as unknown as {
       scoreWeightBreakout: number;
       scoreWeightSector: number;
       scoreWeightLiquidity: number;
+      runnerEnabled: boolean;
+      runnerProfitThreshold: number;
+      runnerLookbackDays: number;
     } | null>;
     upsert: (args: unknown) => Promise<unknown>;
   };
@@ -33,6 +36,9 @@ export async function GET(req: Request) {
     scoreWeightBreakout: row?.scoreWeightBreakout ?? config.SCORE_WEIGHT_BREAKOUT,
     scoreWeightSector: row?.scoreWeightSector ?? config.SCORE_WEIGHT_SECTOR,
     scoreWeightLiquidity: row?.scoreWeightLiquidity ?? config.SCORE_WEIGHT_LIQUIDITY,
+    runnerEnabled: row?.runnerEnabled ?? true,
+    runnerProfitThreshold: row?.runnerProfitThreshold ?? 0.30,
+    runnerLookbackDays: row?.runnerLookbackDays ?? 20,
   });
 }
 
@@ -49,6 +55,9 @@ export async function POST(req: NextRequest) {
     scoreWeightBreakout,
     scoreWeightSector,
     scoreWeightLiquidity,
+    runnerEnabled,
+    runnerProfitThreshold,
+    runnerLookbackDays,
   } = body as {
     momentumEnabled?: boolean;
     breakoutMinChg?: number;
@@ -57,6 +66,9 @@ export async function POST(req: NextRequest) {
     scoreWeightBreakout?: number;
     scoreWeightSector?: number;
     scoreWeightLiquidity?: number;
+    runnerEnabled?: boolean;
+    runnerProfitThreshold?: number;
+    runnerLookbackDays?: number;
   };
 
   // Validate weights sum to ~1.0 if all four provided
@@ -85,6 +97,9 @@ export async function POST(req: NextRequest) {
       scoreWeightBreakout: scoreWeightBreakout ?? 0.30,
       scoreWeightSector: scoreWeightSector ?? 0.25,
       scoreWeightLiquidity: scoreWeightLiquidity ?? 0.10,
+      runnerEnabled: runnerEnabled ?? true,
+      runnerProfitThreshold: runnerProfitThreshold ?? 0.30,
+      runnerLookbackDays: runnerLookbackDays ?? 20,
     },
     update: {
       ...(momentumEnabled != null && { momentumEnabled }),
@@ -94,6 +109,9 @@ export async function POST(req: NextRequest) {
       ...(scoreWeightBreakout != null && { scoreWeightBreakout }),
       ...(scoreWeightSector != null && { scoreWeightSector }),
       ...(scoreWeightLiquidity != null && { scoreWeightLiquidity }),
+      ...(runnerEnabled != null && { runnerEnabled }),
+      ...(runnerProfitThreshold != null && { runnerProfitThreshold }),
+      ...(runnerLookbackDays != null && { runnerLookbackDays }),
     },
   });
 

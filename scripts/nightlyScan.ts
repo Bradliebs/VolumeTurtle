@@ -272,6 +272,25 @@ async function main() {
             data: { trailingStop: newTrailingStop, trailingStopPrice: newTrailingStop, atr20 },
           });
         }
+
+        // Runner exit metrics
+        const runnerData: Record<string, unknown> = {};
+        if (trade.isRunner) {
+          const exitProfitPct = (currentClose - trade.entryPrice) / trade.entryPrice;
+          const captureRate = trade.runnerPeakProfit
+            ? exitProfitPct / trade.runnerPeakProfit
+            : null;
+          runnerData.runnerExitProfit = exitProfitPct;
+          runnerData.runnerCaptureRate = captureRate;
+
+          const holdDays = Math.floor(
+            (Date.now() - new Date(trade.entryDate).getTime()) / (1000 * 60 * 60 * 24),
+          );
+          console.log(
+            `  [RUNNER EXIT] ${trade.ticker} — Peak: +${((trade.runnerPeakProfit ?? 0) * 100).toFixed(1)}% Exit: ${exitProfitPct >= 0 ? "+" : ""}${(exitProfitPct * 100).toFixed(1)}% Capture: ${captureRate != null ? (captureRate * 100).toFixed(0) : "—"}% Hold: ${holdDays}d`,
+          );
+        }
+
         await prisma.trade.update({
           where: { id: trade.id },
           data: {
@@ -280,6 +299,7 @@ async function main() {
             exitPrice: currentClose,
             exitReason,
             rMultiple,
+            ...runnerData,
           },
         });
       }
@@ -397,6 +417,57 @@ async function main() {
             atr20: signal.atr20,
           },
         });
+
+        // ── Runner designation ────────────────────────────────────────
+        try {
+          const appSettings = await prisma.appSettings.findFirst({ orderBy: { id: "asc" } });
+          const runnerEnabled = (appSettings as unknown as { runnerEnabled?: boolean })?.runnerEnabled ?? true;
+
+          if (runnerEnabled) {
+            // Check if runner slot is available
+            const existingRunner = await prisma.trade.findFirst({
+              where: { isRunner: true, status: "OPEN" },
+            });
+
+            if (!existingRunner) {
+              // Check convergence: both volume and momentum fired for this ticker today
+              const dayStart = new Date(today);
+              dayStart.setHours(0, 0, 0, 0);
+              const dayEnd = new Date(today);
+              dayEnd.setHours(23, 59, 59, 999);
+
+              const [volHit, momHit] = await Promise.all([
+                prisma.scanResult.findFirst({
+                  where: { ticker: signal.ticker, signalFired: true, scanDate: { gte: dayStart, lte: dayEnd } },
+                }),
+                prisma.momentumSignal.findFirst({
+                  where: { ticker: signal.ticker, createdAt: { gte: dayStart, lte: dayEnd }, status: "active" },
+                }),
+              ]);
+
+              const isConvergence = volHit != null && momHit != null;
+              const score = signal.compositeScore ?? 0;
+              const shouldDesignate = isConvergence || score >= 0.55;
+
+              if (shouldDesignate) {
+                const newTrade = await prisma.trade.findFirst({
+                  where: { ticker: signal.ticker, status: "OPEN" },
+                  orderBy: { createdAt: "desc" },
+                });
+                if (newTrade) {
+                  await prisma.trade.update({
+                    where: { id: newTrade.id },
+                    data: { isRunner: true },
+                  });
+                  const reason = isConvergence ? "convergence (volume + momentum)" : `Grade ${score >= 0.75 ? "A" : "B"} (${score.toFixed(2)})`;
+                  console.log(`  [RUNNER] ${signal.ticker} designated as runner — ${reason}`);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.log(`  [WARN] Runner designation failed for ${signal.ticker}: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       openCount++;

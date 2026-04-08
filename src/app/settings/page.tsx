@@ -89,6 +89,16 @@ export default function SettingsPage() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
 
+  // Runner state
+  const [runnerEnabled, setRunnerEnabled] = useState(true);
+  const [runnerThreshold, setRunnerThreshold] = useState("30");
+  const [runnerLookback, setRunnerLookback] = useState("20");
+  const [runnerTicker, setRunnerTicker] = useState<string | null>(null);
+  const [runnerSlotAvailable, setRunnerSlotAvailable] = useState(true);
+  const [runnerPhase, setRunnerPhase] = useState<string>("none");
+  const [runnerSaving, setRunnerSaving] = useState(false);
+  const [runnerStatus, setRunnerStatus] = useState<string | null>(null);
+
   function showError(msg: string) {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 6000);
@@ -100,6 +110,7 @@ export default function SettingsPage() {
     fetchTelegramStatus();
     fetchMomentumSettings();
     fetchAlerts();
+    fetchRunnerStatus();
   }, []);
 
   async function fetchBackupStatus() {
@@ -248,6 +259,51 @@ export default function SettingsPage() {
       }
     } catch { /* silent */ }
     setAlertsLoading(false);
+  }
+
+  async function fetchRunnerStatus() {
+    try {
+      const [runnerRes, momRes] = await Promise.all([
+        fetch("/api/trades/runner"),
+        fetch("/api/settings/momentum"),
+      ]);
+      if (runnerRes.ok) {
+        const d = await runnerRes.json();
+        setRunnerTicker(d.runner?.ticker ?? null);
+        setRunnerSlotAvailable(d.slotAvailable);
+        setRunnerPhase(d.phase);
+      }
+      if (momRes.ok) {
+        const d = await momRes.json();
+        if (d.runnerEnabled !== undefined) setRunnerEnabled(d.runnerEnabled);
+        if (d.runnerProfitThreshold !== undefined) setRunnerThreshold(String(Math.round(d.runnerProfitThreshold * 100)));
+        if (d.runnerLookbackDays !== undefined) setRunnerLookback(String(d.runnerLookbackDays));
+      }
+    } catch { /* silent */ }
+  }
+
+  async function saveRunnerSettings() {
+    setRunnerSaving(true);
+    setRunnerStatus(null);
+    try {
+      const res = await fetch("/api/settings/momentum", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runnerEnabled,
+          runnerProfitThreshold: parseFloat(runnerThreshold) / 100,
+          runnerLookbackDays: parseInt(runnerLookback, 10),
+        }),
+      });
+      if (res.ok) {
+        setRunnerStatus("✓ Saved");
+        setTimeout(() => setRunnerStatus(null), 3000);
+      } else {
+        const d = await res.json().catch(() => ({ error: "Failed" }));
+        setRunnerStatus(`✗ ${d.error ?? "Failed"}`);
+      }
+    } catch { setRunnerStatus("✗ Network error"); }
+    setRunnerSaving(false);
   }
 
   async function acknowledgeAlert(id: number) {
@@ -771,6 +827,70 @@ export default function SettingsPage() {
               ))}
             </>
           )}
+        </div>
+      </section>
+
+      {/* RUNNER MANDATE */}
+      <section className="mb-8">
+        <h2 className="text-xs font-semibold text-[#00e5ff] mb-4 tracking-widest border-b border-[#00e5ff]/30 pb-2">
+          🏃 RUNNER MANDATE
+        </h2>
+        <div className="space-y-4 text-xs" style={mono}>
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Runner mandate</span>
+            <button
+              onClick={() => setRunnerEnabled(!runnerEnabled)}
+              className={`w-10 h-5 rounded-full transition-colors relative ${runnerEnabled ? "bg-[#00e5ff]" : "bg-[#333]"}`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${runnerEnabled ? "left-5" : "left-0.5"}`} />
+            </button>
+            <span className="text-[var(--dim)]">{runnerEnabled ? "Enabled — one runner per cycle" : "Disabled"}</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Profit threshold</span>
+            <input type="number" step="5" min="10" max="100" value={runnerThreshold} onChange={(e) => setRunnerThreshold(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[#00e5ff] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">% to activate wide exit</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Lookback period</span>
+            <input type="number" step="1" min="5" max="60" value={runnerLookback} onChange={(e) => setRunnerLookback(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[#00e5ff] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">days (wide exit trailing stop window)</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Phase 1 logic</span>
+            <span className="text-[#555]">Hard stop only (fixed)</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Current runner</span>
+            {runnerTicker ? (
+              <span className="text-[#00e5ff] font-bold">{runnerTicker}</span>
+            ) : (
+              <span className="text-[#555]">None</span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Runner slot</span>
+            <span className={runnerSlotAvailable ? "text-[var(--green)]" : "text-[var(--amber)]"}>
+              {runnerSlotAvailable ? "AVAILABLE" : "OCCUPIED"}
+            </span>
+            {runnerPhase !== "none" && (
+              <span className={`text-[10px] ${runnerPhase === "active" ? "text-[#00e5ff]" : "text-[var(--amber)]"}`}>
+                {runnerPhase === "active" ? "Phase 2 — wide exit" : "Phase 1 — waiting"}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <button onClick={saveRunnerSettings} disabled={runnerSaving} className="px-4 py-2 border border-[#00e5ff] text-[#00e5ff] hover:bg-[#00e5ff] hover:text-black transition-colors uppercase tracking-wider text-[10px] font-semibold disabled:opacity-40">
+              {runnerSaving ? "SAVING…" : "▶ SAVE"}
+            </button>
+            {runnerStatus && <span className={runnerStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{runnerStatus}</span>}
+          </div>
         </div>
       </section>
 

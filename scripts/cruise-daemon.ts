@@ -150,6 +150,9 @@ interface OpenTrade {
   hardStopPrice: number | null;
   trailingStopPrice: number | null;
   signalSource: string;
+  isRunner: boolean;
+  runnerActivatedAt: Date | null;
+  runnerPeakProfit: number | null;
 }
 
 const db = prisma as unknown as {
@@ -177,6 +180,12 @@ const db = prisma as unknown as {
       create: Record<string, unknown>;
       update: Record<string, unknown>;
     }) => Promise<unknown>;
+  };
+  appSettings: {
+    findFirst: (args?: unknown) => Promise<{
+      runnerProfitThreshold: number;
+      runnerLookbackDays: number;
+    } | null>;
   };
 };
 
@@ -248,6 +257,11 @@ async function main(): Promise<void> {
   const since = new Date();
   since.setDate(since.getDate() - 60);
 
+  // Load runner settings
+  const runnerSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+  const runnerThreshold = runnerSettings?.runnerProfitThreshold ?? 0.30;
+  const runnerLookbackDays = runnerSettings?.runnerLookbackDays ?? 20;
+
   for (const trade of openTrades) {
     positionsChecked++;
 
@@ -293,6 +307,139 @@ async function main(): Promise<void> {
     const daysSinceEntry = Math.floor(
       (Date.now() - new Date(trade.entryDate).getTime()) / (1000 * 60 * 60 * 24),
     );
+
+    // ── Runner branch ────────────────────────────────────────────────
+    if (trade.isRunner) {
+      const profitFrac = (currentPrice - trade.entryPrice) / trade.entryPrice;
+      const hardStop = trade.hardStopPrice ?? trade.hardStop;
+      const currentTrailing = trade.trailingStopPrice ?? trade.trailingStop;
+      const currentStop = Math.max(hardStop, currentTrailing);
+
+      if (profitFrac < runnerThreshold) {
+        // Phase 1: hard stop only — no trailing ratchet
+        logLine("INFO", `${trade.ticker}: RUNNER phase 1 (${(profitFrac * 100).toFixed(1)}% profit, waiting for ${(runnerThreshold * 100).toFixed(0)}%)`);
+        stopsUnchanged++;
+        continue;
+      }
+
+      // Phase 2: activate and use wide trailing stop
+      if (!trade.runnerActivatedAt) {
+        await db.trade.update({
+          where: { id: trade.id },
+          data: { runnerActivatedAt: new Date() },
+        });
+        logLine("INFO", `${trade.ticker}: RUNNER ACTIVATED at +${(profitFrac * 100).toFixed(1)}%`);
+        await notify(
+          `🏃 <b>RUNNER ACTIVATED — ${trade.ticker}</b> +${(profitFrac * 100).toFixed(1)}%\n` +
+          `Wide exit logic now active (${runnerLookbackDays}-day low)`,
+        );
+      }
+
+      // Calculate wide trailing stop (N-day low)
+      const window = candles.slice(-Math.max(1, runnerLookbackDays));
+      const runnerTrailingStop = window.length >= 5 ? Math.min(...window.map((c) => c.close)) : 0;
+      if (runnerTrailingStop <= 0) {
+        stopsUnchanged++;
+        continue;
+      }
+
+      const peakProfit = Math.max(trade.runnerPeakProfit ?? 0, profitFrac);
+      const ratcheted = runnerTrailingStop > currentTrailing;
+      const newStop = ratcheted ? runnerTrailingStop : currentTrailing;
+      const activeStop = Math.max(hardStop, newStop);
+
+      // T212 floor
+      const t212Stop = t212StopMap.get(trade.ticker.toUpperCase()) ?? null;
+      if (t212Stop != null && newStop < t212Stop) {
+        // Update peak profit even if stop didn't change
+        if (peakProfit > (trade.runnerPeakProfit ?? 0)) {
+          await db.trade.update({
+            where: { id: trade.id },
+            data: { runnerPeakProfit: peakProfit },
+          });
+        }
+        stopsUnchanged++;
+        continue;
+      }
+
+      // Update DB
+      const updateData: Record<string, unknown> = { runnerPeakProfit: peakProfit };
+      if (ratcheted) {
+        updateData.trailingStop = newStop;
+        updateData.trailingStopPrice = newStop;
+        updateData.stopSource = "runner_trailing";
+        stopsRatcheted++;
+
+        const profitPct = profitFrac * 100;
+        const ratchetPct = currentStop > 0 ? ((newStop - currentStop) / currentStop) * 100 : 0;
+
+        logLine("INFO", `${trade.ticker}: RUNNER stop ratcheted ${currentStop.toFixed(2)} → ${newStop.toFixed(2)} (${runnerLookbackDays}d low)`, {
+          ticker: trade.ticker,
+          oldStop: currentStop,
+          newStop,
+          ratchetPct: +ratchetPct.toFixed(2),
+          profitPct: +profitPct.toFixed(2),
+        });
+
+        // Push to T212
+        const t212Result = await updateStopOnT212(trade.ticker, trade.shares, currentStop, newStop);
+        const t212Ok = t212Result.success;
+        if (!t212Ok) retryFailures++;
+
+        await db.cruiseControlRatchetEvent.create({
+          data: {
+            positionType: "momentum",
+            positionId: trade.id,
+            ticker: trade.ticker,
+            pollTimestamp: pollStart,
+            oldStop: currentStop,
+            newStop,
+            ratchetPct,
+            currentPrice,
+            profitPct,
+            atrUsed: atr,
+            t212Updated: t212Ok,
+            t212Response: t212Result.t212Response ?? null,
+          },
+        });
+
+        ratchets.push({
+          ticker: trade.ticker,
+          oldStop: currentStop,
+          newStop,
+          currentPrice,
+          atr,
+          profitPct,
+          positionType: "momentum",
+          t212Ok,
+        });
+
+        const c = sym(trade.ticker);
+        await notify(
+          `🏃 <b>Runner Stop Ratcheted — ${trade.ticker}</b>\n` +
+          `Old stop: ${c}${currentStop.toFixed(2)} → New stop: ${c}${newStop.toFixed(2)}\n` +
+          `Current price: ${c}${currentPrice.toFixed(2)} | Profit: +${profitPct.toFixed(1)}%\n` +
+          `Peak: +${(peakProfit * 100).toFixed(1)}% | Exit: ${runnerLookbackDays}d low\n` +
+          `T212: ${t212Ok ? "✓ Pushed" : "✗ Failed"}`,
+        );
+      } else {
+        stopsUnchanged++;
+        logLine("INFO", `${trade.ticker}: RUNNER phase 2 — no ratchet needed (${runnerLookbackDays}d low ${runnerTrailingStop.toFixed(2)} ≤ current trailing ${currentTrailing.toFixed(2)})`, {
+          ticker: trade.ticker,
+          profitPct: +(profitFrac * 100).toFixed(1),
+          peakPct: +(peakProfit * 100).toFixed(1),
+          runnerTrailingStop,
+          currentTrailing,
+        });
+      }
+
+      await db.trade.update({
+        where: { id: trade.id },
+        data: updateData,
+      });
+      continue; // runner handled — skip normal ratchet
+    }
+    // ── End runner branch ──────────────────────────────────────────────
 
     // ── Calculate ratcheted stop ────────────────────────────────────────
     const newStop = calculateRatchetedStop({
@@ -551,6 +698,10 @@ async function runIntradayScan(openTrades: OpenTrade[]): Promise<IntradaySignal[
 
     logLine("INFO", `Intraday scan complete: ${signals.length} signal(s) found`);
 
+    // Sort signals by grade: A first, then B, C, D
+    const gradeOrder: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
+    signals.sort((a, b) => (gradeOrder[a.grade] ?? 9) - (gradeOrder[b.grade] ?? 9) || b.score - a.score);
+
     // Send individual Telegram for each signal
     for (const sig of signals) {
       const c = sym(sig.ticker);
@@ -609,7 +760,9 @@ async function sendSummary(
 
   if (intradaySignals.length > 0) {
     lines.push(`New signals found: ${intradaySignals.length}`);
-    for (const s of intradaySignals) {
+    const gradeOrder: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
+    const sorted = [...intradaySignals].sort((a, b) => (gradeOrder[a.grade] ?? 9) - (gradeOrder[b.grade] ?? 9) || b.score - a.score);
+    for (const s of sorted) {
       lines.push(`${s.ticker} — Grade ${s.grade} (${s.score}) ${s.signalSource}`);
     }
     lines.push(`─────────────────────`);

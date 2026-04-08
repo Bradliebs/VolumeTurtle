@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { closeTradeSchema, validateBody } from "@/lib/validation";
 import { createLogger } from "@/lib/logger";
+import { sendTelegram } from "@/lib/telegram";
 
 const log = createLogger("api/trades/:id");
 
@@ -31,6 +32,33 @@ export async function PATCH(
         ? (exitPrice - trade.entryPrice) / riskPerShare
         : 0;
 
+    // Runner exit metrics
+    const runnerData: Record<string, unknown> = {};
+    if (trade.isRunner) {
+      const exitProfitPct = (exitPrice - trade.entryPrice) / trade.entryPrice;
+      const captureRate = trade.runnerPeakProfit
+        ? exitProfitPct / trade.runnerPeakProfit
+        : null;
+      runnerData.runnerExitProfit = exitProfitPct;
+      runnerData.runnerCaptureRate = captureRate;
+
+      const holdDays = Math.floor(
+        (Date.now() - new Date(trade.entryDate).getTime()) / (1000 * 60 * 60 * 24),
+      );
+      try {
+        await sendTelegram({
+          text:
+            `🏁 <b>RUNNER CLOSED — ${trade.ticker}</b>\n` +
+            `Entry: $${trade.entryPrice.toFixed(2)} → Exit: $${exitPrice.toFixed(2)}\n` +
+            `Profit: ${exitProfitPct >= 0 ? "+" : ""}${(exitProfitPct * 100).toFixed(1)}%\n` +
+            `Peak was: +${((trade.runnerPeakProfit ?? 0) * 100).toFixed(1)}%\n` +
+            `Captured: ${captureRate != null ? (captureRate * 100).toFixed(0) : "—"}% of peak move\n` +
+            `Hold time: ${holdDays} days`,
+          parseMode: "HTML",
+        });
+      } catch { /* best effort */ }
+    }
+
     const updated = await prisma.trade.update({
       where: { id },
       data: {
@@ -39,6 +67,7 @@ export async function PATCH(
         exitPrice,
         exitReason: "MANUAL",
         rMultiple,
+        ...runnerData,
       },
     });
 
