@@ -9,6 +9,8 @@
 - T212 rate limits are strict: stop orders = 1 req/2s, pending orders = 1 req/5s. Always add delays between sequential calls.
 - `t212Fetch` must retry on 429 with exponential backoff using `x-ratelimit-reset` header.
 - The stop push flow (getPositions + getPendingOrders + cancelOrder + placeStopOrder) is 4+ calls — needs ~3s delay between lookup and order operations.
+- Stop push routes must not do duplicate hot-path `/equity/orders` reads before calling `updateStopOnT212()`. `GET /equity/orders` is `1 req / 5s`; two immediate reads can trigger false-looking 429s even for single stop updates.
+- In-memory endpoint pacing only protects a single process. If API routes and cruise-control daemon run concurrently, coordinate T212 pacing through shared storage (e.g. `Settings` compare-and-set throttle keys) to avoid cross-process 429 collisions.
 - When T212 stop is already at or above the requested level, return success (no-op) instead of an error — the user doesn't need to know it was a no-op.
 - System stops and T212 stops are two separate data sources — they can drift apart. T212 may be higher if the user manually raised it. Always treat T212's stop as a floor: if T212 > system, pull system up. Never instruct the user to lower a T212 stop.
 - The T212 portfolio table and daily instructions must use the SAME stop source for tracked positions (database trade stops, not fresh market calculations).

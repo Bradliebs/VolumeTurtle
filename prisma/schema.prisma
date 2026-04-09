@@ -160,6 +160,14 @@ model Trade {
   signalSource  String    @default("volume") // "volume" | "momentum" | "manual"
   signalScore   Float?    // composite score at time of entry
   signalGrade   String?   // "A" | "B" | "C" | "D"
+  timingScore            Float?
+  closeStrength          Float?
+  volumeExpansion        Float?
+  rangeStability         Float?
+  flowFlag               Boolean?
+  flowType               String?
+  timingGatePass         Boolean?
+  positionSizeMultiplier Float?
   hardStopPrice     Float?
   trailingStopPrice Float?
   peakClosePrice    Float?

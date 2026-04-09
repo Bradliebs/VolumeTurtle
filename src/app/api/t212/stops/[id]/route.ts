@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
-import { loadT212Settings, updateStopOnT212, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { loadT212Settings, updateStopOnT212, getCachedT212Positions } from "@/lib/t212/client";
 import { enforceMonotonicStop } from "@/lib/trades/utils";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
@@ -72,8 +72,8 @@ export async function POST(
     // T212 FLOOR: check if T212 already has a higher stop
     let t212CurrentStop: number | null = null;
     try {
-      const positions = await getPositionsWithStopsMapped(t212Settings);
-      const t212Pos = positions.find((p) => p.ticker === trade.ticker);
+      const cached = await getCachedT212Positions(t212Settings);
+      const t212Pos = cached.positions.find((p) => p.ticker === trade.ticker);
       t212CurrentStop = t212Pos?.stopLoss ?? null;
     } catch {
       // If we can't check T212, proceed with the push
@@ -135,9 +135,18 @@ export async function POST(
     });
   } catch (err) {
     log.error({ err }, "Failed to push stop to T212");
+
+    const message = err instanceof Error ? err.message : "Failed to update stop on T212";
+    const upstreamRateLimited = /rate limit|rate limited|429/i.test(message);
+
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to update stop on T212" },
-      { status: 500 },
+      {
+        error: message,
+        ...(upstreamRateLimited
+          ? { hint: "Trading 212 temporarily rate-limited this request. Retry in a few seconds." }
+          : {}),
+      },
+      { status: upstreamRateLimited ? 429 : 500 },
     );
   }
 }

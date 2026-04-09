@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/db/client";
+import { scoreTimingGate } from "@/lib/timing-scorer";
 import { loadT212Settings, buyWithStop } from "@/lib/t212/client";
 import { validateBody } from "@/lib/validation";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
@@ -20,7 +21,23 @@ const buySchema = z.object({
   signalSource: z.string().optional(),
   signalScore: z.number().optional(),
   signalGrade: z.string().optional(),
+  close: z.number().optional(),
+  high: z.number().optional(),
+  low: z.number().optional(),
+  volume: z.number().optional(),
+  avgVolume20: z.number().optional(),
+  atr14: z.number().optional(),
 });
+
+const db = prisma as unknown as {
+  trade: {
+    findFirst: (args: { where: { ticker: string; status: string } }) => Promise<{ id: string } | null>;
+    create: (args: { data: Record<string, unknown> }) => Promise<{ id: string }>;
+  };
+  stopHistory: {
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+  };
+};
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,10 +61,11 @@ export async function POST(req: NextRequest) {
     const {
       ticker, shares, suggestedEntry, hardStop, riskPerShare,
       volumeRatio, rangePosition, atr20, signalSource, signalScore, signalGrade,
+      close, high, low, volume, avgVolume20, atr14,
     } = parsed.data!;
 
     // Prevent duplicate open trades for the same ticker
-    const existingOpen = await prisma.trade.findFirst({
+    const existingOpen = await db.trade.findFirst({
       where: { ticker, status: "OPEN" },
     });
     if (existingOpen) {
@@ -57,13 +75,76 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    log.info({ ticker, shares, suggestedEntry, hardStop }, "Placing market buy order on T212");
+    const hasAllTimingFields = close != null
+      && high != null
+      && low != null
+      && volume != null
+      && avgVolume20 != null
+      && atr14 != null;
+
+    if (!hasAllTimingFields) {
+      console.info("[FTA] bypass broker gate", { ticker, reason: "timing_fields_missing" });
+    }
+
+    const timingResult = hasAllTimingFields
+      ? scoreTimingGate({
+          close,
+          high,
+          low,
+          volume,
+          avgVolume20,
+          atr14,
+          entryDate: new Date(),
+        })
+      : null;
+
+    if (timingResult && !timingResult.timingGatePass) {
+      console.warn("[FTA] block broker gate", {
+        ticker,
+        timingScore: timingResult.timingScore,
+        flowFlag: timingResult.flowFlag,
+        flowType: timingResult.flowType,
+      });
+      return NextResponse.json(
+        {
+          error: "TIMING_GATE_BLOCKED",
+          message: `Trade blocked: timingScore ${timingResult.timingScore}/100 (minimum 70 required)`,
+          timingScore: timingResult.timingScore,
+          timingResult,
+        },
+        { status: 422 },
+      );
+    }
+
+    let adjustedShares = shares;
+    if (timingResult) {
+      console.info("[FTA] pass broker gate", {
+        ticker,
+        timingScore: timingResult.timingScore,
+        flowFlag: timingResult.flowFlag,
+        flowType: timingResult.flowType,
+      });
+      adjustedShares = Math.round((shares * timingResult.positionSizeMultiplier) * 10_000) / 10_000;
+      log.info(
+        {
+          ticker,
+          baseShares: shares,
+          adjustedShares,
+          multiplier: timingResult.positionSizeMultiplier,
+          timingScore: timingResult.timingScore,
+          flowType: timingResult.flowType,
+        },
+        "[FTA] Applied broker timing multiplier before T212 call",
+      );
+    }
+
+    log.info({ ticker, shares: adjustedShares, suggestedEntry, hardStop }, "Placing market buy order on T212");
 
     // Place market buy + stop on T212
     const { marketOrder, stopOrder } = await buyWithStop(
       settings,
       ticker,
-      shares,
+      adjustedShares,
       hardStop,
     );
 
@@ -73,12 +154,12 @@ export async function POST(req: NextRequest) {
     );
 
     // Record trade in database
-    const trade = await prisma.trade.create({
+    const trade = await db.trade.create({
       data: {
         ticker,
         entryDate: new Date(),
         entryPrice: suggestedEntry,
-        shares,
+        shares: adjustedShares,
         hardStop,
         trailingStop: hardStop,
         status: "OPEN",
@@ -88,11 +169,19 @@ export async function POST(req: NextRequest) {
         signalSource: signalSource ?? "volume",
         signalScore: signalScore ?? null,
         signalGrade: signalGrade ?? null,
+        timingScore: timingResult?.timingScore ?? null,
+        closeStrength: timingResult?.closeStrength ?? null,
+        volumeExpansion: timingResult?.volumeExpansion ?? null,
+        rangeStability: timingResult?.rangeStability ?? null,
+        flowFlag: timingResult?.flowFlag ?? null,
+        flowType: timingResult?.flowType ?? null,
+        timingGatePass: timingResult?.timingGatePass ?? null,
+        positionSizeMultiplier: timingResult?.positionSizeMultiplier ?? null,
       },
     });
 
     // Write initial stop history record
-    await prisma.stopHistory.create({
+    await db.stopHistory.create({
       data: {
         tradeId: trade.id,
         date: new Date(),

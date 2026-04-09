@@ -172,6 +172,7 @@ export async function GET(request: NextRequest) {
     // Load T212 positions to avoid auto-closing trades still held on T212
     let t212Tickers: Set<string> | null = null;
     const t212Settings = loadT212Settings();
+    const t212Configured = t212Settings != null;
     if (t212Settings) {
       try {
         const cached = await getCachedT212Positions(t212Settings);
@@ -193,6 +194,14 @@ export async function GET(request: NextRequest) {
       const trailingBreached = !stopBreached && shouldExit(currentClose, quotes);
 
       if (stopBreached || trailingBreached) {
+        if (t212Configured && t212Tickers == null) {
+          log.warn(
+            { ticker: trade.ticker, close: currentClose, stop: stopBreached ? trade.hardStop : trade.trailingStop },
+            "Stop breached but T212 holdings unavailable — skipping auto-close",
+          );
+          continue;
+        }
+
         // If T212 says position is still held, skip auto-close
         if (t212Tickers?.has(trade.ticker)) {
           log.warn(

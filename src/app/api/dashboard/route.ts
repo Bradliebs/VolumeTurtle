@@ -12,6 +12,7 @@ import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 import { calculateATR20 } from "@/lib/risk/atr";
 import { calculateTrailingLow } from "@/lib/signals/exitSignal";
+import { findDuplicateClosedEntryIds, findDuplicateClosedTradeIds, findPhantomClosedTradeIds } from "@/lib/trades/status";
 
 const log = createLogger("api/dashboard");
 
@@ -44,7 +45,7 @@ export async function GET(req: Request) {
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-  const [account, openTrades, recentSignals, closedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
+  const [account, openTrades, recentSignals, rawClosedTrades, lastScan, scanHistory, lastLseScan, lastUsScan, lastBackupSetting] =
     await Promise.all([
       prisma.accountSnapshot.findFirst({ orderBy: { date: "desc" } }),
       prisma.trade.findMany({
@@ -85,10 +86,19 @@ export async function GET(req: Request) {
     ]);
 
   // Get total counts for pagination
-  const [totalClosedTrades, totalSignals] = await Promise.all([
+  const [rawTotalClosedTrades, totalSignals] = await Promise.all([
     prisma.trade.count({ where: { status: "CLOSED" } }),
     prisma.scanResult.count({ where: { scanDate: { gte: thirtyDaysAgo }, signalFired: true } }),
   ]);
+
+  let closedTrades = rawClosedTrades;
+  let totalClosedTrades = rawTotalClosedTrades;
+
+  const duplicateClosedEntryIds = findDuplicateClosedEntryIds(rawClosedTrades);
+  if (duplicateClosedEntryIds.size > 0) {
+    closedTrades = closedTrades.filter((trade) => !duplicateClosedEntryIds.has(trade.id));
+    totalClosedTrades = Math.max(0, totalClosedTrades - duplicateClosedEntryIds.size);
+  }
 
   // Fetch current market regime (QQQ + VIX)
   let regime: RegimeState | null = null;
@@ -126,6 +136,66 @@ export async function GET(req: Request) {
       t212Loaded = true;
     } catch (err) {
       log.warn({ err }, "T212 fetch failed");
+    }
+  }
+
+  const openTickers = Array.from(new Set(openTrades.map((trade) => trade.ticker)));
+  if (openTickers.length > 0) {
+    const candidateDuplicateClosedTrades = await prisma.trade.findMany({
+      where: {
+        status: "CLOSED",
+        ticker: { in: openTickers },
+      },
+      select: {
+        id: true,
+        ticker: true,
+        entryDate: true,
+        exitDate: true,
+        entryPrice: true,
+        shares: true,
+      },
+    });
+
+    const duplicateClosedTradeIds = findDuplicateClosedTradeIds({
+      openTrades,
+      closedTrades: candidateDuplicateClosedTrades,
+    });
+
+    if (duplicateClosedTradeIds.size > 0) {
+      closedTrades = rawClosedTrades.filter((trade) => !duplicateClosedTradeIds.has(trade.id));
+      totalClosedTrades = Math.max(0, totalClosedTrades - duplicateClosedTradeIds.size);
+    }
+  }
+
+  if (t212Loaded && t212Positions.length > 0) {
+    const heldTickers = Array.from(new Set(t212Positions.map((position) => position.ticker)));
+    const openTickerSet = new Set(openTrades.map((trade) => trade.ticker));
+    const heldUntrackedTickers = heldTickers.filter((ticker) => !openTickerSet.has(ticker));
+
+    if (heldUntrackedTickers.length > 0) {
+      const candidateClosedTrades = await prisma.trade.findMany({
+        where: {
+          status: "CLOSED",
+          ticker: { in: heldUntrackedTickers },
+        },
+        select: {
+          id: true,
+          ticker: true,
+          entryDate: true,
+          exitDate: true,
+        },
+      });
+
+      const phantomClosedTradeIds = findPhantomClosedTradeIds({
+        openTrades,
+        closedTrades: candidateClosedTrades,
+        heldTickers,
+      });
+
+      if (phantomClosedTradeIds.size > 0) {
+        closedTrades = closedTrades.filter((trade) => !phantomClosedTradeIds.has(trade.id));
+        totalClosedTrades = Math.max(0, totalClosedTrades - phantomClosedTradeIds.size);
+      }
     }
   }
 

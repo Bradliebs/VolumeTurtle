@@ -7,6 +7,7 @@ import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
+import { findDuplicateClosedEntryIds, findDuplicateClosedTradeIds, findPhantomClosedTradeIds } from "@/lib/trades/status";
 import type {
   PeriodStats,
   MonthStat,
@@ -170,7 +171,19 @@ export async function GET(req: Request) {
 
     // Split open / closed
     const openTrades = allTrades.filter((t) => t.status === "OPEN");
-    const closedTrades = allTrades.filter((t) => t.status === "CLOSED");
+    let closedTrades = allTrades.filter((t) => t.status === "CLOSED");
+    const duplicateClosedEntryIds = findDuplicateClosedEntryIds(closedTrades);
+    if (duplicateClosedEntryIds.size > 0) {
+      closedTrades = closedTrades.filter((trade) => !duplicateClosedEntryIds.has(trade.id));
+    }
+
+    const duplicateClosedTradeIds = findDuplicateClosedTradeIds({
+      openTrades,
+      closedTrades,
+    });
+    if (duplicateClosedTradeIds.size > 0) {
+      closedTrades = closedTrades.filter((trade) => !duplicateClosedTradeIds.has(trade.id));
+    }
 
     // Fetch current prices for open trades (needed for both period stats and sidebar)
     const openTickers = openTrades.map((t) => t.ticker);
@@ -333,13 +346,24 @@ export async function GET(req: Request) {
     };
 
     const journalOpen = openTrades.map(mapTrade);
-    const journalClosed = closedTrades.map(mapTrade);
+    let journalClosed = closedTrades.map(mapTrade);
 
     // ── Merge untracked T212 positions into open trades ──
     const t212Settings = loadT212Settings();
     if (t212Settings) {
       try {
         const cached = await getCachedT212Positions(t212Settings);
+        const phantomClosedTradeIds = findPhantomClosedTradeIds({
+          openTrades,
+          closedTrades,
+          heldTickers: cached.positions.map((position) => position.ticker),
+        });
+
+        if (phantomClosedTradeIds.size > 0) {
+          closedTrades = closedTrades.filter((trade) => !phantomClosedTradeIds.has(trade.id));
+          journalClosed = closedTrades.map(mapTrade);
+        }
+
         const trackedTickers = new Set(journalOpen.map((t) => t.ticker));
         for (const pos of cached.positions) {
           // Skip positions already tracked as trades

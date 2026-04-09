@@ -8,6 +8,7 @@ import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getCachedT212Positions, getAccountCash } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
+import { canAutoCloseTrade } from "@/lib/trades/status";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
 
@@ -40,6 +41,7 @@ export async function POST(_request: Request) {
     let t212Balance: number | null = null;
     let t212Currency: string | null = null;
     const t212Settings = loadT212Settings();
+    const t212Configured = t212Settings != null;
     if (t212Settings) {
       try {
         const [cached, account] = await Promise.all([
@@ -153,7 +155,11 @@ export async function POST(_request: Request) {
         // If T212 position is still held, flag as EXIT instruction but do NOT
         // close the trade — the user needs to confirm the exit manually.
         const t212StillHeld = t212Loaded && t212Match != null;
-        const actuallyExited = eodBreached && !t212StillHeld;
+        const actuallyExited = eodBreached && canAutoCloseTrade({
+          t212Configured,
+          t212Loaded,
+          t212StillHeld,
+        });
 
         if (eodBreached && t212StillHeld) {
           // EOD data shows stop breach but T212 position is still open —
@@ -165,6 +171,16 @@ export async function POST(_request: Request) {
           instruction = {
             type: "EXIT",
             message: `STOP BREACHED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${breachQuote!.date}. T212 position still open — confirm exit manually.`,
+            urgent: true,
+          };
+        } else if (eodBreached && t212Configured && !t212Loaded) {
+          log.warn(
+            { ticker: trade.ticker, low: breachQuote!.low, stop: previousStop },
+            "EOD breach detected but T212 holdings unavailable — skipping auto-close",
+          );
+          instruction = {
+            type: "EXIT",
+            message: `STOP BREACHED — low ${c}${breachQuote!.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${breachQuote!.date}. T212 holdings were unavailable, so the trade was left open pending confirmation.`,
             urgent: true,
           };
         } else if (actuallyExited) {

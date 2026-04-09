@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "test": "jest",
+    "test:fta": "jest --testPathPatterns=timing-scorer --verbose",
     "test:watch": "jest --watch",
     "build": "npx prisma generate && next build",
     "start": "next start",
@@ -18,6 +19,8 @@
     "validate": "npx tsx scripts/validateUniverse.ts",
     "validate:universe": "npx tsx scripts/validateUniverse.ts",
     "universe:health": "npx tsx scripts/universeHealth.ts",
+    "repair:false-closes": "npx tsx scripts/repairFalseClosedTrades.ts",
+    "repair:false-closes:apply": "npx tsx scripts/repairFalseClosedTrades.ts --apply",
     "schedule:setup": "scripts\\setupScheduler.bat",
     "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
     "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",

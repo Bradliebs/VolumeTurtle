@@ -6,6 +6,7 @@ import { calculateATR } from "@/lib/risk/atr";
 import { getCurrencySymbol } from "@/lib/currency";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
+import { canAutoCloseTrade } from "@/lib/trades/status";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
 
@@ -104,6 +105,7 @@ export async function POST(
     let t212Data = null;
     let t212Loaded = false;
     const t212Settings = loadT212Settings();
+    const t212Configured = t212Settings != null;
     if (t212Settings) {
       try {
         const cached = await getCachedT212Positions(t212Settings);
@@ -177,6 +179,11 @@ export async function POST(
 
     // If T212 position is still held, don't auto-close — flag for manual exit instead
     const t212StillHeld = t212Loaded && t212Data != null;
+    const autoCloseAllowed = canAutoCloseTrade({
+      t212Configured,
+      t212Loaded,
+      t212StillHeld,
+    });
 
     if (exitTriggered && t212StillHeld) {
       // EOD data shows stop breach but T212 position is still open —
@@ -191,7 +198,18 @@ export async function POST(
         message: `STOP BREACHED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${bq.date}. T212 position still open — confirm exit manually.`,
         urgent: true,
       };
-    } else if (exitTriggered) {
+    } else if (exitTriggered && t212Configured && !t212Loaded) {
+      const bq = breachQuote ?? latestQuote;
+      log.warn(
+        { ticker: trade.ticker, low: bq.low, stop: previousStop },
+        "EOD breach detected but T212 holdings unavailable — skipping auto-close",
+      );
+      instruction = {
+        type: "EXIT",
+        message: `STOP BREACHED — low ${c}${bq.low.toFixed(2)} broke stop ${c}${previousStop.toFixed(2)} on ${bq.date}. T212 holdings were unavailable, so the trade was left open pending confirmation.`,
+        urgent: true,
+      };
+    } else if (exitTriggered && autoCloseAllowed) {
       // Auto-close the trade with the exit price (T212 not loaded or position gone)
       const bq = breachQuote ?? latestQuote;
       const exitPrice = bq.close < previousStop ? bq.close : previousStop;

@@ -19,6 +19,109 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const ENDPOINT_MIN_INTERVAL_MS = {
+  pendingOrdersRead: 5_000,   // GET /equity/orders -> 1 req / 5s
+  positionsRead: 1_000,       // GET /equity/positions -> 1 req / 1s
+  instrumentsRead: 50_000,    // GET /equity/metadata/instruments -> 1 req / 50s
+  stopOrderWrite: 2_000,      // POST /equity/orders/stop -> 1 req / 2s
+} as const;
+
+type EndpointKey = keyof typeof ENDPOINT_MIN_INTERVAL_MS;
+
+const endpointLastCallAt = new Map<EndpointKey, number>();
+const THROTTLE_KEY_PREFIX = "t212_rate_next_allowed_at";
+
+function throttleSettingKey(endpoint: EndpointKey, settings: T212Settings): string {
+  return `${THROTTLE_KEY_PREFIX}:${settings.environment}:${settings.accountType}:${endpoint}`;
+}
+
+function parseMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+/**
+ * Reserve a shared rate-limit slot via DB settings using a compare-and-set loop.
+ * Returns the earliest timestamp this call may proceed, or null on DB failure.
+ */
+async function reserveSharedEndpointSlot(
+  endpoint: EndpointKey,
+  settings: T212Settings,
+  minIntervalMs: number,
+): Promise<number | null> {
+  try {
+    const { prisma } = await import("@/db/client");
+    const db = prisma as unknown as {
+      settings: {
+        findUnique: (args: { where: { key: string } }) => Promise<{ key: string; value: string } | null>;
+        create: (args: { data: { key: string; value: string } }) => Promise<unknown>;
+        updateMany: (args: { where: { key: string; value: string }; data: { value: string } }) => Promise<{ count: number }>;
+      };
+    };
+
+    const key = throttleSettingKey(endpoint, settings);
+
+    // Retry a few times if another process updates the same key first.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const now = Date.now();
+      const current = await db.settings.findUnique({ where: { key } });
+      const nextAllowedAt = parseMs(current?.value);
+      const slotStartAt = Math.max(now, nextAllowedAt);
+      const updatedNextAllowedAt = slotStartAt + minIntervalMs;
+
+      if (!current) {
+        try {
+          await db.settings.create({
+            data: { key, value: String(updatedNextAllowedAt) },
+          });
+          return slotStartAt;
+        } catch {
+          // Likely created by another process in parallel. Retry.
+          continue;
+        }
+      }
+
+      const updated = await db.settings.updateMany({
+        where: { key, value: current.value },
+        data: { value: String(updatedNextAllowedAt) },
+      });
+
+      if (updated.count > 0) {
+        return slotStartAt;
+      }
+    }
+  } catch {
+    // DB unavailable: caller will fall back to in-process pacing.
+  }
+
+  return null;
+}
+
+async function paceEndpoint(endpoint: EndpointKey, settings: T212Settings): Promise<void> {
+  const minInterval = ENDPOINT_MIN_INTERVAL_MS[endpoint];
+
+  // First try a cross-process reservation so API routes and daemons coordinate.
+  const sharedSlotStart = await reserveSharedEndpointSlot(endpoint, settings, minInterval);
+  if (sharedSlotStart != null) {
+    const waitMs = sharedSlotStart - Date.now();
+    if (waitMs > 0) {
+      await sleep(waitMs);
+    }
+    endpointLastCallAt.set(endpoint, Math.max(endpointLastCallAt.get(endpoint) ?? 0, sharedSlotStart));
+    return;
+  }
+
+  // Fallback: in-process pacing only.
+  const now = Date.now();
+  const last = endpointLastCallAt.get(endpoint) ?? 0;
+  const waitMs = last + minInterval - now;
+  if (waitMs > 0) {
+    await sleep(waitMs);
+  }
+  endpointLastCallAt.set(endpoint, Date.now());
+}
+
 export async function t212Fetch(path: string, settings: T212Settings, options?: { method?: string; body?: unknown }): Promise<unknown> {
   const baseUrl = T212_ENDPOINTS[settings.environment];
   const credentials = Buffer.from(`${settings.apiKey}:${settings.apiSecret}`).toString("base64");
@@ -92,6 +195,7 @@ export interface T212Position {
 }
 
 export async function getOpenPositions(settings: T212Settings): Promise<T212Position[]> {
+  await paceEndpoint("positionsRead", settings);
   return t212Fetch("/equity/portfolio", settings) as Promise<T212Position[]>;
 }
 
@@ -111,6 +215,7 @@ export interface T212Order {
 }
 
 export async function getPendingOrders(settings: T212Settings): Promise<T212Order[]> {
+  await paceEndpoint("pendingOrdersRead", settings);
   return t212Fetch("/equity/orders", settings) as Promise<T212Order[]>;
 }
 
@@ -198,11 +303,26 @@ export interface T212Instrument {
  * Used to map T212 internal tickers (e.g. "PMOl_EQ") to Yahoo tickers (e.g. "HBR.L").
  */
 export async function getInstruments(settings: T212Settings): Promise<T212Instrument[]> {
+  await paceEndpoint("instrumentsRead", settings);
   return t212Fetch("/equity/metadata/instruments", settings) as Promise<T212Instrument[]>;
 }
 
 // Cache instruments to avoid repeated API calls (promise-based to prevent races)
 let instrumentCachePromise: Promise<T212Instrument[]> | null = null;
+
+async function getInstrumentCache(settings: T212Settings): Promise<T212Instrument[]> {
+  if (!instrumentCachePromise) {
+    instrumentCachePromise = getInstruments(settings);
+  }
+
+  try {
+    return await instrumentCachePromise;
+  } catch (err) {
+    // Clear rejected promise so a later call can recover.
+    instrumentCachePromise = null;
+    throw err;
+  }
+}
 
 /**
  * Map a T212 internal ticker to a Yahoo-style ticker.
@@ -244,10 +364,7 @@ function isT212Pence(t212Ticker: string, instruments: T212Instrument[]): boolean
  */
 export async function getPositionsWithStopsMapped(settings: T212Settings): Promise<T212Position[]> {
   // Load instruments (cached, race-safe)
-  if (!instrumentCachePromise) {
-    instrumentCachePromise = getInstruments(settings);
-  }
-  const instrumentCache = await instrumentCachePromise;
+  const instrumentCache = await getInstrumentCache(settings);
 
   const [rawPositions, orders] = await Promise.all([
     getOpenPositions(settings),
@@ -388,6 +505,7 @@ export async function placeStopOrder(
   quantity: number,
   stopPrice: number,
 ): Promise<T212Order> {
+  await paceEndpoint("stopOrderWrite", settings);
   return t212Fetch("/equity/orders/stop", settings, {
     method: "POST",
     body: {
@@ -429,10 +547,7 @@ export async function updateStopOnT212(
   stopPriceGBP: number,
 ): Promise<{ cancelled: number | null; placed: T212Order }> {
   // Load instruments
-  if (!instrumentCachePromise) {
-    instrumentCachePromise = getInstruments(settings);
-  }
-  const instruments = await instrumentCachePromise;
+  const instruments = await getInstrumentCache(settings);
 
   const t212Ticker = yahooToT212Ticker(yahooTicker, instruments);
   if (!t212Ticker) {
@@ -497,10 +612,7 @@ export async function buyWithStop(
   stopPriceGBP: number,
 ): Promise<{ marketOrder: T212Order; stopOrder: T212Order }> {
   // Load instruments
-  if (!instrumentCachePromise) {
-    instrumentCachePromise = getInstruments(settings);
-  }
-  const instruments = await instrumentCachePromise;
+  const instruments = await getInstrumentCache(settings);
 
   const t212Ticker = yahooToT212Ticker(yahooTicker, instruments);
   if (!t212Ticker) {

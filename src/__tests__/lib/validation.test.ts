@@ -26,6 +26,12 @@ describe("createTradeSchema", () => {
       volumeRatio: 2.5,
       rangePosition: 0.85,
       atr20: 3.2,
+      close: 152,
+      high: 154,
+      low: 149,
+      volume: 1_250_000,
+      avgVolume20: 900_000,
+      atr14: 4.1,
     });
     expect(result.success).toBe(true);
   });

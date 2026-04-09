@@ -1,13 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadT212Settings, updateStopOnT212, getPositionsWithStopsMapped } from "@/lib/t212/client";
+import { loadT212Settings, updateStopOnT212, getCachedT212Positions } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/t212/stops/ticker");
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * POST /api/t212/stops/ticker
@@ -41,8 +37,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the position's quantity from T212
-    const positions = await getPositionsWithStopsMapped(t212Settings);
-    const position = positions.find((p) => p.ticker === ticker);
+    const cached = await getCachedT212Positions(t212Settings);
+    const position = cached.positions.find((p) => p.ticker === ticker);
     if (!position) {
       return NextResponse.json(
         { error: `No T212 position found for ${ticker}` },
@@ -70,9 +66,6 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Delay to respect T212 rate limits between position lookup and order placement
-    await sleep(3000);
-
     const result = await updateStopOnT212(
       t212Settings,
       ticker,
@@ -94,9 +87,18 @@ export async function POST(request: NextRequest) {
     });
   } catch (err) {
     log.error({ err }, "Failed to push stop to T212 by ticker");
+
+    const message = err instanceof Error ? err.message : "Failed to update stop on T212";
+    const upstreamRateLimited = /rate limit|rate limited|429/i.test(message);
+
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to update stop on T212" },
-      { status: 500 },
+      {
+        error: message,
+        ...(upstreamRateLimited
+          ? { hint: "Trading 212 temporarily rate-limited this request. Retry in a few seconds." }
+          : {}),
+      },
+      { status: upstreamRateLimited ? 429 : 500 },
     );
   }
 }

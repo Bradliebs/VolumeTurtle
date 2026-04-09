@@ -95,6 +95,102 @@ export default function Home() {
   const [ratchetMsg, setRatchetMsg] = React.useState<string | null>(null);
   // Trade history filter
   const [tradeFilter, setTradeFilter] = React.useState<"ALL" | "OPEN" | "CLOSED">("ALL");
+  const [closedView, setClosedView] = React.useState<"LATEST" | "GROUPED">("LATEST");
+  const [expandedClosedTickers, setExpandedClosedTickers] = React.useState<Record<string, boolean>>({});
+
+  const closedPerf = React.useMemo(() => {
+    const closedOnly = [...closedTrades].sort((a, b) => {
+      const left = new Date(a.exitDate ?? a.entryDate).getTime();
+      const right = new Date(b.exitDate ?? b.entryDate).getTime();
+      return right - left;
+    });
+
+    const totalPnl = closedOnly.reduce((sum, t) => {
+      if (t.exitPrice == null) return sum;
+      return sum + ((t.exitPrice - t.entryPrice) * t.shares);
+    }, 0);
+
+    const totalPnlByCurrency: Record<string, number> = {};
+    for (const t of closedOnly) {
+      if (t.exitPrice == null) continue;
+      const currency = tickerCurrency(t.ticker);
+      const pnl = (t.exitPrice - t.entryPrice) * t.shares;
+      totalPnlByCurrency[currency] = (totalPnlByCurrency[currency] ?? 0) + pnl;
+    }
+
+    const totalR = closedOnly.reduce((sum, t) => sum + (t.rMultiple ?? 0), 0);
+
+    const groupedMap = new Map<string, typeof closedOnly>();
+    for (const t of closedOnly) {
+      const bucket = groupedMap.get(t.ticker) ?? [];
+      bucket.push(t);
+      groupedMap.set(t.ticker, bucket);
+    }
+
+    const grouped = Array.from(groupedMap.entries()).map(([ticker, trades]) => {
+      const sortedByRecent = [...trades].sort((a, b) => {
+        const left = new Date(a.exitDate ?? a.entryDate).getTime();
+        const right = new Date(b.exitDate ?? b.entryDate).getTime();
+        return right - left;
+      });
+      const latest = sortedByRecent[0]!;
+      const tickerPnl = sortedByRecent.reduce((sum, t) => {
+        if (t.exitPrice == null) return sum;
+        return sum + ((t.exitPrice - t.entryPrice) * t.shares);
+      }, 0);
+      const tickerR = sortedByRecent.reduce((sum, t) => sum + (t.rMultiple ?? 0), 0);
+
+      const ascending = [...sortedByRecent].sort((a, b) => {
+        const left = new Date(a.exitDate ?? a.entryDate).getTime();
+        const right = new Date(b.exitDate ?? b.entryDate).getTime();
+        return left - right;
+      });
+
+      let runningPnl = 0;
+      let runningR = 0;
+      const history = ascending.map((t) => {
+        const pnl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : null;
+        runningPnl += pnl ?? 0;
+        runningR += t.rMultiple ?? 0;
+        return {
+          trade: t,
+          pnl,
+          runningPnl,
+          runningR,
+        };
+      });
+
+      return {
+        ticker,
+        latest,
+        trades: sortedByRecent,
+        tradeCount: sortedByRecent.length,
+        totalPnl: tickerPnl,
+        totalR: tickerR,
+        history,
+      };
+    }).sort((a, b) => {
+      const left = new Date(a.latest.exitDate ?? a.latest.entryDate).getTime();
+      const right = new Date(b.latest.exitDate ?? b.latest.entryDate).getTime();
+      return right - left;
+    });
+
+    return {
+      closedOnly,
+      grouped,
+      totalPnl,
+      totalPnlByCurrency,
+      totalR,
+      tickerCount: grouped.length,
+    };
+  }, [closedTrades]);
+
+  function toggleClosedTicker(ticker: string) {
+    setExpandedClosedTickers((prev) => ({
+      ...prev,
+      [ticker]: !prev[ticker],
+    }));
+  }
 
   async function handleRatchet() {
     setRatcheting(true);
@@ -1407,13 +1503,37 @@ export default function Home() {
                 {Number(avgR) >= 0 ? "+" : ""}
                 {avgR}
               </span>
+              {" | "}Closed P/L:{" "}
+              {Object.keys(closedPerf.totalPnlByCurrency).length > 0 ? (
+                Object.entries(closedPerf.totalPnlByCurrency)
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([currency, value], idx) => (
+                    <span key={currency} className={value >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                      {idx > 0 ? "  /  " : ""}
+                      {value >= 0 ? "+" : ""}
+                      {currency}{Math.abs(value).toFixed(2)}
+                    </span>
+                  ))
+              ) : (
+                <span className="text-[var(--dim)]">—</span>
+              )}
+              {" | "}Cum R:{" "}
+              <span className={closedPerf.totalR >= 0 ? "text-[var(--green)]" : "text-[var(--red)]"}>
+                {closedPerf.totalR >= 0 ? "+" : ""}
+                {closedPerf.totalR.toFixed(2)}R
+              </span>
             </span>
           )}
           <div className="flex gap-1 ml-auto" style={mono}>
             {(["ALL", "OPEN", "CLOSED"] as const).map((f) => (
               <button
                 key={f}
-                onClick={() => setTradeFilter(f)}
+                onClick={() => {
+                  setTradeFilter(f);
+                  if (f === "CLOSED") {
+                    setClosedView("GROUPED");
+                  }
+                }}
                 className={`px-3 py-0.5 text-[10px] border transition-colors ${
                   tradeFilter === f
                     ? "border-[var(--green)] text-[var(--green)]"
@@ -1423,10 +1543,204 @@ export default function Home() {
                 {f}
               </button>
             ))}
+            {tradeFilter === "CLOSED" && (
+              <>
+                <button
+                  onClick={() => setClosedView("LATEST")}
+                  className={`px-3 py-0.5 text-[10px] border transition-colors ${
+                    closedView === "LATEST"
+                      ? "border-[var(--amber)] text-[var(--amber)]"
+                      : "border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[#555]"
+                  }`}
+                >
+                  LATEST/TICKER
+                </button>
+                <button
+                  onClick={() => setClosedView("GROUPED")}
+                  className={`px-3 py-0.5 text-[10px] border transition-colors ${
+                    closedView === "GROUPED"
+                      ? "border-[var(--amber)] text-[var(--amber)]"
+                      : "border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[#555]"
+                  }`}
+                >
+                  GROUPED HISTORY
+                </button>
+              </>
+            )}
           </div>
         </div>
         <div className="border border-[var(--border)] bg-[var(--card)] overflow-x-auto">
           {(() => {
+            if (tradeFilter === "CLOSED") {
+              const groups = closedPerf.grouped;
+
+              if (closedView === "LATEST") {
+                return (
+                  <table className="w-full text-sm" style={mono}>
+                    <thead>
+                      <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                        <th className="text-left px-3 py-2">TICKER</th>
+                        <th className="text-left px-3 py-2">LAST ENTRY</th>
+                        <th className="text-left px-3 py-2">LAST EXIT</th>
+                        <th className="text-right px-3 py-2">LAST R</th>
+                        <th className="text-right px-3 py-2">LAST P/L</th>
+                        <th className="text-right px-3 py-2">TOTAL RUNS</th>
+                        <th className="text-right px-3 py-2">TOTAL P/L</th>
+                        <th className="text-right px-3 py-2">CUM R</th>
+                        <th className="text-center px-3 py-2">RESULT</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loading ? (
+                        <SkeletonRows cols={9} />
+                      ) : groups.length === 0 ? (
+                        <tr>
+                          <td colSpan={9} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                            No closed trades yet
+                          </td>
+                        </tr>
+                      ) : (
+                        groups.map((group) => {
+                          const t = group.latest;
+                          const c = tickerCurrency(t.ticker);
+                          const latestR = t.rMultiple ?? 0;
+                          const latestPnl = t.exitPrice != null ? (t.exitPrice - t.entryPrice) * t.shares : null;
+                          const isWin = latestR > 0;
+                          const isFlat = latestR === 0;
+                          return (
+                            <tr key={group.ticker} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                              <td className="px-3 py-2 font-semibold">{group.ticker}</td>
+                              <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
+                              <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(t.exitDate)}</td>
+                              <td className="px-3 py-2 text-right" style={{ color: isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)" }}>
+                                {latestR >= 0 ? "+" : ""}{latestR.toFixed(2)}R
+                              </td>
+                              <td className="px-3 py-2 text-right font-semibold" style={{ color: latestPnl != null && latestPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {latestPnl != null ? `${latestPnl >= 0 ? "+" : ""}${c}${Math.abs(latestPnl).toFixed(2)}` : "—"}
+                              </td>
+                              <td className="px-3 py-2 text-right text-[var(--dim)]">{group.tradeCount}</td>
+                              <td className="px-3 py-2 text-right font-semibold" style={{ color: group.totalPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {group.totalPnl >= 0 ? "+" : ""}{c}{Math.abs(group.totalPnl).toFixed(2)}
+                              </td>
+                              <td className="px-3 py-2 text-right" style={{ color: group.totalR >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {group.totalR >= 0 ? "+" : ""}{group.totalR.toFixed(2)}R
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <Badge label={isFlat ? "B/E" : isWin ? "WIN" : "LOSS"} color={isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)"} />
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                );
+              }
+
+              return (
+                <table className="w-full text-sm" style={mono}>
+                  <thead>
+                    <tr className="text-[var(--dim)] text-xs border-b border-[var(--border)]">
+                      <th className="text-left px-3 py-2">TICKER</th>
+                      <th className="text-left px-3 py-2">LAST EXIT</th>
+                      <th className="text-right px-3 py-2">RUNS</th>
+                      <th className="text-right px-3 py-2">TOTAL P/L</th>
+                      <th className="text-right px-3 py-2">CUM R</th>
+                      <th className="text-center px-3 py-2">DETAIL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {loading ? (
+                      <SkeletonRows cols={6} />
+                    ) : groups.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                          No closed trades yet
+                        </td>
+                      </tr>
+                    ) : (
+                      groups.map((group) => {
+                        const c = tickerCurrency(group.ticker);
+                        const isExpanded = Boolean(expandedClosedTickers[group.ticker]);
+                        return (
+                          <React.Fragment key={group.ticker}>
+                            <tr className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
+                              <td className="px-3 py-2 font-semibold">{group.ticker}</td>
+                              <td className="px-3 py-2 text-[var(--dim)]">{fmtDate(group.latest.exitDate)}</td>
+                              <td className="px-3 py-2 text-right text-[var(--dim)]">{group.tradeCount}</td>
+                              <td className="px-3 py-2 text-right font-semibold" style={{ color: group.totalPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {group.totalPnl >= 0 ? "+" : ""}{c}{Math.abs(group.totalPnl).toFixed(2)}
+                              </td>
+                              <td className="px-3 py-2 text-right" style={{ color: group.totalR >= 0 ? "var(--green)" : "var(--red)" }}>
+                                {group.totalR >= 0 ? "+" : ""}{group.totalR.toFixed(2)}R
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <button
+                                  onClick={() => toggleClosedTicker(group.ticker)}
+                                  className="px-2 py-0.5 text-[10px] border border-[var(--border)] text-[var(--dim)] hover:text-white hover:border-[#555]"
+                                >
+                                  {isExpanded ? "HIDE" : "SHOW"}
+                                </button>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr className="border-b border-[var(--border)]/50 bg-[#0e0e0e]">
+                                <td colSpan={6} className="px-3 py-2">
+                                  <table className="w-full text-xs" style={mono}>
+                                    <thead>
+                                      <tr className="text-[var(--dim)] border-b border-[var(--border)]/60">
+                                        <th className="text-left px-2 py-1">EXIT</th>
+                                        <th className="text-left px-2 py-1">ENTRY</th>
+                                        <th className="text-right px-2 py-1">R</th>
+                                        <th className="text-right px-2 py-1">P/L</th>
+                                        <th className="text-right px-2 py-1">RUNNING P/L</th>
+                                        <th className="text-right px-2 py-1">RUNNING R</th>
+                                        <th className="text-center px-2 py-1">RESULT</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {group.history.map((h) => {
+                                        const t = h.trade;
+                                        const r = t.rMultiple ?? 0;
+                                        const pl = h.pnl;
+                                        const isWin = r > 0;
+                                        const isFlat = r === 0;
+                                        return (
+                                          <tr key={t.id} className="border-b border-[var(--border)]/30">
+                                            <td className="px-2 py-1 text-[var(--dim)]">{fmtDate(t.exitDate)}</td>
+                                            <td className="px-2 py-1 text-[var(--dim)]">{fmtDate(t.entryDate)}</td>
+                                            <td className="px-2 py-1 text-right" style={{ color: isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)" }}>
+                                              {r >= 0 ? "+" : ""}{r.toFixed(2)}R
+                                            </td>
+                                            <td className="px-2 py-1 text-right" style={{ color: pl != null && pl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                              {pl != null ? `${pl >= 0 ? "+" : ""}${c}${Math.abs(pl).toFixed(2)}` : "—"}
+                                            </td>
+                                            <td className="px-2 py-1 text-right" style={{ color: h.runningPnl >= 0 ? "var(--green)" : "var(--red)" }}>
+                                              {h.runningPnl >= 0 ? "+" : ""}{c}{Math.abs(h.runningPnl).toFixed(2)}
+                                            </td>
+                                            <td className="px-2 py-1 text-right" style={{ color: h.runningR >= 0 ? "var(--green)" : "var(--red)" }}>
+                                              {h.runningR >= 0 ? "+" : ""}{h.runningR.toFixed(2)}R
+                                            </td>
+                                            <td className="px-2 py-1 text-center">
+                                              <Badge label={isFlat ? "B/E" : isWin ? "WIN" : "LOSS"} color={isFlat ? "var(--dim)" : isWin ? "var(--green)" : "var(--red)"} />
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
+                            )}
+                          </React.Fragment>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              );
+            }
+
             const allTrades = [...openTrades.map((t) => ({ ...t, _isOpen: true as const })), ...closedTrades.map((t) => ({ ...t, _isOpen: false as const }))];
             const filtered = tradeFilter === "OPEN"
               ? allTrades.filter((t) => t._isOpen)
