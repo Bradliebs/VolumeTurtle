@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { getGbpUsdRate, convertToGbp } from "@/lib/currency";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
-import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
+import { getCachedQuotes } from "@/lib/data/quoteCache";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
@@ -185,22 +185,42 @@ export async function GET(req: Request) {
       closedTrades = closedTrades.filter((trade) => !duplicateClosedTradeIds.has(trade.id));
     }
 
-    // Fetch current prices for open trades (needed for both period stats and sidebar)
+    // Fetch current prices for open trades via T212 (fast cached) + DB cache fallback
     const openTickers = openTrades.map((t) => t.ticker);
-    let quoteMap: Record<string, Array<{ close: number }>> = {};
-    if (openTickers.length > 0) {
+    const t212PriceMap: Record<string, number> = {};
+    const t212Settings = loadT212Settings();
+    let cachedT212Positions: T212Position[] = [];
+    if (t212Settings) {
       try {
-        quoteMap = await fetchEODQuotes(openTickers);
+        const cached = await getCachedT212Positions(t212Settings);
+        cachedT212Positions = cached.positions;
+        for (const pos of cached.positions) {
+          t212PriceMap[pos.ticker] = pos.currentPrice;
+        }
       } catch (err) {
-        log.warn({ err }, "Quote fetch failed for open trades");
+        log.warn({ err }, "T212 position fetch failed for price lookup");
+      }
+    }
+
+    // DB cache fallback for tickers not in T212
+    const dbCachePriceMap: Record<string, number> = {};
+    for (const ticker of openTickers) {
+      if (t212PriceMap[ticker] != null) continue;
+      try {
+        const since = new Date();
+        since.setDate(since.getDate() - 10);
+        const cached = await getCachedQuotes(ticker, since);
+        if (cached.length > 0) {
+          dbCachePriceMap[ticker] = cached[cached.length - 1]!.close;
+        }
+      } catch {
+        // No cached data available
       }
     }
 
     // Build open trades with current prices for period stats
     function getCurrentPrice(ticker: string): number | null {
-      const quotes = quoteMap[ticker];
-      if (quotes && quotes.length > 0) return quotes[quotes.length - 1]!.close;
-      return null;
+      return t212PriceMap[ticker] ?? dbCachePriceMap[ticker] ?? null;
     }
 
     const openWithPrices = openTrades.map((t) => ({
@@ -349,14 +369,12 @@ export async function GET(req: Request) {
     let journalClosed = closedTrades.map(mapTrade);
 
     // ── Merge untracked T212 positions into open trades ──
-    const t212Settings = loadT212Settings();
-    if (t212Settings) {
+    if (cachedT212Positions.length > 0) {
       try {
-        const cached = await getCachedT212Positions(t212Settings);
         const phantomClosedTradeIds = findPhantomClosedTradeIds({
           openTrades,
           closedTrades,
-          heldTickers: cached.positions.map((position) => position.ticker),
+          heldTickers: cachedT212Positions.map((position) => position.ticker),
         });
 
         if (phantomClosedTradeIds.size > 0) {
@@ -365,7 +383,7 @@ export async function GET(req: Request) {
         }
 
         const trackedTickers = new Set(journalOpen.map((t) => t.ticker));
-        for (const pos of cached.positions) {
+        for (const pos of cachedT212Positions) {
           // Skip positions already tracked as trades
           if (trackedTickers.has(pos.ticker)) continue;
           const rawPnl = pos.ppl ?? 0;

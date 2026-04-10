@@ -28,6 +28,25 @@
 - Verification: `npm test` passed with 13/13 suites and 189/189 tests.
 - Extended the helper to detect duplicate OPEN/CLOSED twin trades for the same entry, which was the actual SPIR case.
 - Added `scripts/repairFalseClosedTrades.ts` plus npm scripts for dry-run and apply.
+
+## Auto-Execution Feature (2026-04-10)
+
+- [x] Add PendingOrder + ExecutionLog models to Prisma schema
+- [x] Add auto-execution fields to AppSettings
+- [x] Run prisma db push + generate
+- [x] Create `src/lib/execution/autoExecutor.ts` (SACRED) — 10 pre-flight checks, order placement, Telegram alerts
+- [x] Create `src/lib/execution/executionScheduler.ts` — polls pending orders past deadline
+- [x] Create `scripts/executionScheduler.ts` — standalone script for Task Scheduler
+- [x] Create API: `GET/DELETE/POST /api/execution/pending` — list, cancel, execute-now, emergency disable
+- [x] Create API: `GET /api/execution/log` — execution audit trail
+- [x] Create API: `GET/POST /api/execution/settings` — auto-execution config
+- [x] Integrate into nightlyScan.ts — creates PendingOrder for Grade A/B when auto-exec enabled
+- [x] Integrate into momentum scan section — same for momentum Grade A/B
+- [x] Create `src/app/execution/page.tsx` — countdown timers, cancel/execute-now UI
+- [x] Update settings page — auto-execution card with enable confirmation, emergency stop, execution history
+- [x] Add PENDING nav link to all pages (dashboard, journal, momentum, watchlist, settings)
+- [x] TypeScript compiles clean (only pre-existing page.tsx warnings)
+- [x] All 212 tests pass, 0 regressions
 - Created a backup at `C:\Users\Brad\VolumeTurtle\backups\volumeturtle_backup_2026-04-09.json` before applying the DB repair.
 - Applied the repair and deleted the false closed SPIR twin (`cmnqfiacb000aacu7kfljz2do`).
 - Verification after repair: `npm run repair:false-closes -- --ticker=SPIR` found no candidates; `npm test` passed with 13/13 suites and 191/191 tests.

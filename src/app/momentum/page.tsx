@@ -364,6 +364,7 @@ export default function MomentumPage() {
           <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">MOMENTUM</span>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
+          <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
         <AlertPanel />

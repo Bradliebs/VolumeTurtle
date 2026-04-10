@@ -121,10 +121,12 @@ export async function PUT(request: NextRequest) {
           environment: t212.environment ?? "live",
           apiKey: "ENV:T212_API_KEY",
           accountType: t212.accountType ?? "isa",
+          connected: true,
         },
         update: {
           environment: t212.environment,
           accountType: t212.accountType,
+          connected: true,
         },
       });
     }

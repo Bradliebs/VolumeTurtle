@@ -99,6 +99,28 @@ export default function SettingsPage() {
   const [runnerSaving, setRunnerSaving] = useState(false);
   const [runnerStatus, setRunnerStatus] = useState<string | null>(null);
 
+  // Auto-execution state
+  const [autoExecEnabled, setAutoExecEnabled] = useState(false);
+  const [autoExecMinGrade, setAutoExecMinGrade] = useState("B");
+  const [autoExecWindow, setAutoExecWindow] = useState("15");
+  const [autoExecMaxPerDay, setAutoExecMaxPerDay] = useState("2");
+  const [autoExecStartHour, setAutoExecStartHour] = useState("14");
+  const [autoExecEndHour, setAutoExecEndHour] = useState("20");
+  const [autoExecSaving, setAutoExecSaving] = useState(false);
+  const [autoExecStatus, setAutoExecStatus] = useState<string | null>(null);
+  const [autoExecConfirmText, setAutoExecConfirmText] = useState("");
+  const [autoExecShowConfirm, setAutoExecShowConfirm] = useState(false);
+  const [autoExecDisabling, setAutoExecDisabling] = useState(false);
+  interface ExecLogEntry { id: number; orderId: number; event: string; detail: string; createdAt: string; }
+  const [execLogs, setExecLogs] = useState<ExecLogEntry[]>([]);
+  const [execLogsExpanded, setExecLogsExpanded] = useState(false);
+
+  // Stop push status
+  interface UnprotectedTrade { id: string; ticker: string; stopPushAttempts: number; stopPushError: string | null }
+  const [unprotectedTrades, setUnprotectedTrades] = useState<UnprotectedTrade[]>([]);
+  const [pushRetrying, setPushRetrying] = useState(false);
+  const [pushStatus, setPushStatus] = useState<string | null>(null);
+
   function showError(msg: string) {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(null), 6000);
@@ -111,7 +133,105 @@ export default function SettingsPage() {
     fetchMomentumSettings();
     fetchAlerts();
     fetchRunnerStatus();
+    fetchAutoExecSettings();
+    fetchUnprotected();
   }, []);
+
+  async function fetchAutoExecSettings() {
+    try {
+      const res = await fetch("/api/execution/settings");
+      if (res.ok) {
+        const d = await res.json();
+        setAutoExecEnabled(d.autoExecutionEnabled);
+        setAutoExecMinGrade(d.autoExecutionMinGrade);
+        setAutoExecWindow(String(d.autoExecutionWindowMins));
+        setAutoExecMaxPerDay(String(d.autoExecutionMaxPerDay));
+        setAutoExecStartHour(String(d.autoExecutionStartHour));
+        setAutoExecEndHour(String(d.autoExecutionEndHour));
+      }
+    } catch { /* silent */ }
+  }
+
+  async function fetchExecLogs() {
+    try {
+      const res = await fetch("/api/execution/log");
+      if (res.ok) {
+        const d = await res.json();
+        setExecLogs(d.logs ?? []);
+      }
+    } catch { /* silent */ }
+  }
+
+  async function fetchUnprotected() {
+    try {
+      const res = await fetch("/api/execution/push-stops");
+      if (res.ok) {
+        const d = await res.json();
+        setUnprotectedTrades(d.unprotected ?? []);
+      }
+    } catch { /* silent */ }
+  }
+
+  async function retryStopPush() {
+    setPushRetrying(true);
+    setPushStatus(null);
+    try {
+      const res = await fetch("/api/execution/push-stops", { method: "POST" });
+      const d = await res.json();
+      setPushStatus(`${d.successCount ?? 0} succeeded, ${d.failCount ?? 0} failed`);
+      await fetchUnprotected();
+    } catch (err) {
+      setPushStatus(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPushRetrying(false);
+    }
+  }
+
+  async function saveAutoExecSettings() {
+    setAutoExecSaving(true);
+    setAutoExecStatus(null);
+    try {
+      const res = await fetch("/api/execution/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          autoExecutionEnabled: autoExecEnabled,
+          autoExecutionMinGrade: autoExecMinGrade,
+          autoExecutionWindowMins: parseInt(autoExecWindow, 10),
+          autoExecutionMaxPerDay: parseInt(autoExecMaxPerDay, 10),
+          autoExecutionStartHour: parseInt(autoExecStartHour, 10),
+          autoExecutionEndHour: parseInt(autoExecEndHour, 10),
+        }),
+      });
+      if (res.ok) {
+        setAutoExecStatus("✓ Saved");
+        setAutoExecConfirmText("");
+        setAutoExecShowConfirm(false);
+        setTimeout(() => setAutoExecStatus(null), 3000);
+      } else {
+        const d = await res.json().catch(() => ({ error: "Failed" }));
+        setAutoExecStatus(`✗ ${d.error ?? "Failed"}`);
+      }
+    } catch { setAutoExecStatus("✗ Network error"); }
+    setAutoExecSaving(false);
+  }
+
+  async function emergencyDisableAutoExec() {
+    setAutoExecDisabling(true);
+    try {
+      const res = await fetch("/api/execution/pending", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "emergency_disable" }),
+      });
+      if (res.ok) {
+        setAutoExecEnabled(false);
+        setAutoExecStatus("⛔ Auto-execution disabled — all pending orders cancelled");
+        setTimeout(() => setAutoExecStatus(null), 5000);
+      }
+    } catch { setAutoExecStatus("✗ Network error"); }
+    setAutoExecDisabling(false);
+  }
 
   async function fetchBackupStatus() {
     try {
@@ -474,6 +594,7 @@ export default function SettingsPage() {
           <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
+          <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">SETTINGS</span>
         </nav>
       </header>
@@ -826,6 +947,200 @@ export default function SettingsPage() {
                 </div>
               ))}
             </>
+          )}
+        </div>
+      </section>
+
+      {/* AUTO-EXECUTION */}
+      <section className="mb-8">
+        <h2 className="text-xs font-semibold text-[var(--amber)] mb-4 tracking-widest border-b border-[var(--amber)]/30 pb-2">
+          ⚡ AUTO-EXECUTION
+        </h2>
+        <div className="space-y-4 text-xs" style={mono}>
+          {/* Enable toggle */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Auto-execution</span>
+            {!autoExecShowConfirm ? (
+              <button
+                onClick={() => {
+                  if (autoExecEnabled) {
+                    // Disable directly (no confirmation needed to turn off)
+                    setAutoExecEnabled(false);
+                    saveAutoExecSettings();
+                  } else {
+                    setAutoExecShowConfirm(true);
+                  }
+                }}
+                className={`w-10 h-5 rounded-full transition-colors relative ${autoExecEnabled ? "bg-[var(--amber)]" : "bg-[#333]"}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${autoExecEnabled ? "left-5" : "left-0.5"}`} />
+              </button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={autoExecConfirmText}
+                  onChange={(e) => setAutoExecConfirmText(e.target.value)}
+                  placeholder='Type "ENABLE AUTO"'
+                  className="w-40 px-2 py-1.5 bg-[#0a0a0a] border border-[var(--amber)]/40 text-white text-xs focus:border-[var(--amber)] outline-none"
+                  style={mono}
+                />
+                <button
+                  onClick={() => {
+                    if (autoExecConfirmText === "ENABLE AUTO") {
+                      setAutoExecEnabled(true);
+                      setAutoExecShowConfirm(false);
+                    }
+                  }}
+                  disabled={autoExecConfirmText !== "ENABLE AUTO"}
+                  className="px-3 py-1.5 border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors uppercase tracking-wider text-[10px] disabled:opacity-20 disabled:cursor-not-allowed"
+                >
+                  ENABLE
+                </button>
+                <button onClick={() => { setAutoExecShowConfirm(false); setAutoExecConfirmText(""); }} className="text-[var(--dim)] hover:text-white text-xs">✕</button>
+              </div>
+            )}
+            <span className={autoExecEnabled ? "text-[var(--amber)]" : "text-[var(--dim)]"}>
+              {autoExecEnabled ? "LIVE — real orders will be placed" : "Disabled"}
+            </span>
+          </div>
+
+          {autoExecEnabled && (
+            <div className="p-3 bg-[var(--amber)]/10 border border-[var(--amber)]/30 text-[var(--amber)] text-[10px]">
+              ⚠ Auto-execution is <b>ACTIVE</b>. Grade {autoExecMinGrade === "A" ? "A" : "A and B"} signals from scans will place real market orders via your Trading 212 Live account after a {autoExecWindow}-minute cancellation window.
+            </div>
+          )}
+
+          {/* Min grade */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Minimum grade</span>
+            <select
+              className="bg-[#0a0a0a] border border-[#333] text-white px-2 py-1.5 text-xs focus:border-[var(--amber)] outline-none"
+              value={autoExecMinGrade}
+              onChange={(e) => setAutoExecMinGrade(e.target.value)}
+              style={mono}
+            >
+              <option value="A">A only</option>
+              <option value="B">A and B</option>
+            </select>
+          </div>
+
+          {/* Cancel window */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Cancel window</span>
+            <input type="number" step="1" min="5" max="60" value={autoExecWindow} onChange={(e) => setAutoExecWindow(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">minutes (5–60)</span>
+          </div>
+
+          {/* Max daily */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Max daily orders</span>
+            <input type="number" step="1" min="1" max="10" value={autoExecMaxPerDay} onChange={(e) => setAutoExecMaxPerDay(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">per calendar day</span>
+          </div>
+
+          {/* Execution hours */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Execution hours</span>
+            <input type="number" step="1" min="0" max="23" value={autoExecStartHour} onChange={(e) => setAutoExecStartHour(e.target.value)} className="w-12 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">to</span>
+            <input type="number" step="1" min="0" max="23" value={autoExecEndHour} onChange={(e) => setAutoExecEndHour(e.target.value)} className="w-12 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">UTC</span>
+          </div>
+
+          {/* Save + Emergency */}
+          <div className="flex items-center gap-3 pt-1">
+            <button onClick={saveAutoExecSettings} disabled={autoExecSaving} className="px-4 py-2 border border-[var(--amber)] text-[var(--amber)] hover:bg-[var(--amber)] hover:text-black transition-colors uppercase tracking-wider text-[10px] font-semibold disabled:opacity-40">
+              {autoExecSaving ? "SAVING…" : "▶ SAVE"}
+            </button>
+
+            {autoExecEnabled && (
+              <button onClick={emergencyDisableAutoExec} disabled={autoExecDisabling} className="px-4 py-2 bg-[var(--red)]/20 border border-[var(--red)] text-[var(--red)] hover:bg-[var(--red)] hover:text-black transition-colors uppercase tracking-wider text-[10px] font-semibold disabled:opacity-40">
+                {autoExecDisabling ? "DISABLING…" : "⛔ DISABLE ALL AUTO-EXECUTION"}
+              </button>
+            )}
+
+            {autoExecStatus && <span className={autoExecStatus.startsWith("✓") ? "text-[var(--green)]" : autoExecStatus.startsWith("⛔") ? "text-[var(--red)]" : "text-[var(--red)]"}>{autoExecStatus}</span>}
+          </div>
+
+          {/* Execution history */}
+          <div className="pt-3 border-t border-[var(--border)]">
+            <button
+              onClick={() => { setExecLogsExpanded(!execLogsExpanded); if (!execLogsExpanded) fetchExecLogs(); }}
+              className="text-[var(--dim)] hover:text-white text-[10px] uppercase tracking-wider"
+            >
+              {execLogsExpanded ? "▾ Execution history" : "▸ Execution history"}
+            </button>
+            {execLogsExpanded && (
+              <div className="mt-2 space-y-1 max-h-60 overflow-y-auto">
+                {execLogs.length === 0 ? (
+                  <p className="text-[var(--dim)] text-[10px]">No execution history</p>
+                ) : (
+                  execLogs.map((log) => (
+                    <div key={log.id} className="flex items-start gap-2 text-[10px] px-2 py-1 border border-[var(--border)] hover:bg-[#1a1a1a]">
+                      <span className={
+                        log.event === "CONFIRMED" ? "text-[var(--green)]" :
+                        log.event === "FAILED" || log.event === "PRE_FLIGHT_FAIL" || log.event === "STOP_PUSH_FAILED" ? "text-[var(--red)]" :
+                        log.event === "CANCELLED" || log.event === "EXPIRED" ? "text-[var(--dim)]" :
+                        "text-[var(--amber)]"
+                      }>
+                        {log.event}
+                      </span>
+                      <span className="text-[var(--dim)] shrink-0">
+                        #{log.orderId}
+                      </span>
+                      <span className="text-white flex-1 break-words">{log.detail}</span>
+                      <span className="text-[var(--dim)] shrink-0">
+                        {new Date(log.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* STOP PUSH STATUS */}
+      <section className="mb-8">
+        <h2 className="text-xs font-semibold text-[var(--red)] mb-4 tracking-widest border-b border-[var(--red)]/30 pb-2">
+          🛡 STOP PUSH STATUS
+        </h2>
+        <div className="space-y-4 text-xs" style={mono}>
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Unprotected</span>
+            <span className={unprotectedTrades.length > 0 ? "text-[var(--red)] font-bold" : "text-[var(--green)]"}>
+              {unprotectedTrades.length > 0
+                ? `⚠ ${unprotectedTrades.length} position(s) without T212 stop`
+                : "✓ All positions protected"}
+            </span>
+          </div>
+
+          {unprotectedTrades.length > 0 && (
+            <div className="space-y-2">
+              {unprotectedTrades.map((t) => (
+                <div key={t.id} className="flex items-center gap-3 px-3 py-1.5 border border-[var(--red)]/30 bg-[var(--red)]/5">
+                  <span className="text-white font-bold">{t.ticker}</span>
+                  <span className="text-[var(--dim)]">Attempts: {t.stopPushAttempts}</span>
+                  {t.stopPushError && (
+                    <span className="text-[var(--red)] text-[10px] truncate max-w-[300px]">{t.stopPushError}</span>
+                  )}
+                </div>
+              ))}
+
+              <button
+                onClick={retryStopPush}
+                disabled={pushRetrying}
+                className="px-4 py-1.5 bg-[var(--red)] text-black text-[10px] font-bold tracking-wider hover:opacity-80 disabled:opacity-50"
+              >
+                {pushRetrying ? "PUSHING STOPS…" : "🔄 RETRY ALL STOP PUSHES"}
+              </button>
+
+              {pushStatus && (
+                <p className="text-[var(--amber)] text-[10px]">{pushStatus}</p>
+              )}
+            </div>
           )}
         </div>
       </section>

@@ -90,6 +90,11 @@ export default function Home() {
         ? "needs_update"
         : "aligned";
 
+  // Unprotected positions: stop never successfully pushed to T212
+  const unprotectedCount = openTrades.filter(
+    (t) => t.stopPushedAt == null && (t.stopPushAttempts ?? 0) > 0,
+  ).length;
+
   // Ratchet stops state
   const [ratcheting, setRatcheting] = React.useState(false);
   const [ratchetMsg, setRatchetMsg] = React.useState<string | null>(null);
@@ -253,6 +258,7 @@ export default function Home() {
           <Link href="/journal" className="text-[var(--dim)] hover:text-white transition-colors">JOURNAL</Link>
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
+          <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--green)]">
@@ -272,6 +278,11 @@ export default function Home() {
         {stopAlignmentState === "unknown" && (
           <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--dim)] border border-[var(--border)] px-2 py-0.5">
             ? STOP STATUS UNKNOWN
+          </span>
+        )}
+        {unprotectedCount > 0 && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--red)] border border-[var(--red)]/60 px-2 py-0.5 animate-pulse">
+            ⚠ {unprotectedCount} UNPROTECTED
           </span>
         )}
         <span className="text-[var(--border)]">|</span>
@@ -870,6 +881,9 @@ export default function Home() {
                         <td className="px-3 py-2 text-right text-[var(--amber)]">{fmtPrice(t.trailingStop, c)}</td>
                         <td className={`px-3 py-2 text-right ${displayedActiveStop > activeStop ? "text-[var(--green)]" : ratcheted ? "text-[var(--green)]" : "text-[var(--dim)]"}`}>
                           {fmtPrice(displayedActiveStop, c)}
+                          {t.stopPushedAt == null && (t.stopPushAttempts ?? 0) > 0 && (
+                            <span className="ml-1 text-[9px] text-[var(--red)] animate-pulse font-bold">⚠ NO STOP</span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                           {t212?.stopLoss != null ? (() => {
@@ -1744,9 +1758,7 @@ export default function Home() {
             const allTrades = [...openTrades.map((t) => ({ ...t, _isOpen: true as const })), ...closedTrades.map((t) => ({ ...t, _isOpen: false as const }))];
             const filtered = tradeFilter === "OPEN"
               ? allTrades.filter((t) => t._isOpen)
-              : tradeFilter === "CLOSED"
-                ? allTrades.filter((t) => !t._isOpen)
-                : allTrades;
+              : allTrades;
             const sorted = [...filtered].sort((a, b) => new Date(b.entryDate).getTime() - new Date(a.entryDate).getTime());
 
             return (
@@ -1769,7 +1781,7 @@ export default function Home() {
                   ) : sorted.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
-                        {tradeFilter === "OPEN" ? "No open trades" : tradeFilter === "CLOSED" ? "No closed trades yet" : "No trades yet"}
+                        {tradeFilter === "OPEN" ? "No open trades" : "No trades yet"}
                       </td>
                     </tr>
                   ) : (

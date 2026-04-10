@@ -24,6 +24,7 @@
     "schedule:setup": "scripts\\setupScheduler.bat",
     "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
     "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",
+    "verify:execution": "npx tsx scripts/verifyExecution.ts",
     "backup": "npx tsx scripts/backup.ts",
     "restore": "npx tsx scripts/restore.ts"
   },

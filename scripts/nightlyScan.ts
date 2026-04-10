@@ -35,6 +35,7 @@ import { isTradingDay } from "../src/lib/cruise-control/market-hours";
 import { validateTicker } from "../src/lib/signals/dataValidator";
 import type { ValidationResult } from "../src/lib/signals/dataValidator";
 import { formatAlertMessage, sendTelegram } from "../src/lib/telegram";
+import { isAutoExecutionEnabled, createPendingOrder } from "../src/lib/execution/autoExecutor";
 
 
 // ---------------------------------------------------------------------------
@@ -403,20 +404,88 @@ async function main() {
           data: { actionTaken: "ENTERED" },
         });
 
-        await prisma.trade.create({
-          data: {
-            ticker: signal.ticker,
-            entryDate: today,
-            entryPrice: signal.suggestedEntry,
-            shares: position.shares,
-            hardStop: signal.hardStop,
-            trailingStop: signal.hardStop, // initial trailing stop = hard stop
-            status: "OPEN",
-            volumeRatio: signal.volumeRatio,
-            rangePosition: signal.rangePosition,
-            atr20: signal.atr20,
-          },
-        });
+        // ── Auto-execution check ──────────────────────────────────────
+        const grade = signal.compositeScore?.grade;
+        const isAutoGrade = grade === "A" || grade === "B";
+        let autoExecEnabled = false;
+        if (isAutoGrade) {
+          try {
+            autoExecEnabled = await isAutoExecutionEnabled(grade);
+          } catch { /* fallback to manual */ }
+        }
+
+        if (autoExecEnabled && isAutoGrade) {
+          // Create PendingOrder instead of immediate Trade entry
+          try {
+            // Determine runner eligibility
+            let isRunnerCandidate = false;
+            try {
+              const appSettings2 = await prisma.appSettings.findFirst({ orderBy: { id: "asc" } });
+              const runnerEnabled2 = (appSettings2 as unknown as { runnerEnabled?: boolean })?.runnerEnabled ?? true;
+              if (runnerEnabled2) {
+                const existingRunner2 = await prisma.trade.findFirst({ where: { isRunner: true, status: "OPEN" } });
+                if (!existingRunner2) {
+                  const score2 = signal.compositeScore?.total ?? 0;
+                  isRunnerCandidate = score2 >= 0.55;
+                }
+              }
+            } catch { /* not runner */ }
+
+            // Look up sector from DB ticker table
+            let sector = "Unknown";
+            try {
+              const tickerRow = await prisma.ticker.findFirst({ where: { symbol: signal.ticker } });
+              if (tickerRow?.sector) sector = tickerRow.sector;
+            } catch { /* use default */ }
+
+            await createPendingOrder({
+              ticker: signal.ticker,
+              sector,
+              signalSource: "volume",
+              signalGrade: grade,
+              compositeScore: signal.compositeScore?.total ?? 0,
+              suggestedShares: position.shares,
+              suggestedEntry: signal.suggestedEntry,
+              suggestedStop: signal.hardStop,
+              dollarRisk: position.dollarRisk,
+              isRunner: isRunnerCandidate,
+            });
+            console.log(`  [AUTO-EXEC] ${signal.ticker} — Grade ${grade} pending order created (${position.shares} shares)`);
+          } catch (autoErr) {
+            console.error(`  [AUTO-EXEC ERROR] ${signal.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
+            // Fallback: create trade normally
+            await prisma.trade.create({
+              data: {
+                ticker: signal.ticker,
+                entryDate: today,
+                entryPrice: signal.suggestedEntry,
+                shares: position.shares,
+                hardStop: signal.hardStop,
+                trailingStop: signal.hardStop,
+                status: "OPEN",
+                volumeRatio: signal.volumeRatio,
+                rangePosition: signal.rangePosition,
+                atr20: signal.atr20,
+              },
+            });
+          }
+        } else {
+          // Standard manual trade entry (original behavior)
+          await prisma.trade.create({
+            data: {
+              ticker: signal.ticker,
+              entryDate: today,
+              entryPrice: signal.suggestedEntry,
+              shares: position.shares,
+              hardStop: signal.hardStop,
+              trailingStop: signal.hardStop,
+              status: "OPEN",
+              volumeRatio: signal.volumeRatio,
+              rangePosition: signal.rangePosition,
+              atr20: signal.atr20,
+            },
+          });
+        }
 
         // ── Runner designation ────────────────────────────────────────
         try {
@@ -643,6 +712,58 @@ async function main() {
       }
       if (signalRows.length > 0) {
         await (prisma as any).momentumSignal.createMany({ data: signalRows });
+      }
+
+      // 7b. Auto-execution for Grade A/B momentum signals
+      for (const c of candidates) {
+        const grade = c.compositeScore.grade;
+        if (grade !== "A" && grade !== "B") continue;
+        try {
+          const autoEnabled = await isAutoExecutionEnabled(grade);
+          if (!autoEnabled) continue;
+
+          // Check if already holding this ticker
+          const existingOpen = await prisma.trade.findFirst({
+            where: { ticker: c.ticker, status: "OPEN" },
+          });
+          if (existingOpen) {
+            console.log(`  [AUTO-EXEC SKIP] ${c.ticker} — already open`);
+            continue;
+          }
+
+          // Position sizing for momentum signal (estimate)
+          const riskPerShare = c.price > 0 ? c.price * 0.02 * config.hardStopAtrMultiple : 1;
+          const dollarRisk = accountBalance * (equityCurveState.riskPctPerTrade / 100);
+          const shares = riskPerShare > 0 ? Math.floor(dollarRisk / riskPerShare) : 0;
+          if (shares <= 0) continue;
+
+          const stopPrice = c.price - riskPerShare;
+
+          // Runner check
+          let isRunnerCandidate = false;
+          try {
+            const existingRunner = await prisma.trade.findFirst({ where: { isRunner: true, status: "OPEN" } });
+            if (!existingRunner && c.compositeScore.total >= 0.55) {
+              isRunnerCandidate = true;
+            }
+          } catch { /* not runner */ }
+
+          await createPendingOrder({
+            ticker: c.ticker,
+            sector: c.sector,
+            signalSource: "momentum",
+            signalGrade: grade,
+            compositeScore: c.compositeScore.total,
+            suggestedShares: shares,
+            suggestedEntry: c.price,
+            suggestedStop: stopPrice,
+            dollarRisk,
+            isRunner: isRunnerCandidate,
+          });
+          console.log(`  [AUTO-EXEC] ${c.ticker} — Momentum Grade ${grade} pending order created`);
+        } catch (autoErr) {
+          console.error(`  [AUTO-EXEC ERROR] ${c.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
+        }
       }
 
       // 8. Run alert check

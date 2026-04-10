@@ -153,6 +153,9 @@ interface OpenTrade {
   isRunner: boolean;
   runnerActivatedAt: Date | null;
   runnerPeakProfit: number | null;
+  stopPushedAt: Date | null;
+  stopPushAttempts: number;
+  stopPushError: string | null;
 }
 
 const db = prisma as unknown as {
@@ -186,6 +189,9 @@ const db = prisma as unknown as {
       runnerProfitThreshold: number;
       runnerLookbackDays: number;
     } | null>;
+  };
+  alert: {
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
   };
 };
 
@@ -237,6 +243,92 @@ async function main(): Promise<void> {
   }
 
   logLine("INFO", `Found ${openTrades.length} open position(s)`);
+
+  // ── Step 0: Catch unprotected positions (Layer 2 stop push) ─────────────
+  // Find trades where stop was never successfully pushed to T212
+  const MAX_STOP_PUSH_ATTEMPTS = 5;
+  const unprotected = openTrades.filter(
+    (t) => t.stopPushedAt == null && t.stopPushAttempts < MAX_STOP_PUSH_ATTEMPTS,
+  );
+
+  if (unprotected.length > 0) {
+    logLine("INFO", `Layer 2: ${unprotected.length} unprotected position(s) — attempting stop push`);
+
+    for (const trade of unprotected) {
+      const attempt = trade.stopPushAttempts + 1;
+      const stopPrice = Math.max(
+        trade.hardStopPrice ?? trade.hardStop,
+        trade.trailingStopPrice ?? trade.trailingStop,
+      );
+
+      if (stopPrice <= 0) {
+        logLine("WARN", `${trade.ticker}: no valid stop price — skipping Layer 2 push`);
+        continue;
+      }
+
+      logLine("INFO", `${trade.ticker}: Layer 2 stop push attempt ${attempt}/${MAX_STOP_PUSH_ATTEMPTS} at ${stopPrice.toFixed(2)}`);
+
+      const result = await updateStopOnT212(trade.ticker, trade.shares, null, stopPrice);
+
+      if (result.success) {
+        await db.trade.update({
+          where: { id: trade.id },
+          data: {
+            stopPushedAt: new Date(),
+            stopPushAttempts: attempt,
+            stopPushError: null,
+          },
+        });
+        logLine("INFO", `${trade.ticker}: Layer 2 stop push SUCCESS on attempt ${attempt}`);
+
+        const c = sym(trade.ticker);
+        await notify(
+          `✅ <b>Stop Recovered — ${trade.ticker}</b>\n` +
+          `Layer 2 pushed stop at ${c}${stopPrice.toFixed(2)} (attempt ${attempt})\n` +
+          `Position is now protected.`,
+        );
+      } else {
+        await db.trade.update({
+          where: { id: trade.id },
+          data: {
+            stopPushAttempts: attempt,
+            stopPushError: result.error ?? "Unknown error",
+          },
+        });
+        logLine("ERROR", `${trade.ticker}: Layer 2 stop push FAILED attempt ${attempt}/${MAX_STOP_PUSH_ATTEMPTS}`, {
+          error: result.error,
+        });
+
+        // Escalating Telegram alerts at attempts 2, 3, 5
+        if (attempt === 2 || attempt === 3 || attempt >= MAX_STOP_PUSH_ATTEMPTS) {
+          const severity = attempt >= MAX_STOP_PUSH_ATTEMPTS ? "🚨" : "⚠";
+          const c = sym(trade.ticker);
+          await notify(
+            `${severity} <b>STOP PUSH FAILED — ${trade.ticker}</b>\n` +
+            `Attempt ${attempt}/${MAX_STOP_PUSH_ATTEMPTS} | Target: ${c}${stopPrice.toFixed(2)}\n` +
+            `Error: ${result.error ?? "Unknown"}\n` +
+            (attempt >= MAX_STOP_PUSH_ATTEMPTS
+              ? `<b>MAX ATTEMPTS REACHED — SET STOP MANUALLY NOW</b>`
+              : `Layer 2 will retry next poll cycle.`),
+          );
+        }
+
+        // Create CRITICAL alert at max attempts
+        if (attempt >= MAX_STOP_PUSH_ATTEMPTS) {
+          await db.alert.create({
+            data: {
+              type: "STOP_PUSH_FAILED",
+              ticker: trade.ticker,
+              message: `Stop push failed after ${MAX_STOP_PUSH_ATTEMPTS} attempts. Target: ${stopPrice.toFixed(2)}. Error: ${result.error ?? "Unknown"}. SET STOP MANUALLY.`,
+              severity: "critical",
+              stopPrice,
+              signalSource: trade.signalSource,
+            },
+          });
+        }
+      }
+    }
+  }
 
   // ── Fetch T212 current stops for floor rule ─────────────────────────────
   let t212StopMap: Map<string, number>;

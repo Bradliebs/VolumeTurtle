@@ -30,6 +30,8 @@ export interface Trade {
   runnerPeakProfit: number | null;
   runnerExitProfit: number | null;
   runnerCaptureRate: number | null;
+  stopPushedAt: string | null;
+  stopPushAttempts: number;
 }
 
 export interface ScanResult {

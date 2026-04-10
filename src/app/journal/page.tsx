@@ -82,6 +82,12 @@ export default function JournalPage() {
             WATCHLIST
           </Link>
           <Link
+            href="/execution"
+            className="text-[var(--amber)] hover:text-white transition-colors"
+          >
+            PENDING
+          </Link>
+          <Link
             href="/settings"
             className="text-[var(--dim)] hover:text-white transition-colors"
           >
