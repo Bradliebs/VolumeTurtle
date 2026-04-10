@@ -64,6 +64,14 @@ model ScanRun {
   validationBlocked  Int    @default(0)
   validationWarnings Int    @default(0)
   crossValidated     Int    @default(0)
+  // Market breadth metrics
+  breadthScore        Float?
+  breadthSignal       String?   // STRONG | NEUTRAL | WEAK | DETERIORATING
+  breadthTrend        String?   // IMPROVING | STABLE | DECLINING
+  above50MAPct        Float?    // % above 50d MA
+  above200MAPct       Float?    // % above 200d MA
+  newHighLowRatio     Float?    // new highs vs lows ratio
+  advanceDeclinePct   Float?    // % advancing on the day
 }
 
 model SectorScanResult {

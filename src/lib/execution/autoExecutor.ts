@@ -14,6 +14,8 @@ import { getGbpUsdRate, getCurrencySymbol, isUsdTicker } from "@/lib/currency";
 import { validateTicker } from "@/lib/signals/dataValidator";
 import type { LiveQuote } from "@/lib/signals/dataValidator";
 import { calculateMarketRegime, assessRegime, calculateTickerRegime } from "@/lib/signals/regimeFilter";
+import { calculateBreadth } from "@/lib/signals/breadthIndicator";
+import { getUniverse } from "@/lib/universe/tickers";
 import {
   loadT212Settings,
   getAccountCash,
@@ -241,7 +243,16 @@ export async function preFlightChecks(
   try {
     const regime = await calculateMarketRegime();
     const tickerRegime = await calculateTickerRegime(order.ticker, []);
-    const assessment = assessRegime(regime, tickerRegime);
+
+    // Fetch breadth for 4-layer assessment
+    let breadth = null;
+    try {
+      breadth = await calculateBreadth(getUniverse());
+    } catch {
+      // Breadth unavailable — continue with 3-layer assessment
+    }
+
+    const assessment = assessRegime(regime, tickerRegime, breadth);
 
     if (assessment.overallSignal === "AVOID") {
       failures.push(
@@ -254,6 +265,21 @@ export async function preFlightChecks(
         );
       } else {
         warnings.push("REGIME_CAUTION — operating at reduced risk");
+      }
+    }
+
+    // Breadth-specific checks (within Check 5)
+    if (breadth) {
+      if (breadth.breadthSignal === "DETERIORATING") {
+        failures.push(
+          `BREADTH_DETERIORATING — only ${breadth.above50MA.toFixed(0)}% of universe above 50d MA. No new entries in deteriorating breadth.`,
+        );
+      } else if (breadth.breadthSignal === "WEAK" && order.signalGrade === "B") {
+        failures.push(
+          "BREADTH_WEAK — Grade B suspended in weak breadth conditions. Grade A only.",
+        );
+      } else if (breadth.breadthSignal === "STRONG") {
+        log.info("Breadth STRONG — full execution permitted");
       }
     }
   } catch (err) {

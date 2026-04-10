@@ -108,6 +108,63 @@ export async function GET(req: Request) {
     log.warn({ err }, "Market regime fetch failed, continuing without");
   }
 
+  // Fetch latest breadth data from most recent ScanRun
+  let breadthData: Record<string, unknown> | null = null;
+  try {
+    const latestBreadth = await (prisma as unknown as {
+      scanRun: {
+        findFirst: (args: unknown) => Promise<{
+          breadthScore: number | null;
+          breadthSignal: string | null;
+          breadthTrend: string | null;
+          above50MAPct: number | null;
+          above200MAPct: number | null;
+          newHighLowRatio: number | null;
+          advanceDeclinePct: number | null;
+          startedAt: Date;
+        } | null>;
+        findMany: (args: unknown) => Promise<Array<{ startedAt: Date; breadthScore: number | null }>>;
+      };
+    }).scanRun.findFirst({
+      where: { breadthScore: { not: null } },
+      orderBy: { startedAt: "desc" },
+    });
+    if (latestBreadth?.breadthScore != null) {
+      // Get history for sparkline
+      const breadthHistory = await (prisma as unknown as {
+        scanRun: {
+          findMany: (args: unknown) => Promise<Array<{ startedAt: Date; breadthScore: number | null }>>;
+        };
+      }).scanRun.findMany({
+        where: { breadthScore: { not: null } },
+        orderBy: { startedAt: "desc" },
+        take: 30,
+        select: { startedAt: true, breadthScore: true },
+      });
+      breadthData = {
+        above50MA: latestBreadth.above50MAPct ?? 0,
+        above200MA: latestBreadth.above200MAPct ?? 0,
+        above50MA_count: 0,
+        above200MA_count: 0,
+        totalMeasured: 0,
+        newHighs: 0,
+        newLows: 0,
+        newHighLowRatio: latestBreadth.newHighLowRatio ?? 0,
+        advanceDecline: latestBreadth.advanceDeclinePct ?? 0,
+        breadthScore: latestBreadth.breadthScore,
+        breadthSignal: latestBreadth.breadthSignal ?? "NEUTRAL",
+        breadthTrend: latestBreadth.breadthTrend ?? "STABLE",
+        warning: null,
+        history: breadthHistory.reverse().map((r) => ({
+          date: r.startedAt.toISOString(),
+          score: r.breadthScore,
+        })),
+      };
+    }
+  } catch {
+    // Breadth unavailable — continue without
+  }
+
   // Fetch GBP/USD rate for exposure conversion
   let gbpUsdRate = 1.27;
   try {
@@ -610,6 +667,7 @@ export async function GET(req: Request) {
           asOf: regime.asOf,
         }
       : null,
+    breadth: breadthData,
     equityCurve: {
       systemState: equityCurveState.systemState,
       currentBalance: equityCurveState.currentBalance,

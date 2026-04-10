@@ -127,6 +127,7 @@ export interface DashboardData {
   };
   scanHistory: ScanHistoryEntry[];
   regime: RegimeData | null;
+  breadth: BreadthData | null;
   equityCurve: EquityCurveData | null;
   sparklineSnapshots: SnapshotForSparkline[];
   lastBackupAt: string | null;
@@ -169,6 +170,23 @@ export interface RegimeData {
   volatilityRegime: "NORMAL" | "ELEVATED" | "PANIC";
   vixLevel: number | null;
   asOf: string;
+}
+
+export interface BreadthData {
+  above50MA: number;
+  above200MA: number;
+  above50MA_count: number;
+  above200MA_count: number;
+  totalMeasured: number;
+  newHighs: number;
+  newLows: number;
+  newHighLowRatio: number;
+  advanceDecline: number;
+  breadthScore: number;
+  breadthSignal: "STRONG" | "NEUTRAL" | "WEAK" | "DETERIORATING";
+  breadthTrend: "IMPROVING" | "STABLE" | "DECLINING";
+  warning: string | null;
+  history?: Array<{ date: string; score: number | null }>;
 }
 
 export interface RegimeAssessmentData {

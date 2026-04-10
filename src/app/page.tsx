@@ -11,6 +11,7 @@ import { ConfirmModal } from "./components/ConfirmModal";
 import { BuyConfirmModal } from "./components/BuyConfirmModal";
 import { EquityCurvePanel } from "./components/EquityCurvePanel";
 import { RegimeBanner } from "./components/RegimeBanner";
+import { BreadthPanel } from "./components/BreadthPanel";
 import { ScanHistorySection } from "./components/ScanHistorySection";
 import { SignalCard } from "./components/SignalCard";
 import { GradeLegend } from "./components/GradeLegend";
@@ -406,7 +407,10 @@ export default function Home() {
       </header>
 
       {/* ── REGIME BANNER ── */}
-      <RegimeBanner regime={data?.regime ?? null} />
+      <RegimeBanner regime={data?.regime ?? null} breadth={data?.breadth ?? null} />
+
+      {/* ── BREADTH PANEL ── */}
+      <BreadthPanel breadth={data?.breadth ?? null} />
 
       {/* ── CRUISE CONTROL ── */}
       <CruiseControlPanel />

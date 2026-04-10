@@ -1,4 +1,5 @@
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
+import type { BreadthResult } from "@/lib/signals/breadthIndicator";
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
 import { createLogger } from "@/lib/logger";
@@ -40,7 +41,8 @@ export interface RegimeAssessment {
   tickerRegime: TickerRegime;
   overallSignal: "STRONG" | "CAUTION" | "AVOID";
   warnings: string[];
-  score: number; // 0–3
+  score: number; // 0–4 (was 0–3, now includes breadth layer)
+  breadth: BreadthResult | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +203,7 @@ export function calculateTickerRegime(
 export function assessRegime(
   regime: RegimeState,
   tickerRegime: TickerRegime,
+  breadth?: BreadthResult | null,
 ): RegimeAssessment {
   const warnings: string[] = [];
   let score = 0;
@@ -232,10 +235,39 @@ export function assessRegime(
     );
   }
 
+  // Layer 4: Market breadth (optional — null = not counted)
+  const breadthData = breadth ?? null;
+  if (breadthData) {
+    if (breadthData.breadthSignal === "STRONG" || breadthData.breadthSignal === "NEUTRAL") {
+      score++;
+    } else {
+      warnings.push(
+        `Breadth ${breadthData.breadthSignal} — ${breadthData.above50MA.toFixed(0)}% above 50d MA`,
+      );
+    }
+  }
+
+  // Determine overall signal based on layers assessed
   let overallSignal: RegimeAssessment["overallSignal"];
-  if (score === 3) overallSignal = "STRONG";
-  else if (score === 2) overallSignal = "CAUTION";
-  else overallSignal = "AVOID";
+  if (breadthData) {
+    // 4-layer mode: 4/4 = STRONG, 3-2/4 = CAUTION, 0-1/4 = AVOID
+    if (score >= 4) overallSignal = "STRONG";
+    else if (score >= 2) overallSignal = "CAUTION";
+    else overallSignal = "AVOID";
+  } else {
+    // 3-layer mode (no breadth data): original logic
+    if (score === 3) overallSignal = "STRONG";
+    else if (score === 2) overallSignal = "CAUTION";
+    else overallSignal = "AVOID";
+  }
+
+  // BREADTH OVERRIDE: deteriorating breadth with collapse forces AVOID
+  if (breadthData?.breadthSignal === "DETERIORATING" && breadthData.above50MA < 30) {
+    overallSignal = "AVOID";
+    warnings.push(
+      `BREADTH OVERRIDE — ${breadthData.above50MA.toFixed(0)}% above 50MA forces AVOID regardless of QQQ/VIX`,
+    );
+  }
 
   return {
     regime,
@@ -243,5 +275,6 @@ export function assessRegime(
     overallSignal,
     warnings,
     score,
+    breadth: breadthData,
   };
 }

@@ -36,6 +36,8 @@ import { validateTicker } from "../src/lib/signals/dataValidator";
 import type { ValidationResult } from "../src/lib/signals/dataValidator";
 import { formatAlertMessage, sendTelegram } from "../src/lib/telegram";
 import { isAutoExecutionEnabled, createPendingOrder } from "../src/lib/execution/autoExecutor";
+import { calculateBreadth, breadthModifier, breadthSectorMultiplier } from "../src/lib/signals/breadthIndicator";
+import type { BreadthResult } from "../src/lib/signals/breadthIndicator";
 
 
 // ---------------------------------------------------------------------------
@@ -128,6 +130,27 @@ async function main() {
   console.log(`[nightlyScan] QQQ: ${marketRegime.qqqClose.toFixed(2)} vs 200MA: ${marketRegime.qqq200MA.toFixed(2)} (${marketRegime.qqqPctAboveMA >= 0 ? "+" : ""}${marketRegime.qqqPctAboveMA.toFixed(1)}%)`);
   console.log(`[nightlyScan] VIX: ${marketRegime.vixLevel?.toFixed(1) ?? "unavailable"} (${marketRegime.volatilityRegime})`);
 
+  // 3c. Calculate market breadth
+  console.log(`[nightlyScan] Calculating market breadth…`);
+  let breadth: BreadthResult | null = null;
+  try {
+    breadth = await calculateBreadth(universe);
+    if (breadth) {
+      console.log(
+        `[nightlyScan] Breadth: ${breadth.breadthScore.toFixed(0)} ${breadth.breadthSignal} ` +
+        `(${breadth.above50MA.toFixed(0)}% above 50MA, ` +
+        `${breadth.newHighs} highs / ${breadth.newLows} lows)`,
+      );
+      if (breadth.warning) {
+        console.log(`[nightlyScan] ⚠ Breadth warning: ${breadth.warning}`);
+      }
+    } else {
+      console.log(`[nightlyScan] Breadth skipped — insufficient price cache`);
+    }
+  } catch (err) {
+    console.error(`[nightlyScan] Breadth calculation failed:`, err);
+  }
+
   // Debug logging (dry-run only)
   if (DRY_RUN) {
     console.log(`\n[DEBUG] ── Data Fetch Summary ──`);
@@ -203,6 +226,28 @@ async function main() {
         volumeRatio: signal.volumeRatio,
         rangePosition: signal.rangePosition,
       });
+    }
+  }
+
+  // Apply breadth modifier to composite scores (adjusts regime component externally)
+  if (breadth) {
+    const mod = breadthModifier(breadth.breadthSignal);
+    if (mod !== 0) {
+      for (const signal of signals) {
+        if (signal.compositeScore) {
+          const adjusted = signal.compositeScore.components.regimeScore + mod;
+          const clamped = Math.max(0, Math.min(0.35, adjusted));
+          const delta = clamped - signal.compositeScore.components.regimeScore;
+          signal.compositeScore.components.regimeScore = clamped;
+          signal.compositeScore.total = Math.max(0, signal.compositeScore.total + delta);
+          // Re-grade
+          if (signal.compositeScore.total >= 0.75) signal.compositeScore.grade = "A";
+          else if (signal.compositeScore.total >= 0.55) signal.compositeScore.grade = "B";
+          else if (signal.compositeScore.total >= 0.35) signal.compositeScore.grade = "C";
+          else signal.compositeScore.grade = "D";
+        }
+      }
+      console.log(`[nightlyScan] Breadth modifier applied: ${mod > 0 ? "+" : ""}${mod.toFixed(2)} (${breadth.breadthSignal})`);
     }
   }
 
@@ -582,6 +627,14 @@ async function main() {
         market: "ALL",
         scanType: "momentum",
         marketRegime: marketRegime.marketRegime,
+        // Breadth metrics
+        breadthScore: breadth?.breadthScore ?? null,
+        breadthSignal: breadth?.breadthSignal ?? null,
+        breadthTrend: breadth?.breadthTrend ?? null,
+        above50MAPct: breadth?.above50MA ?? null,
+        above200MAPct: breadth?.above200MA ?? null,
+        newHighLowRatio: breadth?.newHighLowRatio ?? null,
+        advanceDeclinePct: breadth?.advanceDecline ?? null,
       },
     });
 
@@ -654,10 +707,30 @@ async function main() {
       }
 
       // 6. Run breakout engine on top 5 sectors
-      const hotSectors = sectors.slice(0, 5).map((s) => s.sector);
+      const hotSectorCount = breadth ? Math.round(5 * breadthSectorMultiplier(breadth.breadthSignal)) : 5;
+      const hotSectors = sectors.slice(0, Math.max(1, hotSectorCount)).map((s) => s.sector);
       const { candidates, nearMisses } = findBreakouts(
         mUniverse, priceMap, hotSectors, sectors,
       );
+
+      // Apply breadth modifier to momentum composite scores
+      if (breadth) {
+        const mod = breadthModifier(breadth.breadthSignal);
+        if (mod !== 0) {
+          for (const c of candidates) {
+            const adjusted = c.compositeScore.components.regime + mod;
+            const clamped = Math.max(0, Math.min(0.35, adjusted));
+            const delta = clamped - c.compositeScore.components.regime;
+            c.compositeScore.components.regime = clamped;
+            c.compositeScore.total = Math.max(0, c.compositeScore.total + delta);
+            // Re-grade
+            if (c.compositeScore.total >= 0.75) c.compositeScore.grade = "A";
+            else if (c.compositeScore.total >= 0.55) c.compositeScore.grade = "B";
+            else if (c.compositeScore.total >= 0.35) c.compositeScore.grade = "C";
+            else c.compositeScore.grade = "D";
+          }
+        }
+      }
       console.log(`[momentum] Breakouts: ${candidates.length} signals, ${nearMisses.length} near misses`);
 
       // 7. Save MomentumSignal rows
