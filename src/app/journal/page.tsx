@@ -31,11 +31,15 @@ export default function JournalPage() {
     setError(null);
     try {
       const res = await fetch(`/api/journal?source=${src}`);
-      if (!res.ok) throw new Error("Failed to fetch journal data");
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`Failed to fetch journal data (${res.status}${body ? `: ${body.slice(0, 100)}` : ""})`);
+      }
       const json: JournalData = await res.json();
       setData(json);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
+      setData(null);
     } finally {
       setLoading(false);
     }
@@ -105,6 +109,25 @@ export default function JournalPage() {
       {error && (
         <div className="bg-[var(--red)]/10 border border-[var(--red)]/30 rounded-lg p-4 mb-6 text-sm text-[var(--red)]">
           {error}
+          <button
+            onClick={() => void fetchData(source)}
+            className="ml-4 text-xs underline hover:text-white"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* ── EMPTY STATE ── */}
+      {!loading && !error && !data && (
+        <div className="border border-[var(--border)] bg-[var(--card)] p-8 text-center text-sm text-[var(--dim)]" style={mono}>
+          <p>No journal data available.</p>
+          <button
+            onClick={() => void fetchData(source)}
+            className="mt-3 px-4 py-2 text-xs border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors"
+          >
+            RELOAD
+          </button>
         </div>
       )}
 
