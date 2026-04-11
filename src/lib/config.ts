@@ -83,7 +83,7 @@ export const config: VolumeTurtleConfig = {
   rangePositionThreshold: envFloat("RANGE_POSITION_THRESHOLD", 0.75),
   atrPeriod: envInt("ATR_PERIOD", 20),
   trailingStopDays: envInt("TRAILING_STOP_DAYS", 10),
-  hardStopAtrMultiple: envFloat("HARD_STOP_ATR_MULTIPLE", 2),
+  hardStopAtrMultiple: envFloat("HARD_STOP_ATR_MULTIPLE", 1.5),
   trailAtrMultiple: envFloat("TRAIL_ATR_MULTIPLE", 2),
   scoreWeightRegime: envFloat("SCORE_WEIGHT_REGIME", 0.40),
   scoreWeightTrend: envFloat("SCORE_WEIGHT_TREND", 0.30),

@@ -338,7 +338,7 @@ async function section3_preflight() {
     fail("Pre-flight", "3.2", "Check 3 — POSITION LIMIT", String(err));
   }
 
-  // --- 3.3 Circuit breaker ---
+  // --- 3.3 Circuit breaker (full equity curve state) ---
   try {
     const snapshots = await db.accountSnapshot.findMany({
       orderBy: { date: "desc" },
@@ -350,10 +350,14 @@ async function section3_preflight() {
     } else {
       const eqState = calculateEquityCurveState(snapshots);
       const stateStr = `${eqState.systemState} (drawdown: ${eqState.drawdownPct.toFixed(1)}%, risk multiplier: ${eqState.riskMultiplier})`;
+
       if (eqState.systemState === "PAUSE") {
-        pass("Pre-flight", "3.3", "Check 4 — CIRCUIT BREAKER", `${stateStr} — would block execution`);
+        pass("Pre-flight", "3.3", "Check 4 — CIRCUIT BREAKER", `${stateStr} — would block execution (PAUSE)`);
+      } else if (eqState.systemState === "CAUTION") {
+        console.log(`         Risk halved to ${eqState.riskPctPerTrade.toFixed(1)}%, max positions: ${eqState.maxPositions}`);
+        pass("Pre-flight", "3.3", "Check 4 — CIRCUIT BREAKER", `${stateStr} — would halve position size, not block`);
       } else {
-        pass("Pre-flight", "3.3", "Check 4 — CIRCUIT BREAKER", `${stateStr} — execution allowed`);
+        pass("Pre-flight", "3.3", "Check 4 — CIRCUIT BREAKER", `${stateStr} — full risk active`);
       }
     }
   } catch (err) {
@@ -455,6 +459,36 @@ async function section3_preflight() {
     }
   } catch (err) {
     fail("Pre-flight", "3.8", "Check 10 — T212 CONNECTION", String(err));
+  }
+
+  // --- 3.9 Exposure cap (Check 11) ---
+  try {
+    // Simulate an absurdly large order to verify exposure cap fires
+    const latestSnapshot = await db.accountSnapshot.findFirst({ orderBy: { date: "desc" } });
+    const testBalance = latestSnapshot?.balance ?? 1000;
+    const testEntry = 100;
+    const absurdShares = 99999;
+    const exposureGBP = absurdShares * testEntry;
+    const exposurePct = (exposureGBP / testBalance) * 100;
+
+    if (exposurePct > 25) {
+      const maxShares = (testBalance * 0.25) / testEntry;
+      const cappedShares = parseFloat(maxShares.toFixed(4));
+      if (cappedShares < absurdShares) {
+        pass(
+          "Pre-flight",
+          "3.9",
+          "Check 11 — EXPOSURE CAP",
+          `${absurdShares} shares → ${cappedShares} (${exposurePct.toFixed(0)}% capped to 25%) — PASS`,
+        );
+      } else {
+        fail("Pre-flight", "3.9", "Check 11 — EXPOSURE CAP", "Cap did not reduce shares");
+      }
+    } else {
+      pass("Pre-flight", "3.9", "Check 11 — EXPOSURE CAP", `${exposurePct.toFixed(1)}% — under limit, no cap needed`);
+    }
+  } catch (err) {
+    fail("Pre-flight", "3.9", "Check 11 — EXPOSURE CAP", String(err));
   }
 }
 

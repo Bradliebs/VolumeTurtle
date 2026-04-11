@@ -18,7 +18,7 @@ export const config: VolumeTurtleConfig = {
   rangePositionThreshold: 0.75,
   atrPeriod: 20,
   trailingStopDays: 10,
-  hardStopAtrMultiple: 2.0,
+  hardStopAtrMultiple: 1.5,
   trailAtrMultiple: 2.0,
   scoreWeightRegime: 0.40,
   scoreWeightTrend: 0.30,

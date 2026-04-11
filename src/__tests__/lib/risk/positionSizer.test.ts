@@ -26,28 +26,34 @@ function makeSignal(overrides: Partial<VolumeSignal> = {}): VolumeSignal {
 
 describe("calculatePositionSize", () => {
   it("calculates correct shares based on 2% risk", () => {
-    const signal = makeSignal({ riskPerShare: 10, suggestedEntry: 100 });
+    // atr20=5, config.hardStopAtrMultiple=1.5 → riskPerShare=7.5
+    const signal = makeSignal({ atr20: 5, suggestedEntry: 100 });
     const result = calculatePositionSize(signal, 10000);
     expect(result).not.toBeNull();
-    // dollarRisk = 10000 * 0.02 = 200, shares = 200 / 10 = 20
+    // dollarRisk = 10000 * 0.02 = 200, uncapped shares = 200 / 7.5 = 26.6667
     expect(result!.dollarRisk).toBe(200);
-    expect(result!.shares).toBe(20);
-    expect(result!.totalExposure).toBe(2000);
+    expect(result!.riskPerShare).toBeCloseTo(7.5, 4);
+    // exposure = 26.6667 * 100 = 2666.67 > 25% of 10000 → capped to 25 shares
+    expect(result!.wasCapped).toBe(true);
+    expect(result!.cappedFrom).toBeCloseTo(26.6667, 3);
+    expect(result!.shares).toBe(25);
+    expect(result!.totalExposure).toBe(2500);
   });
 
   it("supports fractional shares", () => {
-    const signal = makeSignal({ riskPerShare: 7, suggestedEntry: 100 });
+    // atr20=3.5, config.hardStopAtrMultiple=1.5 → riskPerShare=5.25
+    const signal = makeSignal({ atr20: 3.5, suggestedEntry: 50 });
     const result = calculatePositionSize(signal, 10000);
     expect(result).not.toBeNull();
-    // dollarRisk = 200, shares = 200/7 ≈ 28.5714
-    expect(result!.shares).toBeCloseTo(28.5714, 3);
+    // dollarRisk = 200, shares = 200/5.25 ≈ 38.0952
+    expect(result!.shares).toBeCloseTo(38.0952, 3);
+    expect(result!.wasCapped).toBe(false);
   });
 
   it("returns null when total exposure < £1", () => {
-    // Very high riskPerShare → tiny position
-    const signal = makeSignal({ riskPerShare: 1000, suggestedEntry: 0.01 });
+    // atr20=5, suggestedEntry=0.01 → riskPerShare=7.5, shares=200/7.5=26.67, exposure=0.2667 < 1
+    const signal = makeSignal({ atr20: 5, suggestedEntry: 0.01 });
     const result = calculatePositionSize(signal, 10000);
-    // dollarRisk = 200, shares = 200/1000 = 0.2, exposure = 0.2 * 0.01 = 0.002
     expect(result).toBeNull();
   });
 
@@ -71,7 +77,8 @@ describe("calculatePositionSize", () => {
   });
 
   it("uses reduced risk in CAUTION state", () => {
-    const signal = makeSignal({ riskPerShare: 10 });
+    // atr20=5, config.hardStopAtrMultiple=1.5 → riskPerShare=7.5
+    const signal = makeSignal({ atr20: 5, suggestedEntry: 100 });
     const cautionState: EquityCurveState = {
       currentBalance: 9000,
       peakBalance: 10000,
@@ -89,25 +96,35 @@ describe("calculatePositionSize", () => {
     const result = calculatePositionSize(signal, 10000, cautionState);
     expect(result).not.toBeNull();
     // effectiveRiskPct = 1.0/100 = 0.01, dollarRisk = 10000 * 0.01 = 100
+    // shares = 100 / 7.5 = 13.3333
     expect(result!.dollarRisk).toBe(100);
-    expect(result!.shares).toBe(10);
+    expect(result!.shares).toBeCloseTo(13.3333, 3);
+    expect(result!.wasCapped).toBe(false);
   });
 
-  it("warns when exposure exceeds 25%", () => {
-    // Low riskPerShare → large position → high exposure
-    const signal = makeSignal({ riskPerShare: 0.5, suggestedEntry: 100 });
+  it("caps exposure at 25% and sets wasCapped", () => {
+    // atr20=2, config.hardStopAtrMultiple=1.5 → riskPerShare=3
+    // balance=1000, dollarRisk=20, shares=20/3=6.6667
+    // exposure=6.6667*100=666.67, 66.7% > 25% → cap to 2.5 shares
+    const signal = makeSignal({ atr20: 2, suggestedEntry: 100 });
     const result = calculatePositionSize(signal, 1000);
     expect(result).not.toBeNull();
-    // dollarRisk = 1000 * 0.02 = 20, shares = 20/0.5 = 40, exposure = 40*100 = 4000 = 400% !!!
-    expect(result!.exposureWarning).not.toBeNull();
-    expect(result!.exposureWarning!).toContain("HIGH EXPOSURE");
+    expect(result!.wasCapped).toBe(true);
+    expect(result!.cappedFrom).toBeCloseTo(6.6667, 3);
+    expect(result!.shares).toBe(2.5);
+    expect(result!.totalExposure).toBe(250);
+    expect(result!.exposurePercent).toBe(0.25);
   });
 
-  it("does not warn when exposure is under 25%", () => {
-    const signal = makeSignal({ riskPerShare: 10, suggestedEntry: 100 });
+  it("does not cap when exposure is under 25%", () => {
+    // atr20=10, config.hardStopAtrMultiple=1.5 → riskPerShare=15
+    // balance=10000, dollarRisk=200, shares=200/15=13.3333
+    // exposure=13.3333*100=1333.33, 13.3% < 25%
+    const signal = makeSignal({ atr20: 10, suggestedEntry: 100 });
     const result = calculatePositionSize(signal, 10000);
-    // exposure = 20 * 100 = 2000 / 10000 = 20%
     expect(result!.exposureWarning).toBeNull();
+    expect(result!.wasCapped).toBe(false);
+    expect(result!.cappedFrom).toBeNull();
   });
 });
 

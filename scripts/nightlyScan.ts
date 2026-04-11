@@ -795,6 +795,31 @@ async function main() {
           const autoEnabled = await isAutoExecutionEnabled(grade);
           if (!autoEnabled) continue;
 
+          // Daily order limit check
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const todayOrders = await (prisma as any).pendingOrder.count({
+            where: {
+              createdAt: { gte: todayStart },
+              status: { in: ["pending", "executed"] },
+            },
+          });
+          const momSettings = await prisma.appSettings.findFirst({ orderBy: { id: "asc" } });
+          const maxPerDay = (momSettings as unknown as { autoExecutionMaxPerDay?: number })?.autoExecutionMaxPerDay ?? 2;
+          if (todayOrders >= maxPerDay) {
+            console.log(`  [AutoExec] Daily limit reached (${todayOrders}/${maxPerDay}) — skipping ${c.ticker}`);
+            break;
+          }
+
+          // Check for duplicate pending order (not just open trades)
+          const existingPending = await (prisma as any).pendingOrder.findFirst({
+            where: { ticker: c.ticker, status: "pending" },
+          });
+          if (existingPending) {
+            console.log(`  [AutoExec] Pending order already exists for ${c.ticker} (ID: ${existingPending.id}) — skipping momentum duplicate`);
+            continue;
+          }
+
           // Check if already holding this ticker
           const existingOpen = await prisma.trade.findFirst({
             where: { ticker: c.ticker, status: "OPEN" },
@@ -833,7 +858,7 @@ async function main() {
             dollarRisk,
             isRunner: isRunnerCandidate,
           });
-          console.log(`  [AUTO-EXEC] ${c.ticker} — Momentum Grade ${grade} pending order created`);
+          console.log(`  [AutoExec] Momentum pending order created — ${c.ticker} Grade ${grade}${isRunnerCandidate ? " (RUNNER)" : ""}`);
         } catch (autoErr) {
           console.error(`  [AUTO-EXEC ERROR] ${c.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
         }

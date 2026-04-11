@@ -15,6 +15,8 @@ import { validateTicker } from "@/lib/signals/dataValidator";
 import type { LiveQuote } from "@/lib/signals/dataValidator";
 import { calculateMarketRegime, assessRegime, calculateTickerRegime } from "@/lib/signals/regimeFilter";
 import { calculateBreadth } from "@/lib/signals/breadthIndicator";
+import { calculateEquityCurveState, type SnapshotInput } from "@/lib/risk/equityCurve";
+import { config } from "@/lib/config";
 import { getUniverse } from "@/lib/universe/tickers";
 import {
   loadT212Settings,
@@ -218,25 +220,64 @@ export async function preFlightChecks(
     failures.push(`POSITION_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── Check 4: CIRCUIT BREAKER ──
+  // ── Check 4: CIRCUIT BREAKER (full equity curve state) ──
   try {
-    const snapshot = await db.accountSnapshot.findFirst({
+    const snapshots = await (db as unknown as {
+      accountSnapshot: {
+        findMany: (args: unknown) => Promise<SnapshotInput[]>;
+      };
+    }).accountSnapshot.findMany({
       orderBy: { date: "desc" },
+      take: 30,
     });
-    if (snapshot) {
-      // Simple drawdown check — PAUSE at 20%
-      const balance = snapshot.balance;
-      // Check if system is paused via scan run state
-      const lastScan = await db.trade.findFirst({
-        where: { status: "OPEN" },
-      });
-      // Use balance to check if we should reduce risk
-      if (balance <= 0) {
-        failures.push("CIRCUIT_BREAKER_PAUSE — account balance is zero or negative");
+
+    if (snapshots.length > 0) {
+      const eqState = calculateEquityCurveState(
+        snapshots,
+        config.riskPctPerTrade * 100,
+        config.maxPositions,
+      );
+
+      const normalRiskPct = config.riskPctPerTrade * 100;
+
+      if (eqState.systemState === "PAUSE") {
+        failures.push(
+          `CIRCUIT_BREAKER_PAUSE — drawdown ≥ 20%. No new entries until recovery. Current drawdown: ${eqState.drawdownPct.toFixed(1)}%`,
+        );
+      } else if (eqState.systemState === "CAUTION") {
+        const cautionRiskPct = eqState.riskPctPerTrade;
+        const originalShares = order.suggestedShares;
+        const riskPerShare = order.suggestedEntry - order.suggestedStop;
+
+        if (riskPerShare > 0) {
+          const reducedRisk = (order.suggestedShares * riskPerShare * cautionRiskPct) / normalRiskPct;
+          const reducedShares = Math.round((reducedRisk / riskPerShare) * 10000) / 10000;
+
+          order.dollarRisk = reducedRisk;
+          order.suggestedShares = reducedShares;
+
+          adjustments.push(
+            `CIRCUIT_BREAKER_CAUTION — sized at ${cautionRiskPct.toFixed(1)}% risk (drawdown: ${eqState.drawdownPct.toFixed(1)}%). Shares: ${originalShares} → ${reducedShares.toFixed(4)}`,
+          );
+          log.info(
+            `[PreFlight] CAUTION mode — position sized at ${cautionRiskPct}% risk (drawdown: ${eqState.drawdownPct.toFixed(1)}%). Shares reduced from ${originalShares} to ${reducedShares.toFixed(4)}`,
+          );
+
+          // Send Telegram note (non-blocking)
+          sendTelegram({
+            text:
+              `<b>⚠ CAUTION MODE</b> — <code>${order.ticker}</code>\n` +
+              `Position sized at ${cautionRiskPct.toFixed(1)}% risk (not ${normalRiskPct.toFixed(1)}%)\n` +
+              `Drawdown: ${eqState.drawdownPct.toFixed(1)}%\n` +
+              `Shares: ${reducedShares.toFixed(4)} (risk: £${reducedRisk.toFixed(2)})`,
+          }).catch(() => { /* best effort */ });
+        }
+      } else {
+        log.info(`[PreFlight] Circuit breaker NORMAL — full ${normalRiskPct.toFixed(1)}% risk active`);
       }
     }
-  } catch {
-    // Non-blocking — continue checks
+  } catch (err) {
+    log.warn({ error: err instanceof Error ? err.message : String(err) }, "Circuit breaker check failed — continuing");
   }
 
   // ── Check 5: REGIME GATE ──
@@ -348,6 +389,43 @@ export async function preFlightChecks(
     }
   } catch (err) {
     failures.push(`T212_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  // ── Check 11: MAX EXPOSURE CAP ──
+  try {
+    const gbpUsdRate = await getGbpUsdRate();
+    const balance = (await db.accountSnapshot.findFirst({
+      orderBy: { date: "desc" },
+    }))?.balance ?? 0;
+
+    if (balance > 0) {
+      const exposureGBP = isUsdTicker(order.ticker)
+        ? (order.suggestedShares * order.suggestedEntry) / gbpUsdRate
+        : order.suggestedShares * order.suggestedEntry;
+      const exposurePct = (exposureGBP / balance) * 100;
+
+      if (exposurePct > 25) {
+        const maxSharesGBP = balance * 0.25;
+        const maxSharesValue = isUsdTicker(order.ticker)
+          ? maxSharesGBP * gbpUsdRate
+          : maxSharesGBP;
+        const cappedShares = parseFloat((maxSharesValue / order.suggestedEntry).toFixed(4));
+
+        log.info(
+          `[PreFlight] Check 11 — exposure cap: ${exposurePct.toFixed(1)}% > 25% limit. Shares: ${order.suggestedShares} → ${cappedShares}`,
+        );
+
+        order.suggestedShares = cappedShares;
+
+        adjustments.push(
+          `EXPOSURE_CAPPED — ${exposurePct.toFixed(1)}% capped to 25%. Shares reduced to ${cappedShares}`,
+        );
+      } else {
+        log.info(`[PreFlight] Check 11 — exposure OK (${exposurePct.toFixed(1)}% of account)`);
+      }
+    }
+  } catch {
+    // Non-blocking — exposure cap is a safety net, not a hard gate
   }
 
   return {
@@ -515,7 +593,7 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
   }
 
   // All checks passed
-  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 10 checks passed. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
+  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 11 checks passed. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
 
   // Update order with any price-drift adjustments before execution
   if (result.adjustments.length > 0) {
@@ -748,7 +826,7 @@ async function sendPendingAlert(order: PendingOrderRow): Promise<void> {
   try {
     const currency = getCurrencySymbol(order.ticker);
     const riskPct = order.dollarRisk > 0 ? ((order.dollarRisk / (order.suggestedShares * order.suggestedEntry)) * 100).toFixed(1) : "?";
-    const sourceLabel = order.signalSource === "volume" ? "VOL" : "MOM";
+    const sourceLabel = order.signalSource === "momentum" ? "MOM 🟣" : "VOL 🔵";
     const runnerNote = order.isRunner ? "\n🏃 RUNNER designated" : "";
     const secsRemaining = Math.max(0, Math.round((order.cancelDeadline.getTime() - Date.now()) / 1000));
     const minsRemaining = Math.ceil(secsRemaining / 60);
