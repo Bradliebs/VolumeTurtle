@@ -35,6 +35,29 @@ function loadSectorMap(): Record<string, string> {
 
 async function main() {
   const dryRun = !process.argv.includes("--apply");
+  const checkOnly = process.argv.includes("--check");
+
+  if (checkOnly) {
+    // Just show current sector state of open trades
+    const open = await db.trade.findMany({ where: { status: "OPEN" } });
+    console.log(`\n${open.length} open trades:`);
+    for (const t of open) {
+      console.log(`  ${t.ticker.padEnd(10)} sector: ${t.sector ?? "NULL"}`);
+    }
+
+    // Also check for SIDU duplicates
+    const sidus = await db.trade.findMany({ where: { ticker: "SIDU" } });
+    if (sidus.length > 1) {
+      console.log(`\n⚠ SIDU has ${sidus.length} trade entries:`);
+      for (const s of sidus) {
+        console.log(`  id=${s.id}  status=${s.status}  entry=${new Date((s as unknown as {entryDate:Date}).entryDate).toISOString().slice(0,10)}`);
+      }
+    }
+
+    await (prisma as unknown as { $disconnect: () => Promise<void> }).$disconnect();
+    return;
+  }
+
   const sectorMap = loadSectorMap();
   console.log(`Loaded ${Object.keys(sectorMap).length} tickers from universe.csv`);
 

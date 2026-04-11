@@ -28,6 +28,12 @@ export function EquityCurvePanel({ data, snapshots }: { data: EquityCurveData | 
           </span>
           <span className="text-[var(--border)]">|</span>
           <span className="text-sm text-[var(--green)]">✅ NORMAL — full risk active</span>
+          {data.earlyRecoveryActive && (
+            <span className="text-sm text-[var(--green)] ml-1">↑ EARLY RECOVERY</span>
+          )}
+          {(data.consecutiveUpDays ?? 0) >= 2 && (
+            <span className="text-[10px] text-[var(--green)] ml-1">({data.consecutiveUpDays} consecutive up days)</span>
+          )}
           {snapshots.length >= 2 && (
             <div className="ml-auto">
               <EquitySparkline snapshots={snapshots} peak={data.peakBalance} ma20={data.equityMA20} />
@@ -76,6 +82,18 @@ export function EquityCurvePanel({ data, snapshots }: { data: EquityCurveData | 
             <>
               <span className="text-[var(--dim)]">Recovery needed</span>
               <span className="text-[var(--dim)]">{fmtMoney(data.drawdownAbs)} to return to NORMAL</span>
+            </>
+          )}
+          {data.earlyRecoveryActive && (
+            <>
+              <span className="text-[var(--dim)]">Early recovery</span>
+              <span className="text-[var(--green)]">↑ Active — {data.consecutiveUpDays} consecutive up days</span>
+            </>
+          )}
+          {!data.earlyRecoveryActive && (data.consecutiveUpDays ?? 0) >= 2 && (
+            <>
+              <span className="text-[var(--dim)]">Recovery momentum</span>
+              <span className="text-[var(--amber)]">↑ {data.consecutiveUpDays} consecutive up days{isPause ? ` — need drawdown < 18% for early CAUTION (currently ${data.drawdownPct.toFixed(1)}%)` : isCaution ? ` — need drawdown < 8% + above MA20 for early NORMAL (currently ${data.drawdownPct.toFixed(1)}%)` : ""}</span>
             </>
           )}
         </div>

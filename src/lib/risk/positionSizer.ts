@@ -2,6 +2,8 @@ import type { VolumeSignal } from "@/lib/signals/volumeSignal";
 import { config } from "@/lib/config";
 import type { EquityCurveState } from "./equityCurve";
 
+export type VixLevel = "NORMAL" | "ELEVATED" | "PANIC";
+
 export interface PositionSize {
   ticker: string;
   shares: number;
@@ -16,6 +18,8 @@ export interface PositionSize {
   effectiveRiskPct: number;
   wasCapped: boolean;
   cappedFrom: number | null;
+  vixMultiplier: number;
+  vixLevel: string;
 }
 
 /**
@@ -30,15 +34,33 @@ export function calculatePositionSize(
   signal: VolumeSignal,
   accountBalance: number,
   equityCurveState?: EquityCurveState,
+  vixLevel: VixLevel = "NORMAL",
 ): PositionSize | null {
   // If PAUSE state — no new positions
   if (equityCurveState?.systemState === "PAUSE") {
     return null;
   }
 
-  const effectiveRiskPct = equityCurveState
+  // VIX-adjusted sizing — reduces position size, not stop width
+  const vixMultiplier =
+    vixLevel === "PANIC" ? config.vixPanicSizeMult :
+    vixLevel === "ELEVATED" ? config.vixElevatedSizeMult :
+    config.vixNormalSizeMult;
+
+  const baseRiskPct = equityCurveState
     ? equityCurveState.riskPctPerTrade / 100
     : config.riskPctPerTrade;
+
+  const effectiveRiskPct = baseRiskPct * vixMultiplier;
+
+  if (vixMultiplier !== 1.0) {
+    console.log(
+      `[PositionSizer] VIX adjustment: ${vixLevel} → ${vixMultiplier}× multiplier ` +
+      `(${(baseRiskPct * 100).toFixed(1)}% → ${(effectiveRiskPct * 100).toFixed(2)}% effective risk)`,
+    );
+  }
+
+  if (effectiveRiskPct <= 0) return null;
 
   const dollarRisk = accountBalance * effectiveRiskPct;
 
@@ -78,7 +100,8 @@ export function calculatePositionSize(
   // Detailed position size logging
   console.log(
     `[PositionSizer] ${signal.ticker}\n` +
-    `  Balance: £${accountBalance} | Risk: ${(effectiveRiskPct * 100).toFixed(1)}% → £${dollarRisk.toFixed(2)} at risk\n` +
+    `  Balance: £${accountBalance} | Risk: ${(effectiveRiskPct * 100).toFixed(1)}% → £${dollarRisk.toFixed(2)} at risk` +
+    (vixMultiplier !== 1.0 ? ` (VIX ${vixLevel}: ${vixMultiplier}×)` : "") + `\n` +
     `  Entry: $${signal.suggestedEntry} | ATR: $${signal.atr20.toFixed(2)} | Multiplier: ${config.hardStopAtrMultiple}×\n` +
     `  Hard stop: $${hardStop.toFixed(2)} | Risk/share: $${riskPerShare.toFixed(2)}\n` +
     `  Shares: ${shares} | Exposure: $${finalExposure.toFixed(2)} (${(exposurePercent * 100).toFixed(1)}% of account)`,
@@ -95,10 +118,11 @@ export function calculatePositionSize(
     exposurePercent,
     exposureWarning,
     equityState: equityCurveState?.systemState ?? null,
-    // Display value as percentage (e.g. 2.0 = 2%)
-    effectiveRiskPct: equityCurveState?.riskPctPerTrade ?? (config.riskPctPerTrade * 100),
+    effectiveRiskPct: effectiveRiskPct * 100,
     wasCapped,
     cappedFrom,
+    vixMultiplier,
+    vixLevel,
   };
 }
 

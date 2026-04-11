@@ -38,6 +38,7 @@ import { formatAlertMessage, sendTelegram } from "../src/lib/telegram";
 import { isAutoExecutionEnabled, createPendingOrder } from "../src/lib/execution/autoExecutor";
 import { calculateBreadth, breadthModifier, breadthSectorMultiplier } from "../src/lib/signals/breadthIndicator";
 import type { BreadthResult } from "../src/lib/signals/breadthIndicator";
+import { ensureTickerInCsv } from "../src/lib/universe/ensureInCsv";
 
 
 // ---------------------------------------------------------------------------
@@ -422,7 +423,7 @@ async function main() {
     for (const signal of signals) {
       if (!checkMaxPositions(openCount, equityCurveState.maxPositions)) break;
 
-      const position = calculatePositionSize(signal, accountBalance, equityCurveState);
+      const position = calculatePositionSize(signal, accountBalance, equityCurveState, marketRegime.volatilityRegime);
       if (!position) {
         console.log(`  [SKIP] ${signal.ticker} — position too small`);
         continue;
@@ -513,6 +514,7 @@ async function main() {
                 atr20: signal.atr20,
               },
             });
+            ensureTickerInCsv(signal.ticker);
           }
         } else {
           // Standard manual trade entry (original behavior)
@@ -530,6 +532,7 @@ async function main() {
               atr20: signal.atr20,
             },
           });
+          ensureTickerInCsv(signal.ticker);
         }
 
         // ── Runner designation ────────────────────────────────────────

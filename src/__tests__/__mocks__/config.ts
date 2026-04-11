@@ -36,4 +36,7 @@ export const config: VolumeTurtleConfig = {
   usScanHour: 22,
   usScanMinute: 0,
   syncDelayMs: 500,
+  vixNormalSizeMult: 1.0,
+  vixElevatedSizeMult: 0.75,
+  vixPanicSizeMult: 0.0,
 };

@@ -306,6 +306,12 @@ model AppSettings {
   autoExecutionStartHour  Int     @default(14)     // UTC start hour
   autoExecutionEndHour    Int     @default(20)     // UTC end hour
   maxPositionsPerSector   Int     @default(2)      // max open positions in one sector
+  gapDownThreshold       Float   @default(0.03)   // cancel if open is X% below signal close
+  gapUpResizeThreshold   Float   @default(0.05)   // resize if open is X% above signal close
+  vixNormalSizeMult      Float   @default(1.00)   // VIX < 25: full size
+  vixElevatedSizeMult    Float   @default(0.75)   // VIX 25-35: 75% size
+  earlyPauseToCautionPct Float   @default(22.0)   // early PAUSE→CAUTION when drawdown < this % (above 20% PAUSE threshold)
+  earlyCautionToNormalPct Float  @default(12.0)    // early CAUTION→NORMAL when drawdown < this % (above 10% CAUTION threshold)
   updatedAt             DateTime @updatedAt
 }
 

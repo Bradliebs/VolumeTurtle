@@ -28,6 +28,7 @@ import {
   type T212Instrument,
 } from "@/lib/t212/client";
 import { pushStopToT212 } from "@/lib/t212/pushStop";
+import { ensureTickerInCsv } from "@/lib/universe/ensureInCsv";
 
 const log = createLogger("autoExecutor");
 
@@ -120,6 +121,8 @@ interface AppSettingsRow {
   autoExecutionStartHour: number;
   autoExecutionEndHour: number;
   maxPositionsPerSector: number;
+  gapDownThreshold: number;
+  gapUpResizeThreshold: number;
 }
 
 interface T212ConnectionRow {
@@ -623,7 +626,57 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
 
   // All checks passed
   await logExecution(order.id, "PRE_FLIGHT_PASS", `All 12 pre-flight checks passed — proceeding with order placement. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
+  // ── Gap guardrail \u2014 check open vs signal close ──
+  const gapSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+  const gapDownThreshold = gapSettings?.gapDownThreshold ?? 0.03;
+  const gapUpResizeThreshold = gapSettings?.gapUpResizeThreshold ?? 0.05;
+  const signalClose = order.suggestedEntry;
+  const livePrice = liveQuote.price;
+  const gapPct = (livePrice - signalClose) / signalClose;
 
+  // Gap DOWN \u2014 failed breakout
+  if (gapPct < -gapDownThreshold) {
+    await db.pendingOrder.update({
+      where: { id: order.id },
+      data: {
+        status: "cancelled",
+        cancelledAt: new Date(),
+        cancelReason: `GAP_DOWN \u2014 opened ${(gapPct * 100).toFixed(1)}% below signal close $${signalClose.toFixed(2)}`,
+      },
+    });
+    await logExecution(
+      order.id,
+      "GAP_DOWN_CANCEL",
+      `Live price $${livePrice.toFixed(2)} is ${(gapPct * 100).toFixed(1)}% below signal close $${signalClose.toFixed(2)} \u2014 cancelling (failed breakout)`,
+    );
+    try {
+      await sendTelegram({
+        text:
+          `<b>\u274C ORDER CANCELLED \u2014 GAP DOWN</b>\n` +
+          `<code>${order.ticker}</code>\n` +
+          `Signal close: $${signalClose.toFixed(2)}\n` +
+          `Open price:   $${livePrice.toFixed(2)}\n` +
+          `Gap: ${(gapPct * 100).toFixed(1)}%\n` +
+          `<i>Breakout failed \u2014 order not placed</i>`,
+      });
+    } catch { /* best effort */ }
+    return;
+  }
+
+  // Gap UP \u2014 recalculate position size at new price
+  if (gapPct > gapUpResizeThreshold) {
+    const riskPerShare = livePrice - order.suggestedStop;
+    if (riskPerShare > 0) {
+      const newShares = parseFloat((order.dollarRisk / riskPerShare).toFixed(4));
+      await logExecution(
+        order.id,
+        "GAP_UP_RESIZE",
+        `Live price $${livePrice.toFixed(2)} is +${(gapPct * 100).toFixed(1)}% above signal close. Shares recalculated: ${order.suggestedShares} \u2192 ${newShares}`,
+      );
+      order.suggestedShares = newShares;
+      order.suggestedEntry = livePrice;
+    }
+  }
   // Update order with any price-drift adjustments before execution
   if (result.adjustments.length > 0) {
     await db.pendingOrder.update({
@@ -684,6 +737,9 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
 
     // Send execution alert
     await sendExecutionAlert(order, execResult);
+
+    // Ensure ticker exists in universe.csv for future sector lookups
+    ensureTickerInCsv(order.ticker, order.sector || "Technology");
   } else {
     await db.pendingOrder.update({
       where: { id: order.id },

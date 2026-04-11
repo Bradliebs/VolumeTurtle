@@ -126,6 +126,57 @@ describe("calculatePositionSize", () => {
     expect(result!.wasCapped).toBe(false);
     expect(result!.cappedFrom).toBeNull();
   });
+
+  it("returns default VIX fields when no vixLevel provided", () => {
+    const signal = makeSignal({ atr20: 10, suggestedEntry: 100 });
+    const result = calculatePositionSize(signal, 10000);
+    expect(result).not.toBeNull();
+    expect(result!.vixLevel).toBe("NORMAL");
+    expect(result!.vixMultiplier).toBe(1.0);
+  });
+
+  it("reduces shares by 75% in ELEVATED VIX", () => {
+    // Normal: riskPct=2%, dollarRisk=200, riskPerShare=15, shares=13.3333
+    // Elevated: vixMult=0.75, effectiveRisk=1.5%, dollarRisk=150, shares=10
+    const signal = makeSignal({ atr20: 10, suggestedEntry: 100 });
+    const result = calculatePositionSize(signal, 10000, undefined, "ELEVATED");
+    expect(result).not.toBeNull();
+    expect(result!.vixLevel).toBe("ELEVATED");
+    expect(result!.vixMultiplier).toBe(0.75);
+    expect(result!.dollarRisk).toBe(150);
+    expect(result!.shares).toBe(10);
+  });
+
+  it("returns null in PANIC VIX (0% size multiplier)", () => {
+    const signal = makeSignal({ atr20: 10, suggestedEntry: 100 });
+    const result = calculatePositionSize(signal, 10000, undefined, "PANIC");
+    expect(result).toBeNull();
+  });
+
+  it("stacks VIX with equity curve CAUTION", () => {
+    // CAUTION: riskPct=1%, ELEVATED VIX: 0.75× → effective=0.75%
+    // dollarRisk = 10000 * 0.0075 = 75, riskPerShare=15, shares=5
+    const signal = makeSignal({ atr20: 10, suggestedEntry: 100 });
+    const cautionState: EquityCurveState = {
+      currentBalance: 9000,
+      peakBalance: 10000,
+      drawdownPct: 10,
+      drawdownAbs: 1000,
+      equityMA20: null,
+      aboveEquityMA: true,
+      systemState: "CAUTION",
+      riskMultiplier: 0.5,
+      maxPositions: 3,
+      riskPctPerTrade: 1.0,
+      reason: "Reduced risk",
+      triggeredAt: null,
+    };
+    const result = calculatePositionSize(signal, 10000, cautionState, "ELEVATED");
+    expect(result).not.toBeNull();
+    expect(result!.dollarRisk).toBe(75);
+    expect(result!.shares).toBe(5);
+    expect(result!.vixMultiplier).toBe(0.75);
+  });
 });
 
 describe("checkMaxPositions", () => {

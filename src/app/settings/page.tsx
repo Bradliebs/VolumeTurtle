@@ -107,6 +107,12 @@ export default function SettingsPage() {
   const [autoExecStartHour, setAutoExecStartHour] = useState("14");
   const [autoExecEndHour, setAutoExecEndHour] = useState("20");
   const [autoExecMaxPerSector, setAutoExecMaxPerSector] = useState("2");
+  const [autoExecGapDown, setAutoExecGapDown] = useState("3");
+  const [autoExecGapUp, setAutoExecGapUp] = useState("5");
+  const [autoExecVixNormal, setAutoExecVixNormal] = useState("100");
+  const [autoExecVixElevated, setAutoExecVixElevated] = useState("75");
+  const [autoExecEarlyPause, setAutoExecEarlyPause] = useState("22");
+  const [autoExecEarlyCaution, setAutoExecEarlyCaution] = useState("12");
   const [autoExecSaving, setAutoExecSaving] = useState(false);
   const [autoExecStatus, setAutoExecStatus] = useState<string | null>(null);
   const [autoExecConfirmText, setAutoExecConfirmText] = useState("");
@@ -150,6 +156,12 @@ export default function SettingsPage() {
         setAutoExecStartHour(String(d.autoExecutionStartHour));
         setAutoExecEndHour(String(d.autoExecutionEndHour));
         setAutoExecMaxPerSector(String(d.maxPositionsPerSector ?? 2));
+        setAutoExecGapDown(String(Math.round((d.gapDownThreshold ?? 0.03) * 100)));
+        setAutoExecGapUp(String(Math.round((d.gapUpResizeThreshold ?? 0.05) * 100)));
+        setAutoExecVixNormal(String(Math.round((d.vixNormalSizeMult ?? 1.0) * 100)));
+        setAutoExecVixElevated(String(Math.round((d.vixElevatedSizeMult ?? 0.75) * 100)));
+        setAutoExecEarlyPause(String(d.earlyPauseToCautionPct ?? 22));
+        setAutoExecEarlyCaution(String(d.earlyCautionToNormalPct ?? 12));
       }
     } catch { /* silent */ }
   }
@@ -204,6 +216,12 @@ export default function SettingsPage() {
           autoExecutionStartHour: parseInt(autoExecStartHour, 10),
           autoExecutionEndHour: parseInt(autoExecEndHour, 10),
           maxPositionsPerSector: parseInt(autoExecMaxPerSector, 10),
+          gapDownThreshold: parseFloat(autoExecGapDown) / 100,
+          gapUpResizeThreshold: parseFloat(autoExecGapUp) / 100,
+          vixNormalSizeMult: parseFloat(autoExecVixNormal) / 100,
+          vixElevatedSizeMult: parseFloat(autoExecVixElevated) / 100,
+          earlyPauseToCautionPct: parseFloat(autoExecEarlyPause),
+          earlyCautionToNormalPct: parseFloat(autoExecEarlyCaution),
         }),
       });
       if (res.ok) {
@@ -1060,6 +1078,60 @@ export default function SettingsPage() {
                 <span className="text-[var(--dim)]">positions per sector</span>
               </div>
               <p className="text-[10px] text-[#555] mt-0.5 max-w-[300px]">Prevents overexposure to correlated positions. Example: max 2 means no more than 2 Energy stocks open simultaneously.</p>
+            </div>
+          </div>
+
+          {/* Gap thresholds */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Gap-down cancel</span>
+            <input type="number" step="1" min="1" max="20" value={autoExecGapDown} onChange={(e) => setAutoExecGapDown(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">% below signal close</span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Gap-up resize</span>
+            <input type="number" step="1" min="1" max="20" value={autoExecGapUp} onChange={(e) => setAutoExecGapUp(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+            <span className="text-[var(--dim)]">% above signal close</span>
+          </div>
+
+          {/* VIX position sizing */}
+          <div className="flex items-start gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0 pt-1.5">VIX sizing</span>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--dim)] w-24 text-[10px]">Normal (&lt;25)</span>
+                <input type="number" step="5" min="0" max="100" value={autoExecVixNormal} onChange={(e) => setAutoExecVixNormal(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+                <span className="text-[var(--dim)]">% of risk</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--dim)] w-24 text-[10px]">Elevated (25-35)</span>
+                <input type="number" step="5" min="0" max="100" value={autoExecVixElevated} onChange={(e) => setAutoExecVixElevated(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+                <span className="text-[var(--dim)]">% of risk</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--dim)] w-24 text-[10px]">Panic (&gt;35)</span>
+                <span className="w-16 px-2 py-1.5 text-center text-[var(--red)]" style={mono}>0%</span>
+                <span className="text-[var(--dim)] text-[10px]">(blocked by regime gate)</span>
+              </div>
+              <p className="text-[10px] text-[#555] max-w-[300px]">Multiplies base risk % before sizing. Stop width is unchanged — only position size adapts.</p>
+            </div>
+          </div>
+
+          {/* Early recovery thresholds */}
+          <div className="flex items-start gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0 pt-1.5">Early recovery</span>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--dim)] w-32 text-[10px]">PAUSE → CAUTION at</span>
+                <input type="number" step="1" min="10" max="19" value={autoExecEarlyPause} onChange={(e) => setAutoExecEarlyPause(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+                <span className="text-[var(--dim)]">% drawdown</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[var(--dim)] w-32 text-[10px]">CAUTION → NORMAL at</span>
+                <input type="number" step="1" min="1" max="9" value={autoExecEarlyCaution} onChange={(e) => setAutoExecEarlyCaution(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+                <span className="text-[var(--dim)]">% drawdown</span>
+              </div>
+              <p className="text-[10px] text-[#555] max-w-[300px]">Both require 3 consecutive rising balance snapshots. Thresholds should be slightly above the standard PAUSE (20%) and CAUTION (10%) levels.</p>
             </div>
           </div>
 

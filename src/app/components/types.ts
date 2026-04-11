@@ -156,6 +156,8 @@ export interface EquityCurveData {
   riskPctPerTrade: number;
   maxPositions: number;
   reason: string;
+  earlyRecoveryActive?: boolean;
+  consecutiveUpDays?: number;
 }
 
 export interface SnapshotForSparkline {

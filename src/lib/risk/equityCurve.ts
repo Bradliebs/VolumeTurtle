@@ -21,6 +21,9 @@ export interface EquityCurveState {
 
   reason: string;
   triggeredAt: string | null;
+
+  earlyRecoveryActive: boolean;
+  consecutiveUpDays: number;
 }
 
 import { config } from "@/lib/config";
@@ -33,11 +36,15 @@ const RECOVERY_SNAPSHOTS = 3;
 /**
  * Calculate the equity curve state from account snapshots.
  * Determines whether the system should operate normally, with caution, or pause.
+ * Supports early recovery: if balance is rising for 3+ consecutive snapshots
+ * and drawdown is near the recovery threshold, transitions early.
  */
 export function calculateEquityCurveState(
   snapshots: SnapshotInput[],
   baseRiskPct: number = 2.0,
   baseMaxPositions: number = 5,
+  earlyPauseToCautionPct: number = 22.0,
+  earlyCautionToNormalPct: number = 12.0,
 ): EquityCurveState {
   if (snapshots.length === 0) {
     return {
@@ -53,6 +60,8 @@ export function calculateEquityCurveState(
       riskPctPerTrade: baseRiskPct,
       reason: "No history — operating normally",
       triggeredAt: null,
+      earlyRecoveryActive: false,
+      consecutiveUpDays: 0,
     };
   }
 
@@ -71,12 +80,25 @@ export function calculateEquityCurveState(
 
   const aboveEquityMA = equityMA20 !== null ? currentBalance >= equityMA20 : true;
 
+  // Count consecutive rising balance snapshots (from most recent)
+  let consecutiveUpDays = 0;
+  if (snapshots.length >= 2) {
+    for (let i = snapshots.length - 1; i >= 1; i--) {
+      if (snapshots[i]!.balance > snapshots[i - 1]!.balance) {
+        consecutiveUpDays++;
+      } else {
+        break;
+      }
+    }
+  }
+
   // Determine system state
   let systemState: SystemState;
   let riskMultiplier: number;
   let maxPositions: number;
   let riskPctPerTrade: number;
   let reason: string;
+  let earlyRecoveryActive = false;
 
   if (drawdownPct >= PAUSE_DRAWDOWN_PCT) {
     systemState = "PAUSE";
@@ -84,6 +106,16 @@ export function calculateEquityCurveState(
     maxPositions = 0;
     riskPctPerTrade = 0;
     reason = `Account down ${drawdownPct.toFixed(1)}% from peak — new entries paused`;
+
+    // Early recovery: PAUSE → CAUTION
+    if (consecutiveUpDays >= 3 && drawdownPct < earlyPauseToCautionPct) {
+      systemState = "CAUTION";
+      riskMultiplier = 0.5;
+      maxPositions = 3;
+      riskPctPerTrade = baseRiskPct * 0.5;
+      earlyRecoveryActive = true;
+      reason = `Early recovery — ${consecutiveUpDays} consecutive up days, drawdown ${drawdownPct.toFixed(1)}% < ${earlyPauseToCautionPct}% threshold → PAUSE → CAUTION`;
+    }
   } else if (drawdownPct >= CAUTION_DRAWDOWN_PCT || !aboveEquityMA) {
     systemState = "CAUTION";
     riskMultiplier = 0.5;
@@ -96,6 +128,16 @@ export function calculateEquityCurveState(
       reason = `Account down ${drawdownPct.toFixed(1)}% from peak — reduced risk`;
     } else {
       reason = "Account below 20-day equity MA — reduced risk";
+    }
+
+    // Early recovery: CAUTION → NORMAL
+    if (consecutiveUpDays >= 3 && drawdownPct < earlyCautionToNormalPct && aboveEquityMA) {
+      systemState = "NORMAL";
+      riskMultiplier = 1.0;
+      maxPositions = baseMaxPositions;
+      riskPctPerTrade = baseRiskPct;
+      earlyRecoveryActive = true;
+      reason = `Early recovery — ${consecutiveUpDays} consecutive up days, drawdown ${drawdownPct.toFixed(1)}% < ${earlyCautionToNormalPct}%, above MA20 → CAUTION → NORMAL`;
     }
   } else {
     systemState = "NORMAL";
@@ -118,6 +160,8 @@ export function calculateEquityCurveState(
     riskPctPerTrade,
     reason,
     triggeredAt: null,
+    earlyRecoveryActive,
+    consecutiveUpDays,
   };
 }
 

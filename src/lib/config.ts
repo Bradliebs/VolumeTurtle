@@ -61,6 +61,9 @@ export interface VolumeTurtleConfig {
   usScanHour: number;
   usScanMinute: number;
   syncDelayMs: number;
+  vixNormalSizeMult: number;
+  vixElevatedSizeMult: number;
+  vixPanicSizeMult: number;
 }
 
 const volumeSpikeMin = envFloat("VOLUME_SPIKE_MIN", envFloat("VOLUME_SPIKE_MULTIPLIER", 2.0));
@@ -101,6 +104,9 @@ export const config: VolumeTurtleConfig = {
   usScanHour: envInt("US_SCAN_HOUR", 22),
   usScanMinute: envInt("US_SCAN_MINUTE", 0),
   syncDelayMs: envInt("SYNC_DELAY_MS", 500),
+  vixNormalSizeMult: envFloat("VIX_NORMAL_SIZE_MULT", 1.0),
+  vixElevatedSizeMult: envFloat("VIX_ELEVATED_SIZE_MULT", 0.75),
+  vixPanicSizeMult: envFloat("VIX_PANIC_SIZE_MULT", 0.0),
 };
 
 // Validate config at load time

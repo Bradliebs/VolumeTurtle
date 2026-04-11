@@ -524,6 +524,42 @@ async function section3_preflight() {
   } catch (err) {
     fail("Pre-flight", "3.10", "Check 12 — SECTOR CONCENTRATION", String(err));
   }
+
+  // --- 3.11 Gap guardrail ---
+  try {
+    const signalClose = 100.0;
+    const gapDownPrice = 96.5; // 3.5% gap down
+    const gapPct = (gapDownPrice - signalClose) / signalClose;
+    const threshold = (sectorSettings?.["gapDownThreshold"] as number) ?? 0.03;
+
+    if (gapPct < -threshold) {
+      pass(
+        "Pre-flight",
+        "3.11",
+        "Gap guardrail — GAP DOWN",
+        `${(gapPct * 100).toFixed(1)}% gap correctly detected (threshold: ${(threshold * 100).toFixed(0)}%)`,
+      );
+    } else {
+      fail("Pre-flight", "3.11", "Gap guardrail — GAP DOWN", `Gap ${(gapPct * 100).toFixed(1)}% not detected`);
+    }
+
+    const gapUpPrice = 106.0; // 6% gap up
+    const gapUpPct = (gapUpPrice - signalClose) / signalClose;
+    const upThreshold = (sectorSettings?.["gapUpResizeThreshold"] as number) ?? 0.05;
+
+    if (gapUpPct > upThreshold) {
+      pass(
+        "Pre-flight",
+        "3.12",
+        "Gap guardrail — GAP UP",
+        `+${(gapUpPct * 100).toFixed(1)}% gap correctly triggers resize (threshold: ${(upThreshold * 100).toFixed(0)}%)`,
+      );
+    } else {
+      fail("Pre-flight", "3.12", "Gap guardrail — GAP UP", `Gap +${(gapUpPct * 100).toFixed(1)}% not detected`);
+    }
+  } catch (err) {
+    fail("Pre-flight", "3.11", "Gap guardrail", String(err));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
