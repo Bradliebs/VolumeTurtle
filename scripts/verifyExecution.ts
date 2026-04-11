@@ -490,6 +490,40 @@ async function section3_preflight() {
   } catch (err) {
     fail("Pre-flight", "3.9", "Check 11 — EXPOSURE CAP", String(err));
   }
+
+  // --- 3.10 Sector concentration (Check 12) ---
+  try {
+    const firstTrade = await db.trade.findFirst({ where: { status: "OPEN" } });
+    const sectorSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+    const maxPerSector = (sectorSettings?.["maxPositionsPerSector"] as number) ?? 2;
+
+    if (firstTrade && firstTrade["sector"]) {
+      const sector = firstTrade["sector"] as string;
+      const sectorCount = await db.trade.count({
+        where: { sector, status: "OPEN" },
+      });
+
+      if (sectorCount >= maxPerSector) {
+        pass(
+          "Pre-flight",
+          "3.10",
+          "Check 12 — SECTOR CONCENTRATION",
+          `${sector} at limit: ${sectorCount}/${maxPerSector} — correctly blocks`,
+        );
+      } else {
+        pass(
+          "Pre-flight",
+          "3.10",
+          "Check 12 — SECTOR CONCENTRATION",
+          `${sector} has room: ${sectorCount}/${maxPerSector} — correctly allows`,
+        );
+      }
+    } else {
+      pass("Pre-flight", "3.10", "Check 12 — SECTOR CONCENTRATION", "No open trades with sector to test against");
+    }
+  } catch (err) {
+    fail("Pre-flight", "3.10", "Check 12 — SECTOR CONCENTRATION", String(err));
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

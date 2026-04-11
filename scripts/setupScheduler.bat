@@ -1,5 +1,6 @@
 @echo off
-echo Setting up VolumeTurtle scheduled scans...
+setlocal enabledelayedexpansion
+echo Setting up VolumeTurtle scheduled tasks...
 echo.
 
 REM --- Validate required env var ---
@@ -14,42 +15,64 @@ if "%SCHEDULED_SCAN_TOKEN%"=="" (
 REM --- Create log directory ---
 mkdir "%USERPROFILE%\VolumeTurtle\logs" 2>nul
 
+set INSTALL_DIR=%~dp0..
+if "!INSTALL_DIR:~-1!"=="\" set INSTALL_DIR=!INSTALL_DIR:~0,-1!
+
 REM --- LSE Scan: 17:30 weekdays ---
-schtasks /create /tn "VolumeTurtle_LSE_Scan" ^
-  /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=LSE\" > \"%USERPROFILE%\VolumeTurtle\logs\lse_scan.log\" 2>&1" ^
+schtasks /create /tn "VolumeTurtle_Scan_LSE" ^
+  /tr "cmd /c \"!INSTALL_DIR!\scripts\run-scan.bat\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 17:30 ^
   /f
 
-echo LSE scan scheduled at 17:30 (weekdays only)
+echo   LSE scan — every weekday at 17:30
 
 REM --- US Scan: 22:00 weekdays ---
-schtasks /create /tn "VolumeTurtle_US_Scan" ^
-  /tr "curl -s -H \"Authorization: Bearer %SCHEDULED_SCAN_TOKEN%\" \"http://localhost:3000/api/scan/scheduled?market=US\" > \"%USERPROFILE%\VolumeTurtle\logs\us_scan.log\" 2>&1" ^
+schtasks /create /tn "VolumeTurtle_Scan_US" ^
+  /tr "cmd /c \"!INSTALL_DIR!\scripts\run-scan.bat\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 22:00 ^
   /f
 
-echo US scan scheduled at 22:00 (weekdays only)
+echo   US scan  — every weekday at 22:00
 
-REM --- Start app on Windows login ---
-schtasks /create /tn "VolumeTurtle_Startup" ^
-  /tr "\"%~dp0start.bat\"" ^
-  /sc onlogon ^
+REM --- Cruise Control: hourly 08:00-17:00 weekdays ---
+schtasks /create /tn "VolumeTurtle_CruiseControl" ^
+  /tr "cmd /c \"!INSTALL_DIR!\scripts\cruise-daemon.bat\"" ^
+  /sc weekly ^
+  /d MON,TUE,WED,THU,FRI ^
+  /st 08:00 ^
+  /ri 60 ^
+  /du 09:00 ^
   /f
 
-echo App startup on login scheduled
+echo   Cruise control — hourly 08:00-17:00 on weekdays
+
+REM --- Execution Scheduler: every 1 min 14:00-20:00 weekdays ---
+schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
+  /tr "cmd /c cd /d \"!INSTALL_DIR!\" && npx tsx scripts/executionScheduler.ts" ^
+  /sc weekly ^
+  /d MON,TUE,WED,THU,FRI ^
+  /st 14:00 ^
+  /ri 1 ^
+  /du 06:00 ^
+  /f
+
+echo   Execution scheduler — every minute 14:00-20:00 on weekdays
 echo.
 
-echo Done. Tasks created:
-schtasks /query /tn "VolumeTurtle_LSE_Scan"
-schtasks /query /tn "VolumeTurtle_US_Scan"
-schtasks /query /tn "VolumeTurtle_Startup"
+echo Done. Verifying tasks:
 echo.
-echo Run this to remove schedules:
-echo   schtasks /delete /tn "VolumeTurtle_LSE_Scan" /f
-echo   schtasks /delete /tn "VolumeTurtle_US_Scan" /f
-echo   schtasks /delete /tn "VolumeTurtle_Startup" /f
+schtasks /query /tn "VolumeTurtle_Scan_LSE"
+schtasks /query /tn "VolumeTurtle_Scan_US"
+schtasks /query /tn "VolumeTurtle_CruiseControl"
+schtasks /query /tn "VolumeTurtle_ExecutionScheduler"
+echo.
+echo To remove all tasks:
+echo   schtasks /delete /tn "VolumeTurtle_Scan_LSE" /f
+echo   schtasks /delete /tn "VolumeTurtle_Scan_US" /f
+echo   schtasks /delete /tn "VolumeTurtle_CruiseControl" /f
+echo   schtasks /delete /tn "VolumeTurtle_ExecutionScheduler" /f
 pause

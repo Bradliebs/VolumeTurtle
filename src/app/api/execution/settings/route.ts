@@ -12,6 +12,7 @@ const db = prisma as unknown as {
       autoExecutionMaxPerDay: number;
       autoExecutionStartHour: number;
       autoExecutionEndHour: number;
+      maxPositionsPerSector: number;
     } | null>;
     upsert: (args: unknown) => Promise<unknown>;
   };
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
     autoExecutionMaxPerDay: row?.autoExecutionMaxPerDay ?? 2,
     autoExecutionStartHour: row?.autoExecutionStartHour ?? 14,
     autoExecutionEndHour: row?.autoExecutionEndHour ?? 20,
+    maxPositionsPerSector: row?.maxPositionsPerSector ?? 2,
   });
 }
 
@@ -53,6 +55,7 @@ export async function POST(req: NextRequest) {
     autoExecutionMaxPerDay,
     autoExecutionStartHour,
     autoExecutionEndHour,
+    maxPositionsPerSector,
   } = body as {
     autoExecutionEnabled?: boolean;
     autoExecutionMinGrade?: string;
@@ -60,6 +63,7 @@ export async function POST(req: NextRequest) {
     autoExecutionMaxPerDay?: number;
     autoExecutionStartHour?: number;
     autoExecutionEndHour?: number;
+    maxPositionsPerSector?: number;
   };
 
   // Validate
@@ -77,8 +81,9 @@ export async function POST(req: NextRequest) {
   }
   if (autoExecutionEndHour != null && (autoExecutionEndHour < 0 || autoExecutionEndHour > 23)) {
     return NextResponse.json({ error: "End hour must be 0–23" }, { status: 400 });
+  }  if (maxPositionsPerSector != null && (maxPositionsPerSector < 1 || maxPositionsPerSector > 5)) {
+    return NextResponse.json({ error: "Max per sector must be 1\u20135" }, { status: 400 });
   }
-
   const data: Record<string, unknown> = {};
   if (autoExecutionEnabled != null) data.autoExecutionEnabled = autoExecutionEnabled;
   if (autoExecutionMinGrade != null) data.autoExecutionMinGrade = autoExecutionMinGrade;
@@ -86,6 +91,7 @@ export async function POST(req: NextRequest) {
   if (autoExecutionMaxPerDay != null) data.autoExecutionMaxPerDay = autoExecutionMaxPerDay;
   if (autoExecutionStartHour != null) data.autoExecutionStartHour = autoExecutionStartHour;
   if (autoExecutionEndHour != null) data.autoExecutionEndHour = autoExecutionEndHour;
+  if (maxPositionsPerSector != null) data.maxPositionsPerSector = maxPositionsPerSector;
 
   const existing = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
   await db.appSettings.upsert({

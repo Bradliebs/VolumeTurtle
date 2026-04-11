@@ -32,6 +32,7 @@ export interface Trade {
   runnerCaptureRate: number | null;
   stopPushedAt: string | null;
   stopPushAttempts: number;
+  sector: string | null;
 }
 
 export interface ScanResult {

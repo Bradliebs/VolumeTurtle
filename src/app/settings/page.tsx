@@ -106,6 +106,7 @@ export default function SettingsPage() {
   const [autoExecMaxPerDay, setAutoExecMaxPerDay] = useState("2");
   const [autoExecStartHour, setAutoExecStartHour] = useState("14");
   const [autoExecEndHour, setAutoExecEndHour] = useState("20");
+  const [autoExecMaxPerSector, setAutoExecMaxPerSector] = useState("2");
   const [autoExecSaving, setAutoExecSaving] = useState(false);
   const [autoExecStatus, setAutoExecStatus] = useState<string | null>(null);
   const [autoExecConfirmText, setAutoExecConfirmText] = useState("");
@@ -148,6 +149,7 @@ export default function SettingsPage() {
         setAutoExecMaxPerDay(String(d.autoExecutionMaxPerDay));
         setAutoExecStartHour(String(d.autoExecutionStartHour));
         setAutoExecEndHour(String(d.autoExecutionEndHour));
+        setAutoExecMaxPerSector(String(d.maxPositionsPerSector ?? 2));
       }
     } catch { /* silent */ }
   }
@@ -201,6 +203,7 @@ export default function SettingsPage() {
           autoExecutionMaxPerDay: parseInt(autoExecMaxPerDay, 10),
           autoExecutionStartHour: parseInt(autoExecStartHour, 10),
           autoExecutionEndHour: parseInt(autoExecEndHour, 10),
+          maxPositionsPerSector: parseInt(autoExecMaxPerSector, 10),
         }),
       });
       if (res.ok) {
@@ -1046,6 +1049,18 @@ export default function SettingsPage() {
             <span className="text-[var(--dim)]">to</span>
             <input type="number" step="1" min="0" max="23" value={autoExecEndHour} onChange={(e) => setAutoExecEndHour(e.target.value)} className="w-12 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
             <span className="text-[var(--dim)]">UTC</span>
+          </div>
+
+          {/* Max per sector */}
+          <div className="flex items-start gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0 pt-1.5">Max per sector</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <input type="number" step="1" min="1" max="5" value={autoExecMaxPerSector} onChange={(e) => setAutoExecMaxPerSector(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--amber)] outline-none" style={mono} />
+                <span className="text-[var(--dim)]">positions per sector</span>
+              </div>
+              <p className="text-[10px] text-[#555] mt-0.5 max-w-[300px]">Prevents overexposure to correlated positions. Example: max 2 means no more than 2 Energy stocks open simultaneously.</p>
+            </div>
           </div>
 
           {/* Save + Emergency */}

@@ -22,8 +22,8 @@
     "repair:false-closes": "npx tsx scripts/repairFalseClosedTrades.ts",
     "repair:false-closes:apply": "npx tsx scripts/repairFalseClosedTrades.ts --apply",
     "schedule:setup": "scripts\\setupScheduler.bat",
-    "schedule:remove": "schtasks /delete /tn VolumeTurtle_LSE_Scan /f && schtasks /delete /tn VolumeTurtle_US_Scan /f && schtasks /delete /tn VolumeTurtle_Startup /f",
-    "schedule:status": "schtasks /query /tn VolumeTurtle_LSE_Scan && schtasks /query /tn VolumeTurtle_US_Scan",
+    "schedule:remove": "schtasks /delete /tn VolumeTurtle_Scan_LSE /f & schtasks /delete /tn VolumeTurtle_Scan_US /f & schtasks /delete /tn VolumeTurtle_CruiseControl /f & schtasks /delete /tn VolumeTurtle_ExecutionScheduler /f",
+    "schedule:status": "schtasks /query /tn VolumeTurtle_Scan_LSE & schtasks /query /tn VolumeTurtle_Scan_US & schtasks /query /tn VolumeTurtle_CruiseControl & schtasks /query /tn VolumeTurtle_ExecutionScheduler",
     "verify:execution": "npx tsx scripts/verifyExecution.ts",
     "backup": "npx tsx scripts/backup.ts",
     "restore": "npx tsx scripts/restore.ts"

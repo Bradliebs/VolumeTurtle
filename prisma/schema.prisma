@@ -168,6 +168,7 @@ model Trade {
   signalSource  String    @default("volume") // "volume" | "momentum" | "manual"
   signalScore   Float?    // composite score at time of entry
   signalGrade   String?   // "A" | "B" | "C" | "D"
+  sector        String?   // sector classification for concentration tracking
   timingScore            Float?
   closeStrength          Float?
   volumeExpansion        Float?
@@ -304,6 +305,7 @@ model AppSettings {
   autoExecutionMaxPerDay  Int     @default(2)      // max orders per calendar day
   autoExecutionStartHour  Int     @default(14)     // UTC start hour
   autoExecutionEndHour    Int     @default(20)     // UTC end hour
+  maxPositionsPerSector   Int     @default(2)      // max open positions in one sector
   updatedAt             DateTime @updatedAt
 }
 

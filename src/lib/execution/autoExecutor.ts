@@ -104,6 +104,7 @@ interface ExecutionLogRow {
 interface TradeRow {
   id: string;
   ticker: string;
+  sector: string | null;
   status: string;
   isRunner: boolean;
   entryPrice: number;
@@ -118,6 +119,7 @@ interface AppSettingsRow {
   autoExecutionMaxPerDay: number;
   autoExecutionStartHour: number;
   autoExecutionEndHour: number;
+  maxPositionsPerSector: number;
 }
 
 interface T212ConnectionRow {
@@ -428,6 +430,33 @@ export async function preFlightChecks(
     // Non-blocking — exposure cap is a safety net, not a hard gate
   }
 
+  // ── Check 12: SECTOR CONCENTRATION ──
+  try {
+    const sectorSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+    const maxPerSector = sectorSettings?.maxPositionsPerSector ?? 2;
+
+    if (order.sector) {
+      const openTradesInSector = await db.trade.count({
+        where: {
+          sector: order.sector,
+          status: "OPEN",
+        },
+      });
+
+      if (openTradesInSector >= maxPerSector) {
+        failures.push(
+          `SECTOR_CONCENTRATION — already holding ${openTradesInSector}/${maxPerSector} positions in ${order.sector}. Close an existing ${order.sector} position first.`,
+        );
+      } else {
+        log.info(`[PreFlight] Check 12 — sector OK: ${openTradesInSector}/${maxPerSector} in ${order.sector}`);
+      }
+    } else {
+      log.info("[PreFlight] Check 12 — sector unknown, skipping concentration check");
+    }
+  } catch (err) {
+    log.warn({ error: err instanceof Error ? err.message : String(err) }, "Sector concentration check failed — continuing");
+  }
+
   return {
     passed: failures.length === 0,
     failures,
@@ -593,7 +622,7 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
   }
 
   // All checks passed
-  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 11 checks passed. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
+  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 12 pre-flight checks passed — proceeding with order placement. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
 
   // Update order with any price-drift adjustments before execution
   if (result.adjustments.length > 0) {
@@ -642,6 +671,7 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
         signalSource: order.signalSource,
         signalScore: order.compositeScore,
         signalGrade: order.signalGrade,
+        sector: order.sector || null,
         isRunner: order.isRunner,
         importedFromT212: false,
         manualEntry: false,

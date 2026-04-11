@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
 import type { TradeWithHistory } from "./components/types";
@@ -68,6 +68,23 @@ export default function Home() {
 
   const hasStopAction = instructions.some((i) => i.type === "UPDATE_STOP" || i.type === "T212_STOP_BEHIND")
     || actionItems.some((a) => a.type === "STOP_UPDATE" || a.type === "STOP_SYNC");
+
+  // Sector concentration
+  const [maxPerSector, setMaxPerSector] = useState(2);
+  useEffect(() => {
+    fetch("/api/execution/settings").then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.maxPositionsPerSector) setMaxPerSector(d.maxPositionsPerSector);
+    }).catch(() => {});
+  }, []);
+
+  const sectorCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of openTrades) {
+      const s = (t as TradeWithHistory & { sector?: string | null }).sector;
+      if (s) counts[s] = (counts[s] ?? 0) + 1;
+    }
+    return counts;
+  }, [openTrades]);
 
   const hasUnknownStopStatus = openTrades.some((t) => {
     const hasSyncData = Boolean(syncData[t.id]?.t212);
@@ -818,16 +835,17 @@ export default function Home() {
                 <th className="text-right px-3 py-2">RISK</th>
                 <th className="text-right px-3 py-2">P&amp;L</th>
                 <th className="text-center px-3 py-2">SOURCE</th>
+                <th className="text-center px-3 py-2">SECTOR</th>
                 <th className="text-center px-3 py-2"></th>
                 <th className="text-center px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {loading ? (
-                <SkeletonRows cols={14} />
+                <SkeletonRows cols={16} />
               ) : openTrades.length === 0 && (!data?.t212Portfolio || data.t212Portfolio.length === 0) ? (
                 <tr>
-                  <td colSpan={14} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
+                  <td colSpan={16} className="px-3 py-6 text-center text-[var(--dim)] text-xs">
                     No open positions — scan running tonight
                   </td>
                 </tr>
@@ -964,6 +982,22 @@ export default function Home() {
                               <span className="text-[8px] text-[var(--dim)]">T212 ?</span>
                             ) : null}
                           </div>
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          {(() => {
+                            const sector = (t as TradeWithHistory & { sector?: string | null }).sector;
+                            if (!sector) return <span className="text-[var(--dim)] text-[10px]">—</span>;
+                            const count = sectorCounts[sector] ?? 0;
+                            const atLimit = count >= maxPerSector;
+                            return (
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 border ${atLimit ? "border-[var(--amber)]/50 text-[var(--amber)] bg-[var(--amber)]/10" : "border-[var(--border)] text-[var(--dim)]"}`}
+                                title={atLimit ? `Sector at concentration limit — no further ${sector} entries via auto-execution` : `${count}/${maxPerSector} ${sector} positions`}
+                              >
+                                {sector} {count}/{maxPerSector}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-3 py-2 text-center" onClick={(e) => e.stopPropagation()}>
                           <button

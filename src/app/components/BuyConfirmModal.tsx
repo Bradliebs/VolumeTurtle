@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { SignalFired } from "./types";
 import { fmtPrice, fmtMoney, tickerCurrency, mono } from "./helpers";
 
@@ -21,6 +21,35 @@ export function BuyConfirmModal({
   const stopPct = signal.suggestedEntry > 0
     ? (((signal.hardStop - signal.suggestedEntry) / signal.suggestedEntry) * 100).toFixed(1)
     : "0.0";
+
+  // Sector concentration warning for manual entries
+  const [sectorWarning, setSectorWarning] = useState<string | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const [settingsRes, tradesRes] = await Promise.all([
+          fetch("/api/execution/settings"),
+          fetch(`/api/dashboard`),
+        ]);
+        if (!settingsRes.ok || !tradesRes.ok) return;
+        const settings = await settingsRes.json();
+        const dashboard = await tradesRes.json();
+        const maxPerSector = settings.maxPositionsPerSector ?? 2;
+        const openTrades = (dashboard.openTrades ?? []) as Array<{ ticker: string; sector?: string | null }>;
+
+        // Look up sector for this ticker from open trades or universe-derived data
+        const tickerSector = openTrades.find((t) => t.ticker === signal.ticker)?.sector;
+        if (!tickerSector) return;
+
+        const sectorCount = openTrades.filter((t) => t.sector === tickerSector).length;
+        if (sectorCount >= maxPerSector) {
+          setSectorWarning(
+            `You already have ${sectorCount} open ${tickerSector} position${sectorCount !== 1 ? "s" : ""} (limit: ${maxPerSector}). Adding this manually overrides the concentration limit.`,
+          );
+        }
+      } catch { /* silent */ }
+    })();
+  }, [signal.ticker]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" role="dialog" aria-modal="true" aria-labelledby="buy-confirm-title">
@@ -68,6 +97,12 @@ export function BuyConfirmModal({
             </>
           )}
         </div>
+
+        {sectorWarning && (
+          <div className="p-2 mb-4 border border-[var(--amber)]/40 bg-[var(--amber)]/10 text-[var(--amber)] text-[10px]" style={mono}>
+            ⚠ {sectorWarning}
+          </div>
+        )}
 
         <p className="text-[10px] text-[var(--dim)] mb-6" style={mono}>
           Market orders fill at the current ask price which may differ from the suggested entry.
