@@ -12,7 +12,8 @@ A fully mechanical algorithmic trading system. Dual-engine signal detection (vol
 - **Market Regime Filter** — 3-layer advisory (QQQ 200MA, VIX, ticker 50MA)
 - **Equity Curve Circuit Breaker** — Auto-reduces risk at 10% drawdown, pauses at 20%
 - **Composite Scoring** — Ranks signals 0.0–1.0 (grades A/B/C/D)
-- **Position Sizing** — Fixed 2% risk per trade, fractional shares, max 5 open positions
+- **Position Sizing** — Fixed 2% risk per trade, 1.5× ATR stop distance, fractional shares, max 5 open positions
+- **Auto-Execution** — Two-phase order queue with cancellation window, 11 pre-flight checks, T212 market orders
 - **Trading 212 Integration** — Position sync, stop order management, automatic stop pushing
 - **Scheduled Automation** — Windows Task Scheduler (LSE 17:30, US 22:00)
 - **Backup & Restore** — Auto-backup to local filesystem, JSON/CSV export
@@ -22,8 +23,8 @@ A fully mechanical algorithmic trading system. Dual-engine signal detection (vol
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14, React 18, Tailwind CSS |
-| Backend | Next.js API Routes (34 endpoints) |
-| Database | PostgreSQL 15 + Prisma ORM (19 models) |
+| Backend | Next.js API Routes (47 endpoints) |
+| Database | PostgreSQL 15 + Prisma ORM (21 models) |
 | Data Source | Yahoo Finance (yahoo-finance2) |
 | Language | TypeScript (strict mode) |
 | Testing | Jest + ts-jest |
@@ -93,6 +94,8 @@ src/
 │   ├── components/      # Extracted UI components
 │   ├── hooks/           # React hooks (useDashboard)
 │   ├── login/           # Auth login page
+│   ├── execution/       # Auto-execution pending orders dashboard
+│   ├── journal/         # Trade journal with analytics
 │   ├── settings/        # Settings page
 │   ├── momentum/        # Momentum dashboard page
 │   ├── watchlist/        # Watchlist page
@@ -102,6 +105,7 @@ src/
 │   ├── risk/            # ATR, position sizing, equity curve, stop ratcheting
 │   ├── data/            # Yahoo Finance fetching + caching
 │   ├── cruise-control/  # Intraday stop ratchet daemon
+│   ├── execution/       # Auto-execution engine (pending orders, pre-flight, scheduler)
 │   ├── hbme/            # Momentum/breakout engine + sector scoring
 │   ├── t212/            # Trading 212 API client (read + write)
 │   ├── trades/          # Trade management utilities
@@ -111,9 +115,9 @@ src/
 │   ├── currency.ts      # GBP/USD/EUR ticker currency handling
 │   └── config.ts        # Environment configuration + DB overrides
 ├── db/                  # Prisma client singleton
-└── __tests__/           # Unit tests (Jest, 183 tests)
+└── __tests__/           # Unit tests (Jest, 212 tests)
 prisma/
-└── schema.prisma        # 19 data models
+└── schema.prisma        # 21 data models
 ```
 
 ## Authentication

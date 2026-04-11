@@ -94,13 +94,26 @@ Three-layer filter applied to both engines:
 
 Ticker trend uses adaptive MA period: `Math.min(50, available_candles)`, minimum 30 candles required.
 
+### Layer 4: Market Breadth
+
+Optional 4th layer that modifies the regime assessment:
+
+| Signal | Condition | Effect |
+|--------|-----------|--------|
+| STRONG | > 60% of universe above 50d MA | Full execution permitted |
+| NEUTRAL | 40–60% above 50d MA | No change |
+| WEAK | 20–40% above 50d MA | Grade B suspended — Grade A only |
+| DETERIORATING | < 20% above 50d MA | All new entries blocked |
+
+Breadth is calculated from the full universe and stored in `ScanRun.breadthScore` / `breadthSignal`.
+
 ---
 
 ## Exit Logic
 
 | Parameter | Formula | Default |
 |-----------|---------|---------|
-| Hard Stop | `entry - (ATR x multiplier)` | 2.0x ATR |
+| Hard Stop | `entry - (ATR x multiplier)` | 1.5x ATR |
 | Trailing Stop | Lowest close over last N days | 10 days |
 
 - Trailing stop **ratchets up only** — never moves down
@@ -175,13 +188,13 @@ Technology, Biotech, Healthcare, Energy, Financial Services, Consumer Discretion
 
 ## Database Schema (PostgreSQL)
 
-### 18 Models
+### 21 Models
 
 | Model | Purpose |
 |-------|---------|
 | **Ticker** | Scanned symbols with sector info |
 | **DailyQuote** | OHLCV price cache from Yahoo |
-| **ScanRun** | Scan metadata (status, regime, timing, scanType) |
+| **ScanRun** | Scan metadata (status, regime, timing, scanType, breadth) |
 | **ScanResult** | Per-ticker volume scan result |
 | **Trade** | Open/closed trades (supports signalSource: volume/momentum/manual) |
 | **StopHistory** | Daily stop level changes per trade |
@@ -193,13 +206,19 @@ Technology, Biotech, Healthcare, Energy, Financial Services, Consumer Discretion
 | **WatchlistItem** | User watchlist for monitoring |
 | **Alert** | Breakout/stop alerts with acknowledge flow |
 | **TelegramSettings** | Telegram bot notification config |
-| **AppSettings** | DB-configurable momentum engine parameters |
+| **AppSettings** | DB-configurable parameters (momentum + auto-execution) |
+| **PendingOrder** | Auto-execution order queue with cancellation window |
+| **ExecutionLog** | Execution audit trail (per-order events) |
+| **CruiseControlState** | Cruise daemon persistent state |
+| **CruiseControlRatchetEvent** | Individual stop ratchet records |
+| **CruiseControlAlert** | Cruise control alert history |
+| **CruiseControlPollLog** | Poll cycle logs for cruise daemon |
 
 ---
 
-## API Routes (30+ Endpoints)
+## API Routes (47 Endpoints)
 
-### Existing (Volume Engine)
+### Core Trading
 
 | Route | Method | Purpose |
 |-------|--------|---------|
@@ -208,15 +227,21 @@ Technology, Biotech, Healthcare, Energy, Financial Services, Consumer Discretion
 | `/api/scan/scheduled` | GET | Scheduled scan (token-auth, market filter) |
 | `/api/trades` | POST | Create trade (supports signalSource, signalScore, signalGrade) |
 | `/api/trades/[id]` | PATCH | Close/update a trade |
+| `/api/trades/ratchet` | POST | Ratchet stops on open trades |
+| `/api/trades/runner` | POST | Runner designation management |
 | `/api/stops/[id]` | PATCH | Mark stop as actioned |
 | `/api/balance` | PATCH | Update balance |
-| `/api/positions/sync-all` | POST | Sync all positions |
-| `/api/positions/[id]/sync` | POST | Sync one position |
-| `/api/settings` | GET/PUT | System settings |
-| `/api/settings/danger` | POST | Danger zone ops |
-| `/api/t212/*` | Various | T212 integration (test, sync, stops, import) |
-| `/api/export/*` | GET | CSV/JSON exports |
-| `/api/backup` | GET/POST | Backup management |
+| `/api/journal` | GET | Trade journal data |
+| `/api/breadth` | GET | Market breadth indicator |
+
+### Auto-Execution
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/execution/pending` | GET/DELETE/POST | List, cancel, execute-now pending orders |
+| `/api/execution/settings` | GET/POST | Auto-execution configuration |
+| `/api/execution/push-stops` | GET/POST | List/retry unprotected positions |
+| `/api/execution/log` | GET | Last 50 execution log entries |
 
 ### Momentum Engine
 
@@ -226,15 +251,54 @@ Technology, Biotech, Healthcare, Energy, Financial Services, Consumer Discretion
 | `/api/momentum/sectors` | GET | Latest sector rankings |
 | `/api/momentum/signals` | GET | Signals with filters (?status, ?minGrade, ?sectors) |
 
-### Shared Infrastructure
+### Cruise Control
 
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/alerts` | GET/POST/PATCH | Alert management (list, trigger, acknowledge) |
-| `/api/watchlist` | GET/POST/DELETE | Watchlist CRUD |
+| `/api/cruise-control/state` | GET | Current cruise daemon state |
+| `/api/cruise-control/toggle` | POST | Enable/disable cruise control |
+| `/api/cruise-control/poll-now` | POST | Trigger immediate poll |
+| `/api/cruise-control/activity` | GET | Recent poll activity |
+| `/api/cruise-control/alerts` | GET | Cruise alert history |
+
+### Trading 212
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/t212/test` | GET | Test T212 connection |
+| `/api/t212/sync` | POST | Sync positions from T212 |
+| `/api/t212/positions` | GET | Get T212 positions |
+| `/api/t212/status` | GET | T212 connection status |
+| `/api/t212/buy` | POST | Place market buy via T212 |
+| `/api/t212/import` | POST | Import single T212 position |
+| `/api/t212/import-all` | POST | Import all T212 positions |
+| `/api/t212/stops/[id]` | PATCH | Push stop for specific trade |
+| `/api/t212/stops/ticker` | GET | Get T212 stop for ticker |
+
+### Positions & Sync
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/positions/sync-all` | POST | Sync all positions |
+| `/api/positions/[id]/sync` | POST | Sync one position |
+
+### Settings & Infrastructure
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/settings` | GET/PUT | System settings |
+| `/api/settings/danger` | POST | Danger zone ops |
 | `/api/settings/telegram` | GET/POST | Telegram notification config |
-| `/api/settings/momentum` | GET/POST | Momentum engine parameters (DB-configurable) |
+| `/api/settings/momentum` | GET/POST | Momentum engine parameters |
+| `/api/alerts` | GET/POST/PATCH | Alert management |
+| `/api/watchlist` | GET/POST/DELETE | Watchlist CRUD |
 | `/api/account/size` | GET | Position sizing calculator |
+| `/api/auth/login` | POST | Dashboard authentication |
+| `/api/backup` | GET/POST | Backup management |
+| `/api/export/trades` | GET | Export trades CSV/JSON |
+| `/api/export/scans` | GET | Export scans |
+| `/api/export/signals` | GET | Export signals |
+| `/api/export/full` | GET | Full export |
 
 ---
 
@@ -243,15 +307,17 @@ Technology, Biotech, Healthcare, Energy, Financial Services, Consumer Discretion
 | Page | Route | Purpose |
 |------|-------|---------|
 | **Dashboard** | `/` | Main view: regime, equity curve, momentum summary, daily instructions, open positions, signal log, scan controls, trade history |
+| **Execution** | `/execution` | Pending orders with live countdown timers, cancel/execute-now buttons, emergency disable, status filter |
+| **Journal** | `/journal` | Trade journal with performance analytics and notes |
 | **Momentum** | `/momentum` | Sector momentum table, breakout signal cards with entry panel, near misses |
 | **Watchlist** | `/watchlist` | Ticker watchlist with source badges and CRUD |
-| **Settings** | `/settings` | T212, Telegram, momentum engine config, risk params, alerts, backup, danger zone |
+| **Settings** | `/settings` | T212, Telegram, momentum engine config, risk params, auto-execution, alerts, backup, danger zone |
 | **Login** | `/login` | Dashboard auth (cookie-based) |
 
 ### Navigation
 
 ```
-DASHBOARD | MOMENTUM | WATCHLIST | SETTINGS
+DASHBOARD | EXECUTION | JOURNAL | MOMENTUM | WATCHLIST | SETTINGS
 ```
 
 ### Shared Components
@@ -282,6 +348,75 @@ Dashboard shows stop alignment status: ALL ALIGNED / UPDATES NEEDED / UNKNOWN.
 
 ---
 
+## Auto-Execution System
+
+Two-phase execution model with a cancellation window between signal detection and order placement.
+
+### Pipeline
+
+```
+nightlyScan.ts → createPendingOrder() → [cancellation window] → executionScheduler.ts → processPendingOrder() → executeOrder() → T212 API
+```
+
+### Phase 1: Signal → Pending Order
+
+During the nightly scan, Grade A/B signals (volume or momentum) create `PendingOrder` rows with a configurable cancellation window (default 15 min). User can cancel via dashboard or Telegram during this window.
+
+### Phase 2: Execution Scheduler
+
+Runs every 60 seconds during market hours (UTC 14:00–20:00). Picks up pending orders whose cancellation window has expired.
+
+### 11 Pre-Flight Checks (ALL must pass)
+
+| # | Check | Action on Fail |
+|---|-------|---------------|
+| 1 | **Cash Available** — T212 account has enough GBP | ABORT |
+| 2 | **Price Validation** — live price drift from signal (>10% abort, 2-10% recalculate) | ABORT or ADJUST |
+| 3 | **Position Limit** — max 5 open positions | ABORT |
+| 4 | **Circuit Breaker** — full equity curve state (PAUSE blocks, CAUTION halves risk) | ABORT or ADJUST |
+| 5 | **Regime Gate** — AVOID blocks all, CAUTION blocks Grade B + breadth checks | ABORT |
+| 6 | **Data Validation** — ticker data quality | ABORT |
+| 7 | **Duplicate Check** — no existing open trade for this ticker | ABORT |
+| 8 | **Market Hours** — market state must be REGULAR or PRE | ABORT |
+| 9 | **Minimum Order Size** — order value ≥ £1.00 | ABORT |
+| 10 | **T212 Connection** — broker connected + live environment | ABORT |
+| 11 | **Exposure Cap** — position ≤ 25% of account (reduces shares, doesn't block) | ADJUST |
+
+### Order Placement
+
+1. Map Yahoo ticker → T212 internal ticker
+2. Place market buy via T212 API
+3. Wait 2.5s for fill + rate limit buffer
+4. Push stop loss (cancel existing → wait 2.5s → place new GTC stop)
+5. Convert GBP → GBX (×100) for LSE stocks
+6. Create Trade record + Telegram alert
+
+### Safety Systems
+
+| System | Description |
+|--------|-------------|
+| Cancellation window | 15-min (configurable) delay before execution |
+| Emergency disable | Cancels all pending + disables globally |
+| Daily limit | Max 2 orders/day (configurable) |
+| Execution hours | UTC 14:00–20:00 only |
+| Weekend guard | Scheduler skips Saturday/Sunday |
+| Order expiry | Stale orders auto-expire after deadline + 5min |
+| Stop push Layer 2 | Cruise daemon retries failed stop pushes hourly |
+| Telegram alerts | Every state change notified |
+
+### DB-Configurable Settings (AppSettings)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `autoExecutionEnabled` | false | Global kill switch |
+| `autoExecutionMinGrade` | B | Minimum signal grade |
+| `autoExecutionWindowMins` | 15 | Cancellation window minutes |
+| `autoExecutionMaxPerDay` | 2 | Max orders per day |
+| `autoExecutionStartHour` | 14 | Execution window start (UTC) |
+| `autoExecutionEndHour` | 20 | Execution window end (UTC) |
+
+---
+
 ## Configuration
 
 ### Environment Variables
@@ -296,6 +431,7 @@ Dashboard shows stop alignment status: ALL ALIGNED / UPDATES NEEDED / UNKNOWN.
 | `RANGE_POSITION_THRESHOLD` | 0.75 | Price range threshold |
 | `ATR_PERIOD` | 20 | ATR period |
 | `TRAILING_STOP_DAYS` | 10 | Trailing stop lookback |
+| `HARD_STOP_ATR_MULTIPLE` | 1.5 | ATR multiplier for hard stop distance |
 | `MOMENTUM_ENABLED` | true | Enable momentum engine |
 | `BREAKOUT_MIN_CHG` | 0.10 | Min daily change for breakout |
 | `BREAKOUT_MIN_VOL` | 3.0 | Min volume ratio for breakout |

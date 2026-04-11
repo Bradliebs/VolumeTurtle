@@ -239,6 +239,23 @@ if errorlevel 1 (
   echo         Cruise control — hourly 08:00-17:00 on weekdays
 )
 
+:: --- Execution Scheduler: every 1 min 14:00-20:00 weekdays (process pending orders) ---
+schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
+  /tr "cmd /c cd /d \"%INSTALL_DIR%\" && npx tsx scripts/executionScheduler.ts" ^
+  /sc weekly ^
+  /d MON,TUE,WED,THU,FRI ^
+  /st 14:00 ^
+  /ri 1 ^
+  /du 06:00 ^
+  /f >nul 2>nul
+if errorlevel 1 (
+  set /a SCHED_FAIL+=1
+  echo         [!] Could not create Execution Scheduler task
+) else (
+  set /a SCHED_OK+=1
+  echo         Execution scheduler — every minute 14:00-20:00 on weekdays
+)
+
 if !SCHED_FAIL! gtr 0 (
   echo.
   echo  ╔═══════════════════════════════════════════╗
@@ -279,6 +296,7 @@ echo  ║                                           ║
 echo  ║   - LSE scan runs at 17:30 (weekdays)     ║
 echo  ║   - US  scan runs at 22:00 (weekdays)     ║
 echo  ║   - Stops updated hourly 08:00-17:00      ║
+echo  ║   - Execution scheduler 14:00-20:00       ║
 echo  ║                                           ║
 echo  ║   These run automatically as long as      ║
 echo  ║   your computer is on and logged in.      ║
@@ -299,6 +317,8 @@ echo  ║   schtasks /delete /tn                    ║
 echo  ║     "VolumeTurtle_Scan_US" /f             ║
 echo  ║   schtasks /delete /tn                    ║
 echo  ║     "VolumeTurtle_CruiseControl" /f       ║
+echo  ║   schtasks /delete /tn                    ║
+echo  ║     "VolumeTurtle_ExecutionScheduler" /f  ║
 echo  ║                                           ║
 echo  ╚═══════════════════════════════════════════╝
 echo.

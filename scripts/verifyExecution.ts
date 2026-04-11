@@ -786,10 +786,10 @@ async function section8_scheduler() {
   sectionHeader("Section 8: Windows Task Scheduler");
 
   const tasks = [
-    { id: "8.1", name: "HybridTurtle Nightly", query: "HybridTurtle Nightly" },
-    { id: "8.2", name: "HybridTurtle Intraday Alert", query: "HybridTurtle Intraday Alert" },
-    { id: "8.3", name: "VolumeTurtle Cruise Control", query: "VolumeTurtle Cruise Control" },
-    { id: "8.4", name: "HybridTurtle Midday Sync", query: "HybridTurtle Midday Sync" },
+    { id: "8.1", name: "VolumeTurtle LSE Scan", query: "VolumeTurtle_Scan_LSE" },
+    { id: "8.2", name: "VolumeTurtle US Scan", query: "VolumeTurtle_Scan_US" },
+    { id: "8.3", name: "VolumeTurtle Cruise Control", query: "VolumeTurtle_CruiseControl" },
+    { id: "8.4", name: "VolumeTurtle Execution Scheduler", query: "VolumeTurtle_ExecutionScheduler" },
   ];
 
   for (const task of tasks) {
