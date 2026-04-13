@@ -1,5 +1,8 @@
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
 import { config } from "@/lib/config";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("exitSignal");
 
 export interface OpenPosition {
   ticker: string;
@@ -32,7 +35,12 @@ export function shouldExit(
   quotes: DailyQuote[],
 ): boolean {
   const trailingLow = calculateTrailingLow(quotes);
-  if (trailingLow === null) return false;
+  if (trailingLow === null) {
+    // Fail-closed: insufficient data means we can't confirm the position is safe.
+    // Log and signal exit so the position gets human review.
+    log.warn("shouldExit: insufficient data for trailing low — returning true (fail-closed)");
+    return true;
+  }
   return currentClose < trailingLow;
 }
 
