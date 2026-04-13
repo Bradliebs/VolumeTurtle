@@ -138,7 +138,14 @@ export async function t212Fetch(path: string, settings: T212Settings, options?: 
 
   // Retry up to 3 times on 429 (rate limit), respecting reset header
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(`${baseUrl}${path}`, { method, headers, body });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${path}`, { method, headers, body, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (response.status === 429) {
       const resetHeader = response.headers.get("x-ratelimit-reset");

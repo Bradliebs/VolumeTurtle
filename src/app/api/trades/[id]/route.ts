@@ -3,6 +3,7 @@ import { prisma } from "@/db/client";
 import { closeTradeSchema, validateBody } from "@/lib/validation";
 import { createLogger } from "@/lib/logger";
 import { sendTelegram } from "@/lib/telegram";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 const log = createLogger("api/trades/:id");
 
@@ -10,6 +11,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
+  if (rlResponse) return rlResponse;
+
   try {
     const { id } = await params;
     const parsed = await validateBody(request, closeTradeSchema);

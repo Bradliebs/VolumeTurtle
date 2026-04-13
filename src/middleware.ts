@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { timingSafeEqual } from "crypto";
 
 const PUBLIC_PATHS = [
   "/api/scan/scheduled",
@@ -8,6 +9,11 @@ const PUBLIC_PATHS = [
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+}
+
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
 export function middleware(request: NextRequest) {
@@ -32,11 +38,12 @@ export function middleware(request: NextRequest) {
 
   // Check cookie
   const cookieToken = request.cookies.get("vt-auth")?.value;
-  if (cookieToken === token) return NextResponse.next();
+  if (cookieToken && safeCompare(cookieToken, token)) return NextResponse.next();
 
   // Check Authorization header (for API clients / scripts)
   const authHeader = request.headers.get("authorization");
-  if (authHeader === `Bearer ${token}`) return NextResponse.next();
+  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  if (bearerToken && safeCompare(bearerToken, token)) return NextResponse.next();
 
   // API routes return 401 JSON
   if (pathname.startsWith("/api/")) {

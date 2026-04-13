@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { updateSettingsSchema, validateBody } from "@/lib/validation";
 import { createLogger } from "@/lib/logger";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 const log = createLogger("api/settings");
 
@@ -54,6 +55,9 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
+  if (rlResponse) return rlResponse;
+
   try {
     const parsed = await validateBody(request, updateSettingsSchema);
     if (parsed.error) {
@@ -88,15 +92,18 @@ export async function PUT(request: NextRequest) {
     if (t212) {
       // Write credentials to .env.local and update process.env so they take effect immediately
       if (t212.apiKey) {
+        // Sanitize values — prevent newline injection that could overwrite other env vars
+        const sanitize = (v: string) => v.replace(/[\r\n]/g, "");
+
         const fs = await import("fs");
         const path = await import("path");
         const envLocalPath = path.resolve(process.cwd(), ".env.local");
 
         const lines: string[] = [];
-        lines.push(`T212_API_KEY=${t212.apiKey}`);
-        if (t212.apiSecret != null) lines.push(`T212_API_SECRET=${t212.apiSecret}`);
-        if (t212.environment) lines.push(`T212_ENVIRONMENT=${t212.environment}`);
-        if (t212.accountType) lines.push(`T212_ACCOUNT_TYPE=${t212.accountType}`);
+        lines.push(`T212_API_KEY=${sanitize(t212.apiKey)}`);
+        if (t212.apiSecret != null) lines.push(`T212_API_SECRET=${sanitize(t212.apiSecret)}`);
+        if (t212.environment) lines.push(`T212_ENVIRONMENT=${sanitize(t212.environment)}`);
+        if (t212.accountType) lines.push(`T212_ACCOUNT_TYPE=${sanitize(t212.accountType)}`);
 
         // Read existing .env.local, strip old T212 lines, append new ones
         let existing = "";

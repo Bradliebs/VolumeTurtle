@@ -217,9 +217,8 @@ export async function preFlightChecks(
   // ── Check 3: POSITION LIMIT ──
   try {
     const openPositions = await db.trade.count({ where: { status: "OPEN" } });
-    const maxPositions = 5; // config default
-    if (openPositions >= maxPositions) {
-      failures.push(`MAX_POSITIONS — ${openPositions}/${maxPositions} positions open`);
+    if (openPositions >= config.maxPositions) {
+      failures.push(`MAX_POSITIONS — ${openPositions}/${config.maxPositions} positions open`);
     }
   } catch (err) {
     failures.push(`POSITION_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
@@ -238,7 +237,7 @@ export async function preFlightChecks(
 
     if (snapshots.length > 0) {
       const eqState = calculateEquityCurveState(
-        snapshots,
+        [...snapshots].reverse(),
         config.riskPctPerTrade * 100,
         config.maxPositions,
       );

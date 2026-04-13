@@ -64,8 +64,7 @@ export async function getCurrentPrice(ticker: string): Promise<number | null> {
     if (quote?.regularMarketPrice != null && quote.regularMarketPrice > 0) {
       let price = quote.regularMarketPrice;
       // GBX (pence) → GBP conversion for LSE tickers
-      // Yahoo may return currency as "GBp", "GBX", or null for LSE stocks
-      if (ticker.endsWith(".L") && quote.currency !== "GBP") {
+      if (ticker.endsWith(".L")) {
         price = price / 100;
       }
       return price;

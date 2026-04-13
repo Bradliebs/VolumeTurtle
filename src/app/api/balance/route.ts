@@ -2,10 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { updateBalanceSchema, validateBody } from "@/lib/validation";
 import { createLogger } from "@/lib/logger";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 const log = createLogger("api/balance");
 
 export async function PATCH(request: NextRequest) {
+  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
+  if (rlResponse) return rlResponse;
+
   try {
     const parsed = await validateBody(request, updateBalanceSchema);
     if (parsed.error) {

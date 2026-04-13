@@ -188,7 +188,11 @@ let retryTimerRef: ReturnType<typeof setInterval> | null = gTrackers.__ccRetryTi
 
 function startRetryTimer(): void {
   if (retryTimerRef) return;
-  retryTimerRef = setInterval(processRetryQueue, 10 * 60 * 1000); // every 10 minutes
+  retryTimerRef = setInterval(() => {
+    processRetryQueue().catch((err) => {
+      log.error({ err: err instanceof Error ? err.message : String(err) }, "processRetryQueue unhandled error");
+    });
+  }, 10 * 60 * 1000); // every 10 minutes
   gTrackers.__ccRetryTimerRef = retryTimerRef;
 }
 

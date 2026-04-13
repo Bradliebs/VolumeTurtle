@@ -42,15 +42,23 @@ export async function sendTelegram(message: TelegramMessage): Promise<void> {
   if (!botToken || !chatId) return;
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: message.text,
-      parse_mode: message.parseMode ?? "HTML",
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message.text,
+        parse_mode: message.parseMode ?? "HTML",
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     const err = await res.text();
