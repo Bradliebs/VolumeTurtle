@@ -138,8 +138,8 @@ export function usePositionSync(
     }
   }
 
-  const syncAllPositions = useCallback(() => {
-    syncAll();
+  const syncAllPositions = useCallback((): Promise<void> => {
+    return syncAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh, triggerExitFlash, showError]);
 
