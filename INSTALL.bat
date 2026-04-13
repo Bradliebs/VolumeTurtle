@@ -3,24 +3,30 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 :: ─────────────────────────────────────────────────────────
-::  VolumeTurtle — First-Time Installer
+::  VolumeTurtle — First-Time Installer (One-Click)
 ::
-::  Run this ONCE to set up everything.
-::  After that, use START.bat for daily use.
-::
-::  This script:
-::   1. Checks you have Node.js and Docker installed
-::   2. Sets up your configuration (.env)
-::   3. Starts the database (PostgreSQL via Docker)
-::   4. Installs dependencies (npm install)
-::   5. Sets up the database tables (Prisma)
-::   6. Sets up automatic scheduled tasks
-::   7. Starts the app and opens your browser
-::
-::  If anything fails, it tells you exactly what to do.
+::  Just double-click this file. Everything is automatic.
+::  After install, use START.bat for daily use.
 :: ─────────────────────────────────────────────────────────
 
 title VolumeTurtle — Installer
+
+:: ─── Auto-elevate to Administrator ──────────────────────
+net session >nul 2>&1
+if not errorlevel 1 goto :is_admin
+echo  Requesting administrator access...
+powershell -NoProfile -Command "Start-Process -Verb RunAs -FilePath \"%~f0\""
+if errorlevel 1 (
+  echo.
+  echo  Administrator access is required to install VolumeTurtle.
+  echo  Please click Yes when the admin prompt appears.
+  pause
+  exit /b 1
+)
+exit /b
+:is_admin
+:: Re-set working directory (UAC elevation resets to System32)
+cd /d "%~dp0"
 
 echo.
 echo  ╔═══════════════════════════════════════════╗
@@ -93,14 +99,13 @@ if errorlevel 1 (
 echo         Docker is running
 
 :: ─────────────────────────────────────────
-:: Step 3: Create .env if missing
+:: Step 3: Create .env with auto-generated tokens
 :: ─────────────────────────────────────────
 echo  [3/7] Setting up configuration...
 if not exist ".env" (
   if exist ".env.example" (
     copy ".env.example" ".env" >nul
     echo         Created .env from template
-    echo         You can edit .env later to customise settings.
   ) else (
     echo.
     echo  ERROR: .env.example is missing from the project.
@@ -109,13 +114,51 @@ if not exist ".env" (
     exit /b 1
   )
 ) else (
-  echo         .env already exists, keeping it
+  echo         .env already exists
+)
+
+:: Generate tokens if placeholders are still present (handles fresh install AND partial re-runs)
+findstr /C:"choose-a-long-random-string-here" .env >nul 2>nul
+if not errorlevel 1 (
+  :: Generate a secure random SCHEDULED_SCAN_TOKEN (CSPRNG)
+  for /f "tokens=*" %%t in ('powershell -NoProfile -Command "$b=New-Object byte[] 24;$r=[System.Security.Cryptography.RandomNumberGenerator]::Create();$r.GetBytes($b);[Convert]::ToBase64String($b) -replace '[+/=]',''"') do set SCAN_TOKEN=%%t
+  if not defined SCAN_TOKEN (
+    echo.
+    echo  ERROR: Could not generate a security token.
+    echo  Make sure PowerShell is available and try again.
+    pause
+    exit /b 1
+  )
+  powershell -NoProfile -Command "(Get-Content '.env') -replace 'choose-a-long-random-string-here','!SCAN_TOKEN!' | Set-Content '.env'"
+  echo         Generated SCHEDULED_SCAN_TOKEN
+  :: Set SCHEDULED_SCAN_TOKEN as a system environment variable (for Task Scheduler)
+  setx /M SCHEDULED_SCAN_TOKEN "!SCAN_TOKEN!"
+  if errorlevel 1 (
+    echo         [!] WARNING: Could not set system env var.
+    echo         Scheduled scans may need manual SCHEDULED_SCAN_TOKEN setup.
+  ) else (
+    echo         Set SCHEDULED_SCAN_TOKEN system variable
+  )
+)
+findstr /C:"change-me-or-auto-generated" .env >nul 2>nul
+if not errorlevel 1 (
+  :: Generate a secure random DASHBOARD_TOKEN (CSPRNG)
+  for /f "tokens=*" %%t in ('powershell -NoProfile -Command "$b=New-Object byte[] 16;$r=[System.Security.Cryptography.RandomNumberGenerator]::Create();$r.GetBytes($b);[Convert]::ToBase64String($b) -replace '[+/=]',''"') do set DASH_GEN=%%t
+  if defined DASH_GEN (
+    powershell -NoProfile -Command "(Get-Content '.env') -replace 'change-me-or-auto-generated','!DASH_GEN!' | Set-Content '.env'"
+    echo         Generated DASHBOARD_TOKEN
+  ) else (
+    echo         [!] Could not generate dashboard token — using default
+  )
 )
 
 :: ─────────────────────────────────────────
-:: Step 4: Start database
+:: Step 4: Start database (clean up stale containers first)
 :: ─────────────────────────────────────────
 echo  [4/7] Starting database...
+echo         Cleaning up any stale containers...
+docker compose down >nul 2>nul
+docker-compose down >nul 2>nul
 docker compose up -d 2>nul
 if not errorlevel 1 goto db_started
 docker-compose up -d 2>nul
@@ -258,29 +301,28 @@ if errorlevel 1 (
 
 if !SCHED_FAIL! gtr 0 (
   echo.
-  echo  ╔═══════════════════════════════════════════╗
-  echo  ║  Some scheduled tasks could not be        ║
-  echo  ║  created. This usually means you need     ║
-  echo  ║  to run as Administrator.                 ║
-  echo  ║                                           ║
-  echo  ║  To fix this:                             ║
-  echo  ║   1. Close this window                    ║
-  echo  ║   2. Right-click INSTALL.bat              ║
-  echo  ║   3. Click "Run as administrator"         ║
-  echo  ║                                           ║
-  echo  ║  Everything else installed fine.           ║
-  echo  ║  Only the automatic scans need this.      ║
-  echo  ╚═══════════════════════════════════════════╝
+  echo         [!] Some scheduled tasks failed.
+  echo         Try: Right-click INSTALL.bat and select Run as administrator
   echo.
 )
 
 :: ─────────────────────────────────────────
 :: Step 7: Start the app
 :: ─────────────────────────────────────────
+:: Read DASHBOARD_TOKEN from .env for the banner
+for /f "tokens=1,* delims==" %%a in ('findstr /B "DASHBOARD_TOKEN" .env') do set DASH_TOKEN=%%b
+
 echo.
 echo  ╔═══════════════════════════════════════════╗
 echo  ║                                           ║
 echo  ║   Setup complete! Starting VolumeTurtle   ║
+echo  ║                                           ║
+echo  ╠═══════════════════════════════════════════╣
+echo  ║                                           ║
+echo  ║   LOGIN TOKEN:  !DASH_TOKEN!              ║
+echo  ║                                           ║
+echo  ║   Type this token into the login screen   ║
+echo  ║   when your browser opens.                ║
 echo  ║                                           ║
 echo  ╠═══════════════════════════════════════════╣
 echo  ║                                           ║
@@ -308,17 +350,6 @@ echo  ║   DAILY USE:                              ║
 echo  ║   Double-click START.bat to open the      ║
 echo  ║   dashboard whenever you want to check    ║
 echo  ║   signals, positions, or trades.          ║
-echo  ║                                           ║
-echo  ║   TO REMOVE AUTOMATIC SCANS:              ║
-echo  ║   Run these commands in a terminal:       ║
-echo  ║   schtasks /delete /tn                    ║
-echo  ║     "VolumeTurtle_Scan_LSE" /f            ║
-echo  ║   schtasks /delete /tn                    ║
-echo  ║     "VolumeTurtle_Scan_US" /f             ║
-echo  ║   schtasks /delete /tn                    ║
-echo  ║     "VolumeTurtle_CruiseControl" /f       ║
-echo  ║   schtasks /delete /tn                    ║
-echo  ║     "VolumeTurtle_ExecutionScheduler" /f  ║
 echo  ║                                           ║
 echo  ╚═══════════════════════════════════════════╝
 echo.
