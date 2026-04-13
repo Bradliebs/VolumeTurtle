@@ -731,6 +731,9 @@ export async function stopCruiseControl(): Promise<void> {
   }
 
   stopRetryTimer();
+  if (retryQueue.size > 0) {
+    log.warn({ count: retryQueue.size, tickers: [...retryQueue.keys()] }, "[CRUISE-CONTROL] Retry queue had pending items at shutdown — will retry on next start");
+  }
   retryQueue.clear();
   ghostTracker.clear();
 

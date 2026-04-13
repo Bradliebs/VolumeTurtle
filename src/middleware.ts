@@ -19,8 +19,15 @@ function safeCompare(a: string, b: string): boolean {
 export function middleware(request: NextRequest) {
   const token = process.env.DASHBOARD_TOKEN;
 
-  // If no token configured, auth is disabled (backward compatible)
-  if (!token) return NextResponse.next();
+  // If no token configured, block all access (misconfigured deployment)
+  if (!token) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Auth not configured" }, { status: 500 });
+    }
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
+    return NextResponse.redirect(loginUrl);
+  }
 
   const { pathname } = request.nextUrl;
 

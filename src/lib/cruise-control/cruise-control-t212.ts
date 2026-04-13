@@ -139,13 +139,8 @@ export async function getOpenPositionsFromT212(): Promise<T212Position[]> {
   const settings = loadT212Settings();
   if (!settings) return [];
 
-  try {
-    const { positions } = await getCachedT212Positions(settings);
-    return positions;
-  } catch (err) {
-    log.error({ err: String(err) }, "Failed to fetch T212 positions");
-    return [];
-  }
+  const { positions } = await getCachedT212Positions(settings);
+  return positions;
 }
 
 // ── Reconciliation ──────────────────────────────────────────────────────────

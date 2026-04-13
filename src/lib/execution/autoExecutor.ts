@@ -18,6 +18,7 @@ import { calculateBreadth } from "@/lib/signals/breadthIndicator";
 import { calculateEquityCurveState, type SnapshotInput } from "@/lib/risk/equityCurve";
 import { config } from "@/lib/config";
 import { getUniverse } from "@/lib/universe/tickers";
+import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import {
   loadT212Settings,
   getAccountCash,
@@ -138,6 +139,7 @@ export interface PreFlightResult {
   failures: string[];
   warnings: string[];
   adjustments: string[];
+  adjustedOrder: PendingOrderRow;
 }
 
 // ── Execution result ───────────────────────────────────────────────────────
@@ -157,9 +159,11 @@ export interface ExecutionResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function preFlightChecks(
-  order: PendingOrderRow,
+  originalOrder: PendingOrderRow,
   liveQuote: LiveQuote,
 ): Promise<PreFlightResult> {
+  // Clone order to avoid mutating the input — checks may adjust shares/entry
+  const order = { ...originalOrder };
   const failures: string[] = [];
   const warnings: string[] = [];
   const adjustments: string[] = [];
@@ -287,7 +291,8 @@ export async function preFlightChecks(
   // ── Check 5: REGIME GATE ──
   try {
     const regime = await calculateMarketRegime();
-    const tickerRegime = await calculateTickerRegime(order.ticker, []);
+    const tickerQuotes = await fetchEODQuotes([order.ticker], config.quoteLookbackDays);
+    const tickerRegime = await calculateTickerRegime(order.ticker, tickerQuotes.get(order.ticker) ?? []);
 
     // Fetch breadth for 4-layer assessment
     let breadth = null;
@@ -464,6 +469,7 @@ export async function preFlightChecks(
     failures,
     warnings,
     adjustments,
+    adjustedOrder: order,
   };
 }
 
@@ -613,9 +619,9 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
       data: {
         status: "failed",
         failureReason: result.failures.join("; "),
-        // Persist any price-drift adjustments
-        suggestedShares: order.suggestedShares,
-        suggestedEntry: order.suggestedEntry,
+        // Persist any price-drift adjustments from the cloned order
+        suggestedShares: result.adjustedOrder.suggestedShares,
+        suggestedEntry: result.adjustedOrder.suggestedEntry,
       },
     });
     await logExecution(order.id, "PRE_FLIGHT_FAIL", result.failures.join("; "));

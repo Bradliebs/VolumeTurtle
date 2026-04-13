@@ -499,22 +499,8 @@ async function main() {
             console.log(`  [AUTO-EXEC] ${signal.ticker} — Grade ${grade} pending order created (${position.shares} shares)`);
           } catch (autoErr) {
             console.error(`  [AUTO-EXEC ERROR] ${signal.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
-            // Fallback: create trade normally
-            await prisma.trade.create({
-              data: {
-                ticker: signal.ticker,
-                entryDate: today,
-                entryPrice: signal.suggestedEntry,
-                shares: position.shares,
-                hardStop: signal.hardStop,
-                trailingStop: signal.hardStop,
-                status: "OPEN",
-                volumeRatio: signal.volumeRatio,
-                rangePosition: signal.rangePosition,
-                atr20: signal.atr20,
-              },
-            });
-            ensureTickerInCsv(signal.ticker);
+            // Do NOT fall back to creating a trade without pre-flight checks.
+            // The pending order will be retried on the next scan cycle.
           }
         } else {
           // Standard manual trade entry (original behavior)
