@@ -20,8 +20,14 @@ jest.mock("@/lib/telegram", () => ({
 
 jest.mock("@/lib/currency", () => ({
   getGbpUsdRate: jest.fn().mockResolvedValue(1.27),
+  getGbpEurRate: jest.fn().mockResolvedValue(1.17),
   getCurrencySymbol: jest.fn().mockReturnValue("$"),
-  isUsdTicker: jest.fn((t: string) => !t.endsWith(".L")),
+  isUsdTicker: jest.fn((t: string) => !t.endsWith(".L") && !t.endsWith(".AS") && !t.endsWith(".HE")),
+  isEurTicker: jest.fn((t: string) => t.endsWith(".AS") || t.endsWith(".HE")),
+  convertToGbp: jest.fn((amount: number, ticker: string, gbpUsdRate: number) => {
+    if (ticker.endsWith(".L")) return amount;
+    return amount / gbpUsdRate;
+  }),
 }));
 
 jest.mock("@/lib/signals/dataValidator", () => ({

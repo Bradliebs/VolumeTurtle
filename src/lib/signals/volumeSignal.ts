@@ -72,10 +72,12 @@ export function generateSignal(
 
   const avgVolume20 = calculateAverageVolume(quotes, config.atrPeriod);
   const atr20 = calculateATR(quotes, config.atrPeriod);
-  if (atr20 == null) return null;
+  if (atr20 == null || atr20 <= 0) return null;
 
   const suggestedEntry = today.close;
-  const hardStop = suggestedEntry - config.hardStopAtrMultiple * atr20;
+  const riskPerShare = config.hardStopAtrMultiple * atr20;
+  if (riskPerShare <= 0) return null;
+  const hardStop = suggestedEntry - riskPerShare;
 
   let regimeAssessment: RegimeAssessment | null = null;
   if (marketRegime) {
@@ -100,7 +102,7 @@ export function generateSignal(
     volume: today.volume,
     avgVolume20,
     volumeRatio,
-    rangePosition: (today.close - today.low) / (today.high - today.low),
+    rangePosition: today.high === today.low ? 0.5 : (today.close - today.low) / (today.high - today.low),
     atr20,
     suggestedEntry,
     hardStop,

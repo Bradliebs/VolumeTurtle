@@ -308,11 +308,16 @@ export async function getInstruments(settings: T212Settings): Promise<T212Instru
 }
 
 // Cache instruments to avoid repeated API calls (promise-based to prevent races)
+// TTL: 12 hours — refreshes on cache miss or expiry
 let instrumentCachePromise: Promise<T212Instrument[]> | null = null;
+let instrumentCacheFetchedAt = 0;
+const INSTRUMENT_CACHE_TTL_MS = 12 * 3600_000; // 12 hours
 
 async function getInstrumentCache(settings: T212Settings): Promise<T212Instrument[]> {
-  if (!instrumentCachePromise) {
+  const isExpired = Date.now() - instrumentCacheFetchedAt > INSTRUMENT_CACHE_TTL_MS;
+  if (!instrumentCachePromise || isExpired) {
     instrumentCachePromise = getInstruments(settings);
+    instrumentCacheFetchedAt = Date.now();
   }
 
   try {
@@ -320,6 +325,7 @@ async function getInstrumentCache(settings: T212Settings): Promise<T212Instrumen
   } catch (err) {
     // Clear rejected promise so a later call can recover.
     instrumentCachePromise = null;
+    instrumentCacheFetchedAt = 0;
     throw err;
   }
 }

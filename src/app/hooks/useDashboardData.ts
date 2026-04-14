@@ -1,7 +1,8 @@
 "use client";
 
-import { useReducer, useEffect, useCallback } from "react";
+import { useReducer, useEffect, useCallback, useRef } from "react";
 import type { DashboardData } from "../components/types";
+import { POLLING_INTERVALS } from "../components/constants";
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -43,26 +44,35 @@ function reducer(state: DataState, action: Action): DataState {
 
 export function useDashboardData() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchDashboard = useCallback(async (isRefresh = false) => {
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
     dispatch({ type: "FETCH_START", refresh: isRefresh });
     try {
-      const res = await fetch("/api/dashboard");
+      const res = await fetch("/api/dashboard", { signal: abortRef.current.signal });
       if (res.ok) {
         dispatch({ type: "FETCH_SUCCESS", data: await res.json() });
       } else {
         dispatch({ type: "FETCH_DONE" });
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       dispatch({ type: "FETCH_DONE" });
     }
   }, []);
 
-  // Initial fetch + 60-second auto-refresh
+  // Initial fetch + auto-refresh (pauses when tab is hidden)
   useEffect(() => {
     fetchDashboard();
-    const interval = setInterval(() => fetchDashboard(true), 60_000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchDashboard(true);
+    }, POLLING_INTERVALS.DASHBOARD_REFRESH);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
   }, [fetchDashboard]);
 
   const refresh = useCallback(() => fetchDashboard(true), [fetchDashboard]);

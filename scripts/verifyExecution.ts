@@ -370,7 +370,7 @@ async function section3_preflight() {
     const tickerRegime = calculateTickerRegime("AAPL", []);
     const assessment = assessRegime(regime, tickerRegime);
     const vixStr = regime.vixLevel != null ? `VIX: ${regime.vixLevel.toFixed(1)} ${regime.volatilityRegime}` : "VIX: n/a";
-    console.log(`         Current regime: ${assessment.overallSignal} (${assessment.score}/3)`);
+    console.log(`         Current regime: ${assessment.overallSignal} (${assessment.rawScore}/4)`);
     console.log(`         QQQ: ${regime.marketRegime} · ${vixStr}`);
 
     if (assessment.overallSignal === "AVOID") {

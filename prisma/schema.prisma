@@ -138,6 +138,9 @@ model Alert {
   acknowledged Boolean  @default(false)
   sentTelegram Boolean  @default(false)
   createdAt    DateTime @default(now())
+
+  @@index([acknowledged])
+  @@index([ticker])
 }
 
 model TelegramSettings {
@@ -198,6 +201,7 @@ model Trade {
   updatedAt     DateTime  @updatedAt
 
   stopHistory   StopHistory[]
+  ratchetEvents CruiseControlRatchetEvent[]
 
   @@index([ticker])
   @@index([status])
@@ -348,6 +352,8 @@ model CruiseControlRatchetEvent {
   t212Response  String?
   createdAt     DateTime @default(now())
 
+  trade Trade @relation(fields: [positionId], references: [id], onDelete: Cascade)
+
   @@index([ticker])
   @@index([pollTimestamp])
   @@index([positionType])
@@ -380,6 +386,8 @@ model PendingOrder {
   isRunner        Boolean   @default(false)
   createdAt       DateTime  @default(now())
 
+  executionLogs ExecutionLog[]
+
   @@index([status])
   @@index([cancelDeadline])
   @@index([ticker])
@@ -395,6 +403,8 @@ model ExecutionLog {
   // | "STOP_PUSHED" | "STOP_PUSH_FAILED" | "EXPIRED"
   detail    String
   createdAt DateTime @default(now())
+
+  order PendingOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@index([createdAt])

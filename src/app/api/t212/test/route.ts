@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { testConnection } from "@/lib/t212/client";
 import type { T212Settings } from "@/lib/t212/client";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 export async function POST(request: NextRequest) {
+  const limited = rateLimit(getRateLimitKey(request), 5, 60_000);
+  if (limited) return limited;
+
   try {
     const body = await request.json();
     const { apiKey, apiSecret, environment } = body;

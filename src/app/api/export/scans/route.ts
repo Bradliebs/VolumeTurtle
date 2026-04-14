@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
+import { rateLimit } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/export/scans");
 
 export async function GET() {
+  const limited = rateLimit("export-scans", 10, 60_000);
+  if (limited) return limited;
+
   try {
     const results = await prisma.scanResult.findMany({
       orderBy: [{ scanDate: "desc" }, { ticker: "asc" }],

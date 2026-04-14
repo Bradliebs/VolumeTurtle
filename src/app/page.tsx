@@ -20,6 +20,7 @@ import { AlertPanel } from "./components/AlertPanel";
 import { MomentumSummaryPanel } from "./components/MomentumSummaryPanel";
 import CruiseControlPanel from "./components/CruiseControlPanel";
 import { PortfolioSummaryCard } from "./components/PortfolioSummaryCard";
+import { SectionErrorBoundary } from "./components/SectionErrorBoundary";
 import { useDashboard } from "./hooks/useDashboard";
 
 // ---------------------------------------------------------------------------
@@ -409,7 +410,9 @@ export default function Home() {
           </>
         )}
         {syncingAll && <span className="text-xs text-[var(--amber)] ml-auto">↻ Refreshing positions…</span>}
-        <AlertPanel />
+        <SectionErrorBoundary name="Alerts">
+          <AlertPanel />
+        </SectionErrorBoundary>
         {!syncingAll && openCount > 0 && (
           <button
             onClick={syncAllPositions}
@@ -424,19 +427,29 @@ export default function Home() {
       </header>
 
       {/* ── REGIME BANNER ── */}
-      <RegimeBanner regime={data?.regime ?? null} breadth={data?.breadth ?? null} />
+      <SectionErrorBoundary name="Regime Banner">
+        <RegimeBanner regime={data?.regime ?? null} breadth={data?.breadth ?? null} />
+      </SectionErrorBoundary>
 
       {/* ── BREADTH PANEL ── */}
-      <BreadthPanel breadth={data?.breadth ?? null} />
+      <SectionErrorBoundary name="Breadth Panel">
+        <BreadthPanel breadth={data?.breadth ?? null} />
+      </SectionErrorBoundary>
 
       {/* ── CRUISE CONTROL ── */}
-      <CruiseControlPanel />
+      <SectionErrorBoundary name="Cruise Control">
+        <CruiseControlPanel />
+      </SectionErrorBoundary>
 
       {/* ── EQUITY CURVE ── */}
-      <EquityCurvePanel data={data?.equityCurve ?? null} snapshots={data?.sparklineSnapshots ?? []} />
+      <SectionErrorBoundary name="Equity Curve">
+        <EquityCurvePanel data={data?.equityCurve ?? null} snapshots={data?.sparklineSnapshots ?? []} />
+      </SectionErrorBoundary>
 
       {/* ── MOMENTUM SUMMARY ── */}
-      <MomentumSummaryPanel data={data?.momentumSummary ?? null} />
+      <SectionErrorBoundary name="Momentum Summary">
+        <MomentumSummaryPanel data={data?.momentumSummary ?? null} />
+      </SectionErrorBoundary>
 
       {/* ── ACTION REQUIRED ── */}
       {actionItems.length > 0 && (

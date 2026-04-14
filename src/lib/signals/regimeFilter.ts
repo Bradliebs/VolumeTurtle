@@ -41,7 +41,8 @@ export interface RegimeAssessment {
   tickerRegime: TickerRegime;
   overallSignal: "STRONG" | "CAUTION" | "AVOID";
   warnings: string[];
-  score: number; // 0–4 (was 0–3, now includes breadth layer)
+  score: number; // 0–3 (capped for compositeScore.ts compatibility)
+  rawScore: number; // 0–4 (uncapped, includes breadth layer)
   breadth: BreadthResult | null;
 }
 
@@ -269,12 +270,18 @@ export function assessRegime(
     );
   }
 
+  // Cap score to 3 for backward compatibility with compositeScore.ts
+  // which normalises as score/3. Four-layer scoring (0–4) is used
+  // internally but external consumers receive max 3.
+  const cappedScore = Math.min(score, 3);
+
   return {
     regime,
     tickerRegime,
     overallSignal,
     warnings,
-    score,
+    score: cappedScore,
+    rawScore: score,
     breadth: breadthData,
   };
 }

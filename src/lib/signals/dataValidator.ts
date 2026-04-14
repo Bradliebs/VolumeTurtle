@@ -112,6 +112,15 @@ export async function validateTicker(
     flags.push("ZERO_VOLUME — no trading activity today");
   }
 
+  // 2b. ZERO_ATR — flat price history means position sizing would divide by zero
+  const atrWindow = candles.slice(-(21)).slice(0, -1); // 20-day window excluding today
+  if (atrWindow.length >= 5) {
+    const allFlat = atrWindow.every((c) => c.high === c.low && c.close === atrWindow[0]!.close);
+    if (allFlat) {
+      flags.push("ZERO_ATR — ATR20 is zero or missing. Cannot calculate stop distance. Ticker excluded from signal generation.");
+    }
+  }
+
   // 3. PRICE_ANOMALY
   if (
     today.close <= 0 ||

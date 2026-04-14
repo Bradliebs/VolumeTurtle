@@ -7,6 +7,7 @@ import type {
   SignalFired,
   SyncResult,
 } from "../components/types";
+import { POLLING_INTERVALS } from "../components/constants";
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -264,9 +265,10 @@ function reducer(state: DashboardState, action: Action): DashboardState {
 
 // ── Flash + scroll helper ─────────────────────────────────────────────────────
 
-function triggerExitFlash(dispatch: React.Dispatch<Action>) {
+function triggerExitFlash(dispatch: React.Dispatch<Action>, timerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>) {
+  if (timerRef.current) clearTimeout(timerRef.current);
   dispatch({ type: "EXIT_FLASH", active: true });
-  setTimeout(() => dispatch({ type: "EXIT_FLASH", active: false }), 1500);
+  timerRef.current = setTimeout(() => dispatch({ type: "EXIT_FLASH", active: false }), 1500);
   document.getElementById("daily-instructions")?.scrollIntoView({ behavior: "smooth" });
 }
 
@@ -275,23 +277,37 @@ function triggerExitFlash(dispatch: React.Dispatch<Action>) {
 export function useDashboard() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const syncedOnceRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exitFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showError = useCallback((msg: string) => {
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
     dispatch({ type: "SET_ERROR", msg });
-    setTimeout(() => dispatch({ type: "CLEAR_ERROR" }), 6000);
+    errorTimerRef.current = setTimeout(() => dispatch({ type: "CLEAR_ERROR" }), POLLING_INTERVALS.ERROR_TOAST_DURATION);
+  }, []);
+
+  const showSuccess = useCallback((msg: string) => {
+    if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    dispatch({ type: "SET_SUCCESS", msg });
+    successTimerRef.current = setTimeout(() => dispatch({ type: "CLEAR_SUCCESS" }), POLLING_INTERVALS.SUCCESS_TOAST_DURATION);
   }, []);
 
   const fetchDashboard = useCallback(
     async (isRefresh = false) => {
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
       dispatch({ type: "FETCH_START", refresh: isRefresh });
       try {
-        const res = await fetch("/api/dashboard");
+        const res = await fetch("/api/dashboard", { signal: abortRef.current.signal });
         if (res.ok) {
           dispatch({ type: "FETCH_SUCCESS", data: await res.json() });
         } else {
           dispatch({ type: "FETCH_DONE" });
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         showError("Failed to load dashboard");
         dispatch({ type: "FETCH_DONE" });
       }
@@ -299,11 +315,19 @@ export function useDashboard() {
     [showError],
   );
 
-  // Periodic refresh
+  // Periodic refresh (pauses when tab is hidden)
   useEffect(() => {
     fetchDashboard();
-    const interval = setInterval(() => fetchDashboard(true), 60_000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      if (!document.hidden) fetchDashboard(true);
+    }, POLLING_INTERVALS.DASHBOARD_REFRESH);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+      if (exitFlashTimerRef.current) clearTimeout(exitFlashTimerRef.current);
+    };
   }, [fetchDashboard]);
 
   // Auto-sync on load (once)
@@ -330,7 +354,7 @@ export function useDashboard() {
         const result: SyncResult = await res.json();
         result.tradeId = tradeId;
         dispatch({ type: "SYNC_ONE_DONE", tradeId, result });
-        if (result.instruction?.type === "EXIT") triggerExitFlash(dispatch);
+        if (result.instruction?.type === "EXIT") triggerExitFlash(dispatch, exitFlashTimerRef);
         fetchDashboard(true);
       } else {
         dispatch({ type: "SYNC_ONE_FAIL" });
@@ -350,11 +374,10 @@ export function useDashboard() {
         const results: SyncResult[] = json.results ?? [];
         const syncedAt = json.syncedAt ?? new Date().toISOString();
         dispatch({ type: "SYNC_ALL_DONE", results, syncedAt });
-        if (results.some((r) => r.instruction?.type === "EXIT")) triggerExitFlash(dispatch);
+        if (results.some((r) => r.instruction?.type === "EXIT")) triggerExitFlash(dispatch, exitFlashTimerRef);
         // Update balance from T212 if available
         if (json.t212?.balance != null) {
-          dispatch({ type: "SET_ERROR", msg: `Synced \u2014 Balance updated to \u00A3${json.t212.balance.toFixed(2)}` });
-          setTimeout(() => dispatch({ type: "CLEAR_ERROR" }), 4000);
+          showSuccess(`Synced — Balance updated to £${json.t212.balance.toFixed(2)}`);
         }
         fetchDashboard(true);
       } else {
@@ -542,8 +565,7 @@ export function useDashboard() {
         const json = await res.json().catch(() => ({}));
         dispatch({ type: "IMPORT_ONE_DONE" });
         const grade = json.matchedSignal?.grade ? ` (grade ${json.matchedSignal.grade})` : "";
-        dispatch({ type: "SET_SUCCESS", msg: `✓ ${position.ticker} imported${grade}` });
-        setTimeout(() => dispatch({ type: "CLEAR_SUCCESS" }), 5000);
+        showSuccess(`✓ ${position.ticker} imported${grade}`);
         await syncAllPositions();
       } else {
         const json = await res.json().catch(() => ({ error: "Failed" }));
@@ -612,8 +634,7 @@ export function useDashboard() {
       if (res.ok) {
         dispatch({ type: "BUY_DONE" });
         const grade = signal.compositeScore?.grade ? ` (grade ${signal.compositeScore.grade})` : "";
-        dispatch({ type: "SET_SUCCESS", msg: `✓ ${signal.ticker} bought on T212${grade} — stop set at ${signal.hardStop.toFixed(2)}` });
-        setTimeout(() => dispatch({ type: "CLEAR_SUCCESS" }), 6000);
+        showSuccess(`✓ ${signal.ticker} bought on T212${grade} — stop set at ${signal.hardStop.toFixed(2)}`);
         fetchDashboard(true);
       } else {
         const json = await res.json().catch(() => ({ error: "Failed" }));

@@ -10,7 +10,7 @@
 import { prisma } from "@/db/client";
 import { createLogger } from "@/lib/logger";
 import { sendTelegram } from "@/lib/telegram";
-import { getGbpUsdRate, getCurrencySymbol, isUsdTicker } from "@/lib/currency";
+import { getGbpUsdRate, getGbpEurRate, getCurrencySymbol, isUsdTicker, isEurTicker, convertToGbp } from "@/lib/currency";
 import { validateTicker } from "@/lib/signals/dataValidator";
 import type { LiveQuote } from "@/lib/signals/dataValidator";
 import { calculateMarketRegime, assessRegime, calculateTickerRegime } from "@/lib/signals/regimeFilter";
@@ -174,9 +174,9 @@ export async function preFlightChecks(
       const accountSummary = await getAccountCash(t212Settings);
       const availableCash = accountSummary.cash; // GBP
       const gbpUsdRate = await getGbpUsdRate();
-      const requiredCash = isUsdTicker(order.ticker)
-        ? (order.suggestedShares * order.suggestedEntry) / gbpUsdRate
-        : order.suggestedShares * order.suggestedEntry;
+      const gbpEurRate = await getGbpEurRate();
+      const orderCost = order.suggestedShares * order.suggestedEntry;
+      const requiredCash = convertToGbp(orderCost, order.ticker, gbpUsdRate, gbpEurRate);
       if (availableCash < requiredCash) {
         failures.push(
           `INSUFFICIENT_CASH — need £${requiredCash.toFixed(2)}, have £${availableCash.toFixed(2)}`,
@@ -192,6 +192,14 @@ export async function preFlightChecks(
     const livePrice = liveQuote.price;
     const signalPrice = order.suggestedEntry;
     const priceDrift = Math.abs(livePrice - signalPrice) / signalPrice;
+
+    // Guard: stop must be below entry — zero/negative riskPerShare would cause Infinity shares
+    const riskPerShareCheck = livePrice - order.suggestedStop;
+    if (riskPerShareCheck <= 0) {
+      failures.push(
+        `INVALID_STOP — stop price >= entry price. riskPerShare would be zero or negative. Entry: $${livePrice.toFixed(2)} Stop: $${order.suggestedStop.toFixed(2)}`,
+      );
+    }
 
     if (priceDrift > 0.10) {
       failures.push(
@@ -951,7 +959,7 @@ async function sendPendingAlert(order: PendingOrderRow): Promise<void> {
       const regime = await calculateMarketRegime();
       const tickerRegime = await calculateTickerRegime(order.ticker, []);
       const assessment = assessRegime(regime, tickerRegime);
-      regimeInfo = `\nRegime: ${assessment.overallSignal} (${assessment.score}/3)\n  QQQ: ${regime.marketRegime} · VIX: ${regime.volatilityRegime}`;
+      regimeInfo = `\nRegime: ${assessment.overallSignal} (${assessment.rawScore}/4)\n  QQQ: ${regime.marketRegime} · VIX: ${regime.volatilityRegime}`;
     } catch { /* best effort */ }
 
     await sendTelegram({

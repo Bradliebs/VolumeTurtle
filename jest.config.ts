@@ -8,6 +8,18 @@ const config: Config = {
     "^@/(.*)$": "<rootDir>/src/$1",
   },
   testMatch: ["**/__tests__/**/*.test.ts"],
+  collectCoverageFrom: [
+    "src/lib/**/*.ts",
+    "!src/lib/**/*.d.ts",
+    "!src/generated/**",
+  ],
+  coverageThreshold: {
+    global: {
+      lines: 40,
+      functions: 40,
+      branches: 30,
+    },
+  },
   transform: {
     "^.+\\.tsx?$": [
       "ts-jest",

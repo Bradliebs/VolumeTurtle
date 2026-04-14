@@ -30,13 +30,23 @@ async function loadAccountBalance(): Promise<number> {
   return config.balance;
 }
 
+/** Constant-time string comparison to prevent timing attacks. */
+function safeTokenEquals(a: string, b: string): boolean {
+  const len = Math.max(a.length, b.length);
+  let mismatch = a.length !== b.length ? 1 : 0;
+  for (let i = 0; i < len; i++) {
+    mismatch |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+  }
+  return mismatch === 0;
+}
+
 export async function GET(req: NextRequest) {
   // Validate secret token (prefer Authorization header, fall back to query param)
   const authHeader = req.headers.get("authorization");
   const headerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const queryToken = req.nextUrl.searchParams.get("token");
   const token = headerToken ?? queryToken;
-  if (!SCHEDULED_SCAN_TOKEN || !token || token !== SCHEDULED_SCAN_TOKEN) {
+  if (!SCHEDULED_SCAN_TOKEN || !token || !safeTokenEquals(token, SCHEDULED_SCAN_TOKEN)) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 
