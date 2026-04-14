@@ -82,6 +82,7 @@ Double-click `START.bat` — it starts Docker, waits for the database, and launc
 |------------|-------------|
 | `INSTALL.bat` | One-click first-time setup |
 | `START.bat` | Daily start (Docker + server + browser) |
+| `UNINSTALL.bat` | Remove scheduled tasks + stop database |
 | `scan.bat` | Run a nightly scan |
 | `package.bat` | Create deployment zip for another PC |
 
@@ -99,7 +100,7 @@ src/
 │   ├── settings/        # Settings page
 │   ├── momentum/        # Momentum dashboard page
 │   ├── watchlist/        # Watchlist page
-│   └── api/             # 34 REST endpoints
+│   └── api/             # 47 REST endpoints
 ├── lib/
 │   ├── signals/         # Volume signal, exit signal, regime filter, composite score
 │   ├── risk/            # ATR, position sizing, equity curve, stop ratcheting
@@ -115,7 +116,7 @@ src/
 │   ├── currency.ts      # GBP/USD/EUR ticker currency handling
 │   └── config.ts        # Environment configuration + DB overrides
 ├── db/                  # Prisma client singleton
-└── __tests__/           # Unit tests (Jest, 212 tests)
+└── __tests__/           # Unit tests (Jest, 292 tests)
 prisma/
 └── schema.prisma        # 21 data models
 ```
@@ -127,3 +128,7 @@ Set `DASHBOARD_TOKEN` in `.env` to enable dashboard authentication. When set, al
 ## Documentation
 
 See [SYSTEM_BREAKDOWN.md](SYSTEM_BREAKDOWN.md) for comprehensive system documentation including signal engine, risk management, API reference, and design decisions.
+
+## Disclaimer
+
+**This software is provided for educational and informational purposes only.** The author is not a financial adviser. Nothing in this project constitutes financial advice, investment advice, or a recommendation to buy or sell any security. Trading stocks and other financial instruments involves risk, including the potential loss of your entire investment. Past performance — whether simulated or real — does not guarantee future results. **Use this software entirely at your own risk.** Always do your own research and consult a qualified financial adviser before making investment decisions.
