@@ -104,8 +104,8 @@ echo  ║                                           ║
 echo  ╚═══════════════════════════════════════════╝
 echo.
 
-:: Open browser once server is ready
-start "" cmd /c "timeout /t 8 /nobreak >nul && start http://localhost:3000"
+:: Open browser once server is ready (polls until localhost:3000 responds)
+start "" powershell -NoProfile -Command "$i=0; while($i -lt 30){Start-Sleep 2; $i++; try{Invoke-WebRequest -Uri http://localhost:3000 -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null; Start-Process http://localhost:3000; exit}catch{}}; Start-Process http://localhost:3000"
 
 :: Start the dev server (keeps this window open)
 call npx next dev

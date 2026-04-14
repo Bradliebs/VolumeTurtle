@@ -51,6 +51,25 @@ if errorlevel 1 (
 for /f "tokens=*" %%v in ('node --version') do set NODE_VER=%%v
 echo         Found Node.js %NODE_VER%
 
+:: Check Node.js version is 18+
+for /f "tokens=1 delims=." %%m in ("%NODE_VER:~1%") do set NODE_MAJOR=%%m
+if !NODE_MAJOR! lss 18 (
+  echo.
+  echo  ╔═══════════════════════════════════════════╗
+  echo  ║  Node.js %NODE_VER% is too old.              ║
+  echo  ║                                           ║
+  echo  ║  VolumeTurtle requires Node.js 18 or      ║
+  echo  ║  newer. Please update:                    ║
+  echo  ║  https://nodejs.org/en/download           ║
+  echo  ║                                           ║
+  echo  ║  Download the LTS version, install it     ║
+  echo  ║  over the old one, then re-run this.      ║
+  echo  ╚═══════════════════════════════════════════╝
+  echo.
+  pause
+  exit /b 1
+)
+
 :: ─────────────────────────────────────────
 :: Step 2: Check Docker
 :: ─────────────────────────────────────────
@@ -309,6 +328,10 @@ echo  ║   Double-click START.bat to open the      ║
 echo  ║   dashboard whenever you want to check    ║
 echo  ║   signals, positions, or trades.          ║
 echo  ║                                           ║
+echo  ║   TO UNINSTALL:                           ║
+echo  ║   Double-click UNINSTALL.bat to remove    ║
+echo  ║   scheduled tasks and stop the database.  ║
+echo  ║                                           ║
 echo  ║   TO REMOVE AUTOMATIC SCANS:              ║
 echo  ║   Run these commands in a terminal:       ║
 echo  ║   schtasks /delete /tn                    ║
@@ -323,8 +346,8 @@ echo  ║                                           ║
 echo  ╚═══════════════════════════════════════════╝
 echo.
 
-:: Open browser once server is ready
-start "" cmd /c "timeout /t 8 /nobreak >nul && start http://localhost:3000"
+:: Open browser once server is ready (polls until localhost:3000 responds, max 60s)
+start "" powershell -NoProfile -Command "$i=0; while($i -lt 30){Start-Sleep 2; $i++; try{Invoke-WebRequest -Uri http://localhost:3000 -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop | Out-Null; Start-Process http://localhost:3000; exit}catch{}}; Start-Process http://localhost:3000"
 
 :: Start the dev server (keeps this window open)
 call npx next dev
