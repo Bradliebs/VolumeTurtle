@@ -1,4 +1,4 @@
-# TradeCore — Ticker Selection Logic
+# VolumeTurtle — Ticker Selection Logic
 
 > Two signal engines share one unified universe of ~1,280 tickers.
 > Each engine applies its own filters on top of the shared pool.
@@ -120,3 +120,9 @@ The dashboard detects tickers flagged by **both** engines:
 **Volume engine universe:** Edit `HIGH_RISK_UNIVERSE` in `src/lib/universe/tickers.ts`.
 **Momentum engine universe:** Edit `data/universe.csv` (adds sector metadata).
 Both are automatically merged by `loadUniverse()`.
+
+---
+
+## Disclaimer
+
+**This software is provided for educational and informational purposes only.** The author is not a financial adviser. Nothing in this project constitutes financial advice, investment advice, or a recommendation to buy or sell any security. Trading stocks and other financial instruments involves risk, including the potential loss of your entire investment. Past performance — whether simulated or real — does not guarantee future results. **Use this software entirely at your own risk.** Always do your own research and consult a qualified financial adviser before making investment decisions.

@@ -1,4 +1,4 @@
-# TradeCore — Complete System Breakdown
+# VolumeTurtle — Complete System Breakdown
 
 > Dual-engine trading system: volume spikes (VolumeTurtle) + sector momentum breakouts (HBME).
 > Mechanical signal generation. Human executes trades via Trading 212.
@@ -10,7 +10,7 @@
 | Layer | Stack |
 |-------|-------|
 | **Frontend** | Next.js 14, React 18, Tailwind CSS |
-| **Backend** | Next.js API Routes (25+ endpoints) |
+| **Backend** | Next.js API Routes (47 endpoints) |
 | **Database** | PostgreSQL via Prisma ORM |
 | **Data Source** | Yahoo Finance (`yahoo-finance2`) |
 | **Broker** | Trading 212 API (stop management + position sync) |
@@ -34,9 +34,9 @@
 
 | Component | Weight | What It Measures |
 |-----------|--------|-----------------|
-| Regime | 40% | Market + volatility + ticker trend |
+| Regime | 35% | Market + volatility + ticker trend |
 | Trend | 30% | Distance above/below 50-day MA |
-| Volume | 20% | Spike strength (2x-5x, capped) |
+| Volume | 25% | Spike strength (2x-5x, capped) |
 | Liquidity | 10% | Average daily dollar volume |
 
 ### Engine 2: Sector Momentum Breakout (HBME)
@@ -366,21 +366,22 @@ During the nightly scan, Grade A/B signals (volume or momentum) create `PendingO
 
 Runs every 60 seconds during market hours (UTC 14:00–20:00). Picks up pending orders whose cancellation window has expired.
 
-### 11 Pre-Flight Checks (ALL must pass)
+### 12 Pre-Flight Checks (ALL must pass)
 
 | # | Check | Action on Fail |
 |---|-------|---------------|
-| 1 | **Cash Available** — T212 account has enough GBP | ABORT |
-| 2 | **Price Validation** — live price drift from signal (>10% abort, 2-10% recalculate) | ABORT or ADJUST |
-| 3 | **Position Limit** — max 5 open positions | ABORT |
-| 4 | **Circuit Breaker** — full equity curve state (PAUSE blocks, CAUTION halves risk) | ABORT or ADJUST |
-| 5 | **Regime Gate** — AVOID blocks all, CAUTION blocks Grade B + breadth checks | ABORT |
-| 6 | **Data Validation** — ticker data quality | ABORT |
-| 7 | **Duplicate Check** — no existing open trade for this ticker | ABORT |
-| 8 | **Market Hours** — market state must be REGULAR or PRE | ABORT |
-| 9 | **Minimum Order Size** — order value ≥ £1.00 | ABORT |
-| 10 | **T212 Connection** — broker connected + live environment | ABORT |
-| 11 | **Exposure Cap** — position ≤ 25% of account (reduces shares, doesn't block) | ADJUST |
+| 1 | **Cash Available** — T212 account has enough GBP (USD + EUR converted) | ABORT |
+| 2 | **Stop Validation** — stop price must be below entry (riskPerShare > 0) | ABORT |
+| 3 | **Price Validation** — live price drift from signal (>10% abort, 2-10% recalculate) | ABORT or ADJUST |
+| 4 | **Position Limit** — max 5 open positions | ABORT |
+| 5 | **Circuit Breaker** — full equity curve state (PAUSE blocks, CAUTION halves risk) | ABORT or ADJUST |
+| 6 | **Regime Gate** — AVOID blocks all, CAUTION blocks Grade B + breadth checks | ABORT |
+| 7 | **Data Validation** — ticker data quality | ABORT |
+| 8 | **Duplicate Check** — no existing open trade for this ticker | ABORT |
+| 9 | **Market Hours** — market state must be REGULAR or PRE | ABORT |
+| 10 | **Minimum Order Size** — order value ≥ £1.00 | ABORT |
+| 11 | **T212 Connection** — broker connected + live environment | ABORT |
+| 12 | **Exposure Cap** — position ≤ 25% of account (reduces shares, doesn't block) | ADJUST |
 
 ### Order Placement
 
@@ -483,3 +484,9 @@ npm run schedule:remove   # Remove tasks
 ```
 Double-click package.bat  # Creates zip excluding node_modules/.env
 ```
+
+---
+
+## Disclaimer
+
+**This software is provided for educational and informational purposes only.** The author is not a financial adviser. Nothing in this project constitutes financial advice, investment advice, or a recommendation to buy or sell any security. Trading stocks and other financial instruments involves risk, including the potential loss of your entire investment. Past performance — whether simulated or real — does not guarantee future results. **Use this software entirely at your own risk.** Always do your own research and consult a qualified financial adviser before making investment decisions.
