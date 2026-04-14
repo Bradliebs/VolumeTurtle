@@ -103,13 +103,31 @@ export async function GET(req: NextRequest) {
     const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
 
     // 1b. Calculate market regime
-    const marketRegime = await calculateMarketRegime();
+    let marketRegime: Awaited<ReturnType<typeof calculateMarketRegime>>;
+    try {
+      marketRegime = await calculateMarketRegime();
+    } catch (regimeErr) {
+      const msg = `Market regime calculation failed: ${regimeErr instanceof Error ? regimeErr.message : String(regimeErr)}`;
+      log.error(msg);
+      try { await sendTelegram({ text: `<b>\u26a0 SCAN ABORTED</b>\n${msg}` }); } catch { /* best effort */ }
+      await prisma.scanRun.update({ where: { id: scanRun.id }, data: { status: "FAILED", error: msg } });
+      return NextResponse.json({ error: msg }, { status: 500 });
+    }
 
-    // 2. Fetch EOD quotes — filtered by market
+    // 2. Fetch EOD quotes \u2014 filtered by market
     const fullUniverse = getUniverse();
     const universe = filterUniverseByMarket(fullUniverse, market);
     const quoteMap = await fetchEODQuotes(universe);
     const fetchedTickers = Object.keys(quoteMap);
+
+    // Coverage gate: abort if less than 10% of universe has data
+    if (fetchedTickers.length < 50 || (universe.length > 0 && (fetchedTickers.length / universe.length) < 0.1)) {
+      const msg = `Data coverage too low: ${fetchedTickers.length}/${universe.length} tickers. Yahoo Finance may be down.`;
+      log.error(msg);
+      try { await sendTelegram({ text: `<b>\u26a0 SCAN ABORTED</b>\n${msg}` }); } catch { /* best effort */ }
+      await prisma.scanRun.update({ where: { id: scanRun.id }, data: { status: "FAILED", error: msg } });
+      return NextResponse.json({ error: msg }, { status: 500 });
+    }
 
     // 3. Filter liquidity
     const liquidTickers = fetchedTickers.filter((ticker) =>

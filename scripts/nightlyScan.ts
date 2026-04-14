@@ -118,6 +118,15 @@ async function main() {
   const fetchedTickers = Object.keys(quoteMap);
   console.log(`[nightlyScan] Received data for ${fetchedTickers.length} tickers`);
 
+  // Coverage gate: abort if less than 10% of universe has data
+  const coveragePct = universe.length > 0 ? (fetchedTickers.length / universe.length) * 100 : 0;
+  if (fetchedTickers.length < 50 || coveragePct < 10) {
+    const msg = `Data coverage too low: ${fetchedTickers.length}/${universe.length} tickers (${coveragePct.toFixed(0)}%). Yahoo Finance may be down. Aborting scan.`;
+    console.error(`[nightlyScan] ABORT: ${msg}`);
+    try { await sendTelegram({ text: `<b>\u26a0 SCAN ABORTED</b>\n${msg}` }); } catch { /* best effort */ }
+    process.exit(1);
+  }
+
   // 3. Filter by minimum liquidity
   const liquidTickers = fetchedTickers.filter((ticker) => {
     const quotes = quoteMap[ticker]!;

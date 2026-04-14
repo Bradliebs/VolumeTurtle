@@ -743,6 +743,26 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
 
     await logExecution(order.id, "CONFIRMED", `Executed: ${execResult.actualShares} shares @ $${(execResult.actualPrice ?? 0).toFixed(2)}, T212 order: ${execResult.t212OrderId}`);
 
+    // Re-check position count before creating trade (guards against race with other executions)
+    const currentOpenCount = await db.trade.count({ where: { status: "OPEN" } });
+    const maxPos = config.maxPositions ?? 5;
+    if (currentOpenCount >= maxPos) {
+      log.warn({ ticker: adjustedOrder.ticker, openCount: currentOpenCount, maxPos }, "Position limit reached between pre-flight and execution — trade executed on T212 but not tracked in DB. Manual reconciliation needed.");
+      await logExecution(order.id, "POST_EXEC_WARNING", `Position limit reached (${currentOpenCount}/${maxPos}) — T212 order placed but trade not created in DB`);
+      await sendTelegram({
+        text: `<b>\u26a0 POST-EXEC WARNING</b>\n<code>${adjustedOrder.ticker}</code>\nT212 order filled but position limit reached (${currentOpenCount}/${maxPos}).\nTrade NOT created in DB. Manual reconciliation needed.`,
+      }).catch(() => { /* best effort */ });
+      // Still mark order as executed since T212 has the position
+      return;
+    }
+
+    // Also re-check auto-execution is still enabled (emergency disable guard)
+    const latestSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+    if (latestSettings && !latestSettings.autoExecutionEnabled) {
+      log.warn({ ticker: adjustedOrder.ticker }, "Auto-execution disabled between pre-flight and execution — trade executed on T212, creating DB record anyway");
+      await logExecution(order.id, "POST_EXEC_WARNING", "Auto-execution was disabled mid-flight — DB trade created for reconciliation");
+    }
+
     // Create Trade in DB (same as manual entry)
     await db.trade.create({
       data: {
@@ -882,8 +902,9 @@ export async function cancelPendingOrder(
 // ═══════════════════════════════════════════════════════════════════════════
 
 export async function emergencyDisable(): Promise<{ cancelled: number }> {
+  // Cancel both "pending" and "processing" orders
   const pending = await db.pendingOrder.findMany({
-    where: { status: "pending" },
+    where: { status: { in: ["pending", "processing"] } },
   });
 
   for (const order of pending) {

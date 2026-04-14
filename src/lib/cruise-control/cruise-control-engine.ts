@@ -219,6 +219,8 @@ function stopRetryTimer(): void {
 
 /** Enqueue a failed stop push to the DB-backed retry queue. */
 async function enqueueRetry(item: RetryItem, error?: string): Promise<void> {
+  // Exponential backoff: 10min, 20min, 40min, 60min, 60min... (capped at 60min)
+  const backoffMs = Math.min(10 * 60 * 1000 * Math.pow(2, item.attempts), 60 * 60 * 1000);
   await db.retryQueue.create({
     data: {
       ticker: item.position.ticker,
@@ -226,10 +228,10 @@ async function enqueueRetry(item: RetryItem, error?: string): Promise<void> {
       quantity: item.position.shares,
       attempts: item.attempts,
       lastError: error ?? null,
-      nextRetryAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes from now
+      nextRetryAt: new Date(Date.now() + backoffMs),
     },
   });
-  log.info({ ticker: item.position.ticker, newStop: item.newStop }, "[CRUISE-CONTROL] Queued failed stop push for DB-persisted retry");
+  log.info({ ticker: item.position.ticker, newStop: item.newStop, backoffMin: Math.round(backoffMs / 60000) }, "[CRUISE-CONTROL] Queued failed stop push for DB-persisted retry");
 }
 
 async function processRetryQueue(): Promise<void> {
@@ -238,7 +240,7 @@ async function processRetryQueue(): Promise<void> {
     rows = await db.retryQueue.findMany({
       where: {
         nextRetryAt: { lte: new Date() },
-        attempts: { lt: 5 },
+        attempts: { lt: 15 },
       },
     });
   } catch (err) {
@@ -249,10 +251,10 @@ async function processRetryQueue(): Promise<void> {
   if (rows.length === 0) return;
 
   for (const row of rows) {
-    if (row.attempts >= 5) {
+    if (row.attempts >= 15) {
       // Max retries — alert and remove
       await db.retryQueue.delete({ where: { id: row.id } });
-      await sendAlert("warning", `T212 stop update failed after 5 attempts: ${row.ticker} — will retry next poll cycle`, {
+      await sendAlert("warning", `T212 stop update failed after 15 attempts: ${row.ticker} — manual intervention needed`, {
         ticker: row.ticker,
         stopPrice: row.stopPrice,
         attempts: row.attempts,
@@ -260,7 +262,7 @@ async function processRetryQueue(): Promise<void> {
       await db.cruiseControlAlert.create({
         data: {
           alertType: "warning",
-          message: `Retry exhausted for ${row.ticker} stop at ${row.stopPrice} after ${row.attempts} attempts`,
+          message: `Retry exhausted for ${row.ticker} stop at ${row.stopPrice} after ${row.attempts} attempts — MANUAL SET REQUIRED`,
           context: { ticker: row.ticker, stopPrice: row.stopPrice },
         },
       });
@@ -283,12 +285,14 @@ async function processRetryQueue(): Promise<void> {
       log.info({ ticker: row.ticker, stopPrice: row.stopPrice }, "[CRUISE-CONTROL] Retry succeeded — removed from queue");
     } else {
       // Update attempts and push next retry forward
+      // Exponential backoff on retry interval
+      const backoffMs = Math.min(10 * 60 * 1000 * Math.pow(2, newAttempts), 60 * 60 * 1000);
       await db.retryQueue.update({
         where: { id: row.id },
         data: {
           attempts: newAttempts,
           lastError: result.error ?? null,
-          nextRetryAt: new Date(Date.now() + 10 * 60 * 1000),
+          nextRetryAt: new Date(Date.now() + backoffMs),
         },
       });
     }
@@ -644,7 +648,7 @@ export async function runSinglePoll(): Promise<PollResult> {
       startRetryTimer();
       try {
         const pendingRetries = await db.retryQueue.findMany({
-          where: { attempts: { lt: 5 } },
+          where: { attempts: { lt: 15 } },
         });
         retryFailures = pendingRetries.length;
       } catch {
