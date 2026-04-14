@@ -431,3 +431,31 @@ model CruiseControlPollLog {
 
   @@index([pollStartedAt])
 }
+
+// ── Sessions ────────────────────────────────────────────────────────────────
+
+/// Dashboard login session (replaces in-memory token storage)
+model Session {
+  id        String   @id
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+// ── Retry Queue ─────────────────────────────────────────────────────────────
+
+/// Persisted retry queue for failed T212 stop pushes (survives daemon restarts)
+model RetryQueue {
+  id          Int      @id @default(autoincrement())
+  ticker      String
+  stopPrice   Float
+  quantity    Float
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  nextRetryAt DateTime
+
+  @@index([nextRetryAt])
+  @@index([ticker])
+}

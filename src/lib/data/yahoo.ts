@@ -44,19 +44,15 @@ export async function fetchHistory(
       },
     );
 
-    return result.map((bar) => {
-      const isLSE = symbol.endsWith(".L");
-      const divisor = isLSE ? 100 : 1;
-      return {
-        date: bar.date,
-        open: bar.open / divisor,
-        high: bar.high / divisor,
-        low: bar.low / divisor,
-        close: bar.close / divisor,
-        adjClose: (bar.adjClose ?? bar.close) / divisor,
-        volume: bar.volume,
-      };
-    });
+    return result.map((bar) => ({
+      date: bar.date,
+      open: bar.open,
+      high: bar.high,
+      low: bar.low,
+      close: bar.close,
+      adjClose: bar.adjClose ?? bar.close,
+      volume: bar.volume,
+    }));
   } catch (err) {
     log.error({ symbol, err }, "Failed to fetch history after retries");
     return [];

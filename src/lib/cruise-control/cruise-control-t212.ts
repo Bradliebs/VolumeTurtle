@@ -64,7 +64,8 @@ export async function getCurrentPrice(ticker: string): Promise<number | null> {
     if (quote?.regularMarketPrice != null && quote.regularMarketPrice > 0) {
       let price = quote.regularMarketPrice;
       // GBX (pence) → GBP conversion for LSE tickers
-      if (ticker.endsWith(".L")) {
+      // Yahoo may return currency as "GBp", "GBX", or null for LSE stocks
+      if (ticker.endsWith(".L") && quote.currency !== "GBP") {
         price = price / 100;
       }
       return price;
@@ -139,8 +140,13 @@ export async function getOpenPositionsFromT212(): Promise<T212Position[]> {
   const settings = loadT212Settings();
   if (!settings) return [];
 
-  const { positions } = await getCachedT212Positions(settings);
-  return positions;
+  try {
+    const { positions } = await getCachedT212Positions(settings);
+    return positions;
+  } catch (err) {
+    log.error({ err: String(err) }, "Failed to fetch T212 positions");
+    return [];
+  }
 }
 
 // ── Reconciliation ──────────────────────────────────────────────────────────

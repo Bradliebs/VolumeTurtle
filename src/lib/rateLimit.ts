@@ -62,16 +62,13 @@ export function rateLimit(
 }
 
 /**
- * Get a rate limit key from a request.
- * Uses pathname + a connection identifier. Since X-Forwarded-For is
- * trivially spoofable without a trusted reverse proxy, we fall back
- * to "local" for localhost deployments — all local users share
- * one bucket, which is the safe default for a single-user app.
+ * Get a rate limit key from a request (IP + pathname).
  */
 export function getRateLimitKey(request: Request): string {
   const url = new URL(request.url);
-  // For a single-user localhost app, a per-path bucket is sufficient.
-  // If ever exposed publicly behind a trusted proxy, replace "local"
-  // with the verified client IP from the proxy's trusted header.
-  return `local:${url.pathname}`;
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    request.headers.get("x-real-ip") ??
+    "unknown";
+  return `${ip}:${url.pathname}`;
 }

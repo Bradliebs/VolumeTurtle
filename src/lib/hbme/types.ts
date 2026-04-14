@@ -51,7 +51,7 @@ export interface BreakoutCandidate {
   compositeScore: CompositeBreakoutScore;
 }
 
-export interface NearMiss {
+export interface HbmeNearMiss {
   ticker: string;
   sector: string;
   chg1d: number;
@@ -65,6 +65,9 @@ export interface NearMiss {
   projectedScore: CompositeBreakoutScore;
   projectedGrade: "A" | "B" | "C" | "D";
 }
+
+/** @deprecated Use HbmeNearMiss — kept for backward compatibility with sacred files */
+export type NearMiss = HbmeNearMiss;
 
 export interface RegimeResult {
   regimeScore: number;

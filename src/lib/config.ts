@@ -77,10 +77,13 @@ export const config: VolumeTurtleConfig = {
   VOLUME_SPIKE_MIN: volumeSpikeMin,
   BREAKOUT_MIN_CHG: envFloat("BREAKOUT_MIN_CHG", 0.10),
   BREAKOUT_MIN_VOL: envFloat("BREAKOUT_MIN_VOL", 3.0),
-  SCORE_WEIGHT_REGIME: envFloat("SCORE_WEIGHT_REGIME", 0.40),
+  SCORE_WEIGHT_REGIME: envFloat("SCORE_WEIGHT_REGIME", 0.35),
   SCORE_WEIGHT_BREAKOUT: envFloat("SCORE_WEIGHT_BREAKOUT", 0.30),
   SCORE_WEIGHT_SECTOR: envFloat("SCORE_WEIGHT_SECTOR", 0.25),
   SCORE_WEIGHT_LIQUIDITY: envFloat("SCORE_WEIGHT_LIQUIDITY", 0.10),
+  // Note: SCORE_WEIGHT_REGIME (uppercase) retained for breakoutEngine.ts (sacred).
+  // scoreWeightRegime (lowercase) is used by compositeScore.ts (sacred).
+  // Both now default to 0.35 — no mismatch.
   TELEGRAM_BOT_TOKEN: process.env["TELEGRAM_BOT_TOKEN"] ?? "",
   TELEGRAM_CHAT_ID: process.env["TELEGRAM_CHAT_ID"] ?? "",
   rangePositionThreshold: envFloat("RANGE_POSITION_THRESHOLD", 0.75),
@@ -88,9 +91,9 @@ export const config: VolumeTurtleConfig = {
   trailingStopDays: envInt("TRAILING_STOP_DAYS", 10),
   hardStopAtrMultiple: envFloat("HARD_STOP_ATR_MULTIPLE", 1.5),
   trailAtrMultiple: envFloat("TRAIL_ATR_MULTIPLE", 2),
-  scoreWeightRegime: envFloat("SCORE_WEIGHT_REGIME", 0.40),
+  scoreWeightRegime: envFloat("SCORE_WEIGHT_REGIME", 0.35),
   scoreWeightTrend: envFloat("SCORE_WEIGHT_TREND", 0.30),
-  scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.20),
+  scoreWeightVolume: envFloat("SCORE_WEIGHT_VOLUME", 0.25),
   scoreWeightLiquidity: envFloat("SCORE_WEIGHT_LIQUIDITY", 0.10),
   cautionDrawdownPct: envFloat("CAUTION_DRAWDOWN_PCT", 10),
   pauseDrawdownPct: envFloat("PAUSE_DRAWDOWN_PCT", 20),
@@ -154,6 +157,7 @@ export async function applyDbSettings(): Promise<void> {
       config.BREAKOUT_MIN_CHG = row.breakoutMinChg;
       config.BREAKOUT_MIN_VOL = row.breakoutMinVol;
       config.SCORE_WEIGHT_REGIME = row.scoreWeightRegime;
+      config.scoreWeightRegime = row.scoreWeightRegime;
       config.SCORE_WEIGHT_BREAKOUT = row.scoreWeightBreakout;
       config.SCORE_WEIGHT_SECTOR = row.scoreWeightSector;
       config.SCORE_WEIGHT_LIQUIDITY = row.scoreWeightLiquidity;

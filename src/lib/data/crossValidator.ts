@@ -69,15 +69,26 @@ async function tryPolygon(
     if (!result || !result.c || !result.o) return null;
 
     // Polygon prev endpoint returns previous day's bar
-    // Compare close to open as a rough move proxy
     const prevClose = result.c;
-    // We only have the previous day from polygon — we can't compute today's move
-    // Use it as a sanity check: if the previous close is wildly different from
-    // what Yahoo reported, the data may be suspect
-    const confirmed = prevClose > 0; // Basic sanity — price exists
+    const open = result.o;
+    if (!prevClose || prevClose <= 0 || !open || open <= 0) {
+      return { confirmed: false, source: "polygon" };
+    }
+
+    // Validate the move: compare Polygon's close-to-open change vs expected
+    const actualMove = (open - prevClose) / prevClose;
+    const difference = Math.abs(actualMove - expectedMove);
+    const confirmed = difference < MOVE_TOLERANCE;
 
     log.info(
-      { ticker, polygonPrevClose: prevClose, confirmed },
+      {
+        ticker,
+        polygonPrevClose: prevClose,
+        polygonOpen: open,
+        actualMove: (actualMove * 100).toFixed(1),
+        expectedMove: (expectedMove * 100).toFixed(1),
+        confirmed,
+      },
       "Polygon cross-validation",
     );
 

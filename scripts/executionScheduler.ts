@@ -44,26 +44,19 @@ async function main() {
     return;
   }
 
-  // Check execution hours (Europe/London — handles BST automatically)
+  // Check execution hours (UTC)
   const now = new Date();
-  const londonHour = parseInt(
-    new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: "Europe/London" }).format(now),
-    10,
-  );
+  const utcHour = now.getUTCHours();
   const startHour = settings.autoExecutionStartHour ?? 14;
   const endHour = settings.autoExecutionEndHour ?? 20;
 
-  if (londonHour < startHour || londonHour >= endHour) {
-    console.log(`[executionScheduler] Outside execution hours (${startHour}:00\u2013${endHour}:00 London, current: ${londonHour}:00) \u2014 exiting`);
+  if (utcHour < startHour || utcHour >= endHour) {
+    console.log(`[executionScheduler] Outside execution hours (${startHour}:00–${endHour}:00 UTC, current: ${utcHour}:00) — exiting`);
     return;
   }
 
-  // Skip weekends (London time)
-  const londonDay = parseInt(
-    new Intl.DateTimeFormat("en-GB", { weekday: "narrow", timeZone: "Europe/London" }).format(now),
-    10,
-  );
-  const day = new Date(now.toLocaleString("en-GB", { timeZone: "Europe/London" })).getDay();
+  // Skip weekends
+  const day = now.getUTCDay();
   if (day === 0 || day === 6) {
     console.log("[executionScheduler] Weekend — exiting");
     return;

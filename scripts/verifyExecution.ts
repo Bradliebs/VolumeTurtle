@@ -527,10 +527,11 @@ async function section3_preflight() {
 
   // --- 3.11 Gap guardrail ---
   try {
+    const gapAppSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
     const signalClose = 100.0;
     const gapDownPrice = 96.5; // 3.5% gap down
     const gapPct = (gapDownPrice - signalClose) / signalClose;
-    const threshold = (sectorSettings?.["gapDownThreshold"] as number) ?? 0.03;
+    const threshold = (gapAppSettings?.["gapDownThreshold"] as number) ?? 0.03;
 
     if (gapPct < -threshold) {
       pass(
@@ -545,7 +546,7 @@ async function section3_preflight() {
 
     const gapUpPrice = 106.0; // 6% gap up
     const gapUpPct = (gapUpPrice - signalClose) / signalClose;
-    const upThreshold = (sectorSettings?.["gapUpResizeThreshold"] as number) ?? 0.05;
+    const upThreshold = (gapAppSettings?.["gapUpResizeThreshold"] as number) ?? 0.05;
 
     if (gapUpPct > upThreshold) {
       pass(

@@ -7,8 +7,8 @@ import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 const log = createLogger("api/balance");
 
 export async function PATCH(request: NextRequest) {
-  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
-  if (rlResponse) return rlResponse;
+  const limited = rateLimit(getRateLimitKey(request), 20, 60_000);
+  if (limited) return limited;
 
   try {
     const parsed = await validateBody(request, updateBalanceSchema);

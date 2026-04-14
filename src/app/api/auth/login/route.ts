@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { timingSafeEqual } from "crypto";
 
 export async function POST(request: Request) {
-  // Rate limit: 5 attempts per minute
-  const rlKey = getRateLimitKey(request);
-  const rlResponse = rateLimit(rlKey, 5, 60_000);
-  if (rlResponse) return rlResponse;
+  // Rate limit: 10 attempts per minute
+  const limited = rateLimit(getRateLimitKey(request), 10, 60_000);
+  if (limited) return limited;
 
   const token = process.env.DASHBOARD_TOKEN;
   if (!token) {
@@ -16,17 +15,23 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const provided = typeof body?.token === "string" ? body.token : "";
 
-  const tokensMatch = provided.length === token.length &&
-    timingSafeEqual(Buffer.from(provided), Buffer.from(token));
+  // Timing-safe token comparison
+  let tokenMatch = false;
+  try {
+    const a = Buffer.from(provided);
+    const b = Buffer.from(token);
+    tokenMatch = a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    tokenMatch = false;
+  }
 
-  if (!tokensMatch) {
+  if (!tokenMatch) {
     return NextResponse.json({ error: "Invalid token" }, { status: 401 });
   }
 
   const response = NextResponse.json({ ok: true });
   response.cookies.set("vt-auth", token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: 60 * 60 * 24 * 30, // 30 days

@@ -55,8 +55,8 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
-  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
-  if (rlResponse) return rlResponse;
+  const limited = rateLimit(getRateLimitKey(request), 20, 60_000);
+  if (limited) return limited;
 
   try {
     const parsed = await validateBody(request, updateSettingsSchema);
@@ -92,18 +92,22 @@ export async function PUT(request: NextRequest) {
     if (t212) {
       // Write credentials to .env.local and update process.env so they take effect immediately
       if (t212.apiKey) {
-        // Sanitize values — prevent newline injection that could overwrite other env vars
-        const sanitize = (v: string) => v.replace(/[\r\n]/g, "");
-
         const fs = await import("fs");
         const path = await import("path");
         const envLocalPath = path.resolve(process.cwd(), ".env.local");
 
+        // Sanitize API credentials: strip newlines and non-printable characters
+        const sanitize = (raw: string): string =>
+          raw.replace(/[\n\r]/g, "").replace(/[^\x20-\x7E]/g, "").trim();
+
+        const safeKey = sanitize(t212.apiKey);
+        const safeSecret = t212.apiSecret != null ? sanitize(t212.apiSecret) : null;
+
         const lines: string[] = [];
-        lines.push(`T212_API_KEY=${sanitize(t212.apiKey)}`);
-        if (t212.apiSecret != null) lines.push(`T212_API_SECRET=${sanitize(t212.apiSecret)}`);
-        if (t212.environment) lines.push(`T212_ENVIRONMENT=${sanitize(t212.environment)}`);
-        if (t212.accountType) lines.push(`T212_ACCOUNT_TYPE=${sanitize(t212.accountType)}`);
+        lines.push(`T212_API_KEY=${safeKey}`);
+        if (safeSecret != null) lines.push(`T212_API_SECRET=${safeSecret}`);
+        if (t212.environment) lines.push(`T212_ENVIRONMENT=${t212.environment}`);
+        if (t212.accountType) lines.push(`T212_ACCOUNT_TYPE=${t212.accountType}`);
 
         // Read existing .env.local, strip old T212 lines, append new ones
         let existing = "";
@@ -113,8 +117,8 @@ export async function PUT(request: NextRequest) {
         fs.writeFileSync(envLocalPath, merged, "utf-8");
 
         // Update process.env in-memory so it takes effect without restart
-        process.env["T212_API_KEY"] = t212.apiKey;
-        if (t212.apiSecret != null) process.env["T212_API_SECRET"] = t212.apiSecret;
+        process.env["T212_API_KEY"] = safeKey;
+        if (safeSecret != null) process.env["T212_API_SECRET"] = safeSecret;
         if (t212.environment) process.env["T212_ENVIRONMENT"] = t212.environment;
         if (t212.accountType) process.env["T212_ACCOUNT_TYPE"] = t212.accountType;
 

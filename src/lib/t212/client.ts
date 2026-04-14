@@ -138,14 +138,7 @@ export async function t212Fetch(path: string, settings: T212Settings, options?: 
 
   // Retry up to 3 times on 429 (rate limit), respecting reset header
   for (let attempt = 0; attempt < 3; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30_000);
-    let response: Response;
-    try {
-      response = await fetch(`${baseUrl}${path}`, { method, headers, body, signal: controller.signal });
-    } finally {
-      clearTimeout(timeout);
-    }
+    const response = await fetch(`${baseUrl}${path}`, { method, headers, body });
 
     if (response.status === 429) {
       const resetHeader = response.headers.get("x-ratelimit-reset");
@@ -579,28 +572,7 @@ export async function updateStopOnT212(
   }
 
   // Place new stop order (negative quantity = sell/stop-loss)
-  // If this fails after cancel, the position has no stop — retry once
-  let placed: T212Order;
-  try {
-    placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
-  } catch (err) {
-    if (cancelledOrderId != null) {
-      // Critical: position is now unprotected. Retry once after a delay.
-      await sleep(3000);
-      try {
-        placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
-      } catch (retryErr) {
-        throw new Error(
-          `CRITICAL: Stop cancelled (order ${cancelledOrderId}) but replacement failed after retry. ` +
-          `Position ${t212Ticker} has NO stop protection. ` +
-          `Original error: ${err instanceof Error ? err.message : String(err)}. ` +
-          `Retry error: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`
-        );
-      }
-    } else {
-      throw err;
-    }
-  }
+  const placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
   return { cancelled: cancelledOrderId, placed };
 }
 

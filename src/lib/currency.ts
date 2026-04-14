@@ -53,43 +53,11 @@ export async function getGbpUsdRate(): Promise<number> {
   }
 }
 
-// ── EUR/GBP rate cache ──
-
-let cachedEurGbpRate: { rate: number; fetchedAt: number } | null = null;
-const EUR_FALLBACK_RATE = 0.86;
-
-/**
- * Fetch the current EUR/GBP exchange rate.
- * Caches for 1 hour. Falls back to 0.86 if fetch fails.
- */
-export async function getEurGbpRate(): Promise<number> {
-  if (cachedEurGbpRate && Date.now() - cachedEurGbpRate.fetchedAt < CACHE_TTL_MS) {
-    return cachedEurGbpRate.rate;
-  }
-  try {
-    const YahooFinance = (await import("yahoo-finance2")).default;
-    const yf = new YahooFinance();
-    const quote = await yf.quote("EURGBP=X");
-    const rate = quote?.regularMarketPrice ?? EUR_FALLBACK_RATE;
-    cachedEurGbpRate = { rate, fetchedAt: Date.now() };
-    return rate;
-  } catch {
-    return cachedEurGbpRate?.rate ?? EUR_FALLBACK_RATE;
-  }
-}
-
-/**
- * Returns true if the ticker is EUR-denominated.
- */
-export function isEurTicker(ticker: string): boolean {
-  return ticker.endsWith(".AS") || ticker.endsWith(".HE");
-}
-
 /**
  * Convert a USD amount to GBP using the given rate.
  */
 export function convertToGbp(amount: number, ticker: string, gbpUsdRate: number): number {
   if (ticker.endsWith(".L")) return amount; // Already GBP
   if (isUsdTicker(ticker)) return amount / gbpUsdRate;
-  return amount; // EUR/SEK/DKK — caller should use convertEurToGbp for precision
+  return amount; // EUR/SEK/DKK — not converted (small portion)
 }

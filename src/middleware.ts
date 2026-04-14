@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { timingSafeEqual } from "crypto";
 
 const PUBLIC_PATHS = [
   "/api/scan/scheduled",
+  "/api/auth/login",
   "/login",
 ];
 
@@ -11,22 +11,32 @@ function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
 }
 
-function safeCompare(a: string, b: string): boolean {
+/**
+ * Constant-time string comparison safe for Edge Runtime.
+ * Node's crypto.timingSafeEqual is not available in Next.js middleware (Edge).
+ */
+function safeTokenEquals(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
-  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
 }
 
 export function middleware(request: NextRequest) {
   const token = process.env.DASHBOARD_TOKEN;
 
-  // If no token configured, block all access (misconfigured deployment)
+  // Fail CLOSED: no token configured → deny access (redirect to login)
   if (!token) {
+    const { pathname } = request.nextUrl;
+    if (isPublicPath(pathname) || pathname.startsWith("/_next") || pathname.startsWith("/favicon") || pathname.endsWith(".ico")) {
+      return NextResponse.next();
+    }
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Auth not configured" }, { status: 500 });
     }
-    const loginUrl = request.nextUrl.clone();
-    loginUrl.pathname = "/login";
-    return NextResponse.redirect(loginUrl);
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   const { pathname } = request.nextUrl;
@@ -43,14 +53,16 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check cookie
+  // Check cookie (timing-safe comparison)
   const cookieToken = request.cookies.get("vt-auth")?.value;
-  if (cookieToken && safeCompare(cookieToken, token)) return NextResponse.next();
+  if (cookieToken && safeTokenEquals(cookieToken, token)) return NextResponse.next();
 
-  // Check Authorization header (for API clients / scripts)
+  // Check Authorization header (timing-safe comparison)
   const authHeader = request.headers.get("authorization");
-  const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
-  if (bearerToken && safeCompare(bearerToken, token)) return NextResponse.next();
+  if (authHeader) {
+    const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
+    if (safeTokenEquals(bearerToken, token)) return NextResponse.next();
+  }
 
   // API routes return 401 JSON
   if (pathname.startsWith("/api/")) {

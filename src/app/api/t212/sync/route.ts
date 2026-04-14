@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { loadT212Settings, getAccountCash, getPositionsWithStopsMapped } from "@/lib/t212/client";
 import type { T212Position } from "@/lib/t212/client";
@@ -7,9 +7,9 @@ import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 const log = createLogger("api/t212/sync");
 
-export async function POST(request: NextRequest) {
-  const rlResponse = rateLimit(getRateLimitKey(request), 5, 60_000);
-  if (rlResponse) return rlResponse;
+export async function POST(request: Request) {
+  const limited = rateLimit(getRateLimitKey(request), 20, 60_000);
+  if (limited) return limited;
 
   try {
     const settings = loadT212Settings();

@@ -110,7 +110,27 @@ const db = prisma as unknown as {
     findMany: (args: unknown) => Promise<OpenPosition[]>;
     update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
   };
+  retryQueue: {
+    create: (args: { data: Record<string, unknown> }) => Promise<RetryQueueRow>;
+    findMany: (args: unknown) => Promise<RetryQueueRow[]>;
+    update: (args: { where: { id: number }; data: Record<string, unknown> }) => Promise<unknown>;
+    delete: (args: { where: { id: number } }) => Promise<unknown>;
+  };
+  cruiseControlAlert: {
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+  };
 };
+
+interface RetryQueueRow {
+  id: number;
+  ticker: string;
+  stopPrice: number;
+  quantity: number;
+  attempts: number;
+  lastError: string | null;
+  createdAt: Date;
+  nextRetryAt: Date;
+}
 
 // ── VIX Check ───────────────────────────────────────────────────────────────
 
@@ -163,7 +183,6 @@ async function updateState(data: Record<string, unknown>): Promise<void> {
 const gTrackers = globalThis as unknown as {
   __ccGhostTracker?: Map<string, number>;
   __ccOrphanTracker?: Set<string>;
-  __ccRetryQueue?: Map<string, RetryItem>;
   __ccRetryTimerRef?: ReturnType<typeof setInterval> | null;
 };
 if (!gTrackers.__ccGhostTracker) gTrackers.__ccGhostTracker = new Map();
@@ -171,7 +190,7 @@ if (!gTrackers.__ccOrphanTracker) gTrackers.__ccOrphanTracker = new Set();
 const ghostTracker: Map<string, number> = gTrackers.__ccGhostTracker;
 const orphanTracker: Set<string> = gTrackers.__ccOrphanTracker;
 
-// ── Retry Queue ─────────────────────────────────────────────────────────────
+// ── Retry Queue (DB-persisted) ──────────────────────────────────────────────
 
 interface RetryItem {
   position: OpenPosition;
@@ -182,17 +201,11 @@ interface RetryItem {
   attempts: number;
 }
 
-if (!gTrackers.__ccRetryQueue) gTrackers.__ccRetryQueue = new Map();
-const retryQueue: Map<string, RetryItem> = gTrackers.__ccRetryQueue;
 let retryTimerRef: ReturnType<typeof setInterval> | null = gTrackers.__ccRetryTimerRef ?? null;
 
 function startRetryTimer(): void {
   if (retryTimerRef) return;
-  retryTimerRef = setInterval(() => {
-    processRetryQueue().catch((err) => {
-      log.error({ err: err instanceof Error ? err.message : String(err) }, "processRetryQueue unhandled error");
-    });
-  }, 10 * 60 * 1000); // every 10 minutes
+  retryTimerRef = setInterval(processRetryQueue, 10 * 60 * 1000); // every 10 minutes
   gTrackers.__ccRetryTimerRef = retryTimerRef;
 }
 
@@ -204,43 +217,88 @@ function stopRetryTimer(): void {
   }
 }
 
-async function processRetryQueue(): Promise<void> {
-  if (retryQueue.size === 0) return;
+/** Enqueue a failed stop push to the DB-backed retry queue. */
+async function enqueueRetry(item: RetryItem, error?: string): Promise<void> {
+  await db.retryQueue.create({
+    data: {
+      ticker: item.position.ticker,
+      stopPrice: item.newStop,
+      quantity: item.position.shares,
+      attempts: item.attempts,
+      lastError: error ?? null,
+      nextRetryAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes from now
+    },
+  });
+  log.info({ ticker: item.position.ticker, newStop: item.newStop }, "[CRUISE-CONTROL] Queued failed stop push for DB-persisted retry");
+}
 
-  for (const [key, item] of retryQueue) {
-    if (item.attempts >= 5) {
-      // Max retries — alert but don't panic; next poll cycle will recalculate
-      retryQueue.delete(key);
-      await sendAlert("warning", `T212 stop update failed after 5 attempts: ${item.position.ticker} — will retry next poll cycle`, {
-        ticker: item.position.ticker,
-        positionType: item.positionType,
-        newStop: item.newStop,
-        attempts: item.attempts,
+async function processRetryQueue(): Promise<void> {
+  let rows: RetryQueueRow[];
+  try {
+    rows = await db.retryQueue.findMany({
+      where: {
+        nextRetryAt: { lte: new Date() },
+        attempts: { lt: 5 },
+      },
+    });
+  } catch (err) {
+    log.error({ error: err instanceof Error ? err.message : String(err) }, "[CRUISE-CONTROL] Failed to load retry queue from DB");
+    return;
+  }
+
+  if (rows.length === 0) return;
+
+  for (const row of rows) {
+    if (row.attempts >= 5) {
+      // Max retries — alert and remove
+      await db.retryQueue.delete({ where: { id: row.id } });
+      await sendAlert("warning", `T212 stop update failed after 5 attempts: ${row.ticker} — will retry next poll cycle`, {
+        ticker: row.ticker,
+        stopPrice: row.stopPrice,
+        attempts: row.attempts,
       });
-      log.warn(
-        { ticker: item.position.ticker, newStop: item.newStop },
-        "[CRUISE-CONTROL] Retry exhausted — stop is saved in DB, will re-attempt on next poll",
-      );
+      await db.cruiseControlAlert.create({
+        data: {
+          alertType: "warning",
+          message: `Retry exhausted for ${row.ticker} stop at ${row.stopPrice} after ${row.attempts} attempts`,
+          context: { ticker: row.ticker, stopPrice: row.stopPrice },
+        },
+      });
+      log.warn({ ticker: row.ticker, stopPrice: row.stopPrice }, "[CRUISE-CONTROL] Retry exhausted — removed from queue");
       continue;
     }
 
-    item.attempts++;
-    log.info({ ticker: item.position.ticker, attempt: item.attempts }, "[CRUISE-CONTROL] Retrying T212 stop update");
+    const newAttempts = row.attempts + 1;
+    log.info({ ticker: row.ticker, attempt: newAttempts }, "[CRUISE-CONTROL] Retrying T212 stop update from DB queue");
 
     const result = await updateStopOnT212(
-      item.position.ticker,
-      item.position.shares,
-      Math.max(item.position.hardStop, item.position.trailingStop),
-      item.newStop,
+      row.ticker,
+      row.quantity,
+      0, // old stop unknown — floor enforced by T212 layer
+      row.stopPrice,
     );
 
     if (result.success) {
-      retryQueue.delete(key);
-      // Record the ratchet event now that T212 is updated
-      await recordRatchetEvent(item, true, result.t212Response ?? null);
+      await db.retryQueue.delete({ where: { id: row.id } });
+      log.info({ ticker: row.ticker, stopPrice: row.stopPrice }, "[CRUISE-CONTROL] Retry succeeded — removed from queue");
+    } else {
+      // Update attempts and push next retry forward
+      await db.retryQueue.update({
+        where: { id: row.id },
+        data: {
+          attempts: newAttempts,
+          lastError: result.error ?? null,
+          nextRetryAt: new Date(Date.now() + 10 * 60 * 1000),
+        },
+      });
     }
-    // If still failing, stays in queue for next retry cycle
   }
+}
+
+/** On daemon startup, process any existing RetryQueue rows immediately. */
+export async function drainRetryQueueOnStartup(): Promise<void> {
+  log.info("[CRUISE-CONTROL] Checking for persisted retry queue items from previous session...");
+  await processRetryQueue();
 }
 
 async function recordRatchetEvent(
@@ -507,16 +565,16 @@ export async function runSinglePoll(): Promise<PollResult> {
       const t212Result = await updateStopOnT212(trade.ticker, trade.shares, currentStop, newStop);
 
       if (!t212Result.success) {
-        // Queue for retry — don't fail the poll
+        // Queue for DB-persisted retry — survives daemon restarts
         t212Unavailable = true;
-        retryQueue.set(trade.id, {
+        await enqueueRetry({
           position: trade,
           positionType,
           newStop,
           currentPrice,
           atr,
           attempts: 0,
-        });
+        }, t212Result.error ?? undefined);
       } else {
         // Record ratchet event
         await db.cruiseControlRatchetEvent.create({
@@ -567,10 +625,17 @@ export async function runSinglePoll(): Promise<PollResult> {
       });
     }
 
-    // Start retry timer if needed
-    if (retryQueue.size > 0) {
+    // Start retry timer if needed (check DB for pending retries)
+    if (t212Unavailable) {
       startRetryTimer();
-      retryFailures = retryQueue.size;
+      try {
+        const pendingRetries = await db.retryQueue.findMany({
+          where: { attempts: { lt: 5 } },
+        });
+        retryFailures = pendingRetries.length;
+      } catch {
+        // Non-critical — count will be approximate
+      }
     }
   } catch (err) {
     log.error({ err: String(err) }, "[CRUISE-CONTROL] Poll cycle error");
@@ -675,6 +740,9 @@ export async function startCruiseControl(): Promise<void> {
   await sendAlert("info", "Cruise control turned ON");
   log.info("[CRUISE-CONTROL] State: ON — polling every 60 minutes");
 
+  // On startup: drain any persisted retry queue items from previous session
+  await drainRetryQueueOnStartup();
+
   // Immediate poll if market is open
   if (isMarketOpen()) {
     try {
@@ -731,10 +799,7 @@ export async function stopCruiseControl(): Promise<void> {
   }
 
   stopRetryTimer();
-  if (retryQueue.size > 0) {
-    log.warn({ count: retryQueue.size, tickers: [...retryQueue.keys()] }, "[CRUISE-CONTROL] Retry queue had pending items at shutdown — will retry on next start");
-  }
-  retryQueue.clear();
+  // DB-persisted retry queue survives restarts — no need to clear
   ghostTracker.clear();
 
   await updateState({ isEnabled: false, disabledAt: new Date() });

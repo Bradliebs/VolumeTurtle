@@ -20,8 +20,16 @@ import {
   type T212Order,
 } from "@/lib/t212/client";
 import { createLogger } from "@/lib/logger";
+import { sendTelegram } from "@/lib/telegram";
+import { prisma } from "@/db/client";
 
 const log = createLogger("pushStop");
+
+const db = prisma as unknown as {
+  alert: {
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+  };
+};
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -32,6 +40,7 @@ export interface PushStopResult {
   stopPrice: number;
   cancelledOrderId: number | null;
   placedOrder: T212Order | null;
+  restored?: boolean;
   error: string | null;
 }
 
@@ -78,8 +87,9 @@ export async function pushStopToT212(
     const isPence = inst?.currencyCode === "GBX";
     const stopPrice = isPence ? stopPriceGBP * 100 : stopPriceGBP;
 
-    // Cancel any existing stop order for this ticker
+    // Cancel any existing stop order for this ticker — store old stop for recovery
     let cancelledOrderId: number | null = null;
+    let oldStopPrice: number | null = null;
     try {
       const orders = await getPendingOrders(t212Settings);
       const existing = orders.find(
@@ -88,6 +98,7 @@ export async function pushStopToT212(
           (o.type?.toUpperCase().includes("STOP") ?? false),
       );
       if (existing) {
+        oldStopPrice = (existing as unknown as Record<string, unknown>)["stopPrice"] as number | null;
         await cancelOrder(t212Settings, existing.id);
         cancelledOrderId = existing.id;
         await sleep(2500); // T212 rate limit buffer after cancel
@@ -100,12 +111,75 @@ export async function pushStopToT212(
     }
 
     // Place new stop order
-    const placed = await placeStopOrder(
-      t212Settings,
-      t212Ticker,
-      quantity,
-      stopPrice,
-    );
+    let placed: T212Order;
+    try {
+      placed = await placeStopOrder(
+        t212Settings,
+        t212Ticker,
+        quantity,
+        stopPrice,
+      );
+    } catch (placeErr) {
+      const placeErrMsg = placeErr instanceof Error ? placeErr.message : String(placeErr);
+      log.error({ ticker: yahooTicker, error: placeErrMsg }, "Stop placement failed after cancel");
+
+      // Attempt to restore the old stop if cancel had succeeded
+      if (cancelledOrderId !== null && oldStopPrice !== null) {
+        try {
+          await sleep(2500);
+          await placeStopOrder(t212Settings, t212Ticker, quantity, oldStopPrice);
+          log.info(
+            { ticker: yahooTicker, restoredPrice: oldStopPrice },
+            "Stop restoration SUCCESS — old stop restored after failed update",
+          );
+          return {
+            success: false,
+            stopPrice: stopPriceGBP,
+            cancelledOrderId,
+            placedOrder: null,
+            restored: true,
+            error: `Place failed, old stop restored at ${isPence ? oldStopPrice / 100 : oldStopPrice}`,
+          };
+        } catch (restoreErr) {
+          log.error(
+            { ticker: yahooTicker, error: String(restoreErr) },
+            "Stop restoration ALSO failed — CRITICAL: no stop order active",
+          );
+        }
+      }
+
+      // Restoration failed or not possible — CRITICAL: no stop in place
+      try {
+        await db.alert.create({
+          data: {
+            type: "STOP_PUSH_FAILED",
+            ticker: yahooTicker,
+            message: `Stop push AND restoration failed — ${yahooTicker} has NO stop order in T212. Set manually at ${stopPriceGBP}`,
+            acknowledged: false,
+            createdAt: new Date(),
+          },
+        });
+      } catch { /* best effort */ }
+
+      try {
+        await sendTelegram({
+          text:
+            `<b>🚨 CRITICAL — NO STOP ORDER</b>\n` +
+            `<code>${yahooTicker}</code>\n` +
+            `Cancel succeeded but place failed.\n` +
+            `Restoration also failed.\n` +
+            `<b>SET STOP MANUALLY AT ${stopPriceGBP}</b>`,
+        });
+      } catch { /* best effort */ }
+
+      return {
+        success: false,
+        stopPrice: stopPriceGBP,
+        cancelledOrderId,
+        placedOrder: null,
+        error: `Place failed, restoration failed — NO STOP ACTIVE: ${placeErrMsg}`,
+      };
+    }
 
     log.info(
       { ticker: yahooTicker, t212Ticker, stopPrice: stopPriceGBP, isPence },

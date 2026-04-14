@@ -20,8 +20,6 @@ import { sendTelegram, formatAlertMessage } from "@/lib/telegram";
 import { UK_BANK_HOLIDAYS, US_HOLIDAYS } from "@/lib/cruise-control/market-hours";
 import { validateTicker } from "@/lib/signals/dataValidator";
 
-import { timingSafeEqual } from "crypto";
-
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
 async function loadAccountBalance(): Promise<number> {
@@ -38,9 +36,7 @@ export async function GET(req: NextRequest) {
   const headerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
   const queryToken = req.nextUrl.searchParams.get("token");
   const token = headerToken ?? queryToken;
-  if (!SCHEDULED_SCAN_TOKEN || !token ||
-      token.length !== SCHEDULED_SCAN_TOKEN.length ||
-      !timingSafeEqual(Buffer.from(token), Buffer.from(SCHEDULED_SCAN_TOKEN))) {
+  if (!SCHEDULED_SCAN_TOKEN || !token || token !== SCHEDULED_SCAN_TOKEN) {
     return NextResponse.json({ error: "Unauthorised" }, { status: 401 });
   }
 

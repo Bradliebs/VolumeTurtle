@@ -9,17 +9,13 @@ import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceM
 import { canAutoCloseTrade } from "@/lib/trades/status";
 import type { ExitReason } from "@/lib/trades/types";
 import { createLogger } from "@/lib/logger";
-import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 const log = createLogger("api/positions/:id/sync");
 
 export async function POST(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const rlResponse = rateLimit(getRateLimitKey(request), 5, 60_000);
-  if (rlResponse) return rlResponse;
-
   try {
     const { id } = await params;
 

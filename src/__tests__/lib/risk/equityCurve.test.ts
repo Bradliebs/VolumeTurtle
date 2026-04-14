@@ -241,3 +241,39 @@ describe("early recovery", () => {
     expect(withTight.earlyRecoveryActive).toBe(false);
   });
 });
+
+describe("snapshot ordering — most recent as currentBalance", () => {
+  it("uses most recent snapshot as currentBalance (ASC order)", () => {
+    const snapshots: SnapshotInput[] = [
+      { date: "2025-01-01", balance: 900 },
+      { date: "2025-01-02", balance: 950 },
+      { date: "2025-01-03", balance: 1000 },
+    ];
+    const state = calculateEquityCurveState(snapshots);
+    // Most recent (last in ASC order) should be currentBalance
+    expect(state.currentBalance).toBe(1000);
+    // Must NOT be the oldest (first in ASC order)
+    expect(state.currentBalance).not.toBe(900);
+  });
+
+  it("handles single snapshot correctly", () => {
+    const snapshots: SnapshotInput[] = [
+      { date: "2025-01-01", balance: 5000 },
+    ];
+    const state = calculateEquityCurveState(snapshots);
+    expect(state.currentBalance).toBe(5000);
+    expect(state.peakBalance).toBe(5000);
+    expect(state.drawdownPct).toBe(0);
+  });
+
+  it("peak tracks highest balance across all snapshots", () => {
+    const snapshots: SnapshotInput[] = [
+      { date: "2025-01-01", balance: 10000 },
+      { date: "2025-01-02", balance: 11000 }, // peak
+      { date: "2025-01-03", balance: 10500 },
+    ];
+    const state = calculateEquityCurveState(snapshots);
+    expect(state.currentBalance).toBe(10500);
+    expect(state.peakBalance).toBe(11000);
+  });
+});

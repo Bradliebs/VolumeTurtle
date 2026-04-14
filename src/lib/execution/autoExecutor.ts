@@ -18,7 +18,6 @@ import { calculateBreadth } from "@/lib/signals/breadthIndicator";
 import { calculateEquityCurveState, type SnapshotInput } from "@/lib/risk/equityCurve";
 import { config } from "@/lib/config";
 import { getUniverse } from "@/lib/universe/tickers";
-import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import {
   loadT212Settings,
   getAccountCash,
@@ -162,7 +161,7 @@ export async function preFlightChecks(
   originalOrder: PendingOrderRow,
   liveQuote: LiveQuote,
 ): Promise<PreFlightResult> {
-  // Clone order to avoid mutating the input — checks may adjust shares/entry
+  // Clone — never mutate the input order
   const order = { ...originalOrder };
   const failures: string[] = [];
   const warnings: string[] = [];
@@ -221,8 +220,9 @@ export async function preFlightChecks(
   // ── Check 3: POSITION LIMIT ──
   try {
     const openPositions = await db.trade.count({ where: { status: "OPEN" } });
-    if (openPositions >= config.maxPositions) {
-      failures.push(`MAX_POSITIONS — ${openPositions}/${config.maxPositions} positions open`);
+    const maxPositions = config.maxPositions ?? 5;
+    if (openPositions >= maxPositions) {
+      failures.push(`MAX_POSITIONS — ${openPositions}/${maxPositions} positions open`);
     }
   } catch (err) {
     failures.push(`POSITION_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
@@ -230,18 +230,20 @@ export async function preFlightChecks(
 
   // ── Check 4: CIRCUIT BREAKER (full equity curve state) ──
   try {
+    // ASC order: index 0 = oldest, last index = most recent
+    // currentBalance MUST be snapshots[last].balance
     const snapshots = await (db as unknown as {
       accountSnapshot: {
         findMany: (args: unknown) => Promise<SnapshotInput[]>;
       };
     }).accountSnapshot.findMany({
-      orderBy: { date: "desc" },
+      orderBy: { date: "asc" },
       take: 30,
     });
 
     if (snapshots.length > 0) {
       const eqState = calculateEquityCurveState(
-        [...snapshots].reverse(),
+        snapshots,
         config.riskPctPerTrade * 100,
         config.maxPositions,
       );
@@ -291,8 +293,7 @@ export async function preFlightChecks(
   // ── Check 5: REGIME GATE ──
   try {
     const regime = await calculateMarketRegime();
-    const tickerQuotes = await fetchEODQuotes([order.ticker], config.quoteLookbackDays);
-    const tickerRegime = await calculateTickerRegime(order.ticker, tickerQuotes.get(order.ticker) ?? []);
+    const tickerRegime = await calculateTickerRegime(order.ticker, []);
 
     // Fetch breadth for 4-layer assessment
     let breadth = null;
@@ -331,6 +332,31 @@ export async function preFlightChecks(
       } else if (breadth.breadthSignal === "STRONG") {
         log.info("Breadth STRONG — full execution permitted");
       }
+    }
+
+    // ── VIX size multiplier (within Check 5) ──
+    const vixLevel = regime?.volatilityRegime ?? "NORMAL";
+    const vixMultiplier =
+      vixLevel === "PANIC"    ? (config.vixPanicSizeMult ?? 0) :
+      vixLevel === "ELEVATED" ? (config.vixElevatedSizeMult ?? 0.75) :
+                                (config.vixNormalSizeMult ?? 1.0);
+
+    if (vixMultiplier < 1.0 && vixMultiplier > 0) {
+      const riskPerShare = order.suggestedEntry - order.suggestedStop;
+      if (riskPerShare > 0) {
+        const scaledShares = parseFloat((order.suggestedShares * vixMultiplier).toFixed(4));
+        const scaledRisk = scaledShares * riskPerShare;
+        adjustments.push(
+          `VIX_${vixLevel} — ${vixMultiplier}× multiplier applied. Shares: ${order.suggestedShares} → ${scaledShares}`,
+        );
+        log.info(
+          `[PreFlight] VIX ${vixLevel}: ${vixMultiplier}× multiplier → shares ${order.suggestedShares} → ${scaledShares}`,
+        );
+        order.suggestedShares = scaledShares;
+        order.dollarRisk = scaledRisk;
+      }
+    } else if (vixMultiplier === 0) {
+      failures.push(`VIX_PANIC — VIX at PANIC level. Position sizing zeroed, no new entries.`);
     }
   } catch (err) {
     failures.push(`REGIME_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
@@ -619,9 +645,6 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
       data: {
         status: "failed",
         failureReason: result.failures.join("; "),
-        // Persist any price-drift adjustments from the cloned order
-        suggestedShares: result.adjustedOrder.suggestedShares,
-        suggestedEntry: result.adjustedOrder.suggestedEntry,
       },
     });
     await logExecution(order.id, "PRE_FLIGHT_FAIL", result.failures.join("; "));
@@ -629,13 +652,14 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
     return;
   }
 
-  // All checks passed
+  // All checks passed — use the adjusted copy (never the original)
+  const adjustedOrder = result.adjustedOrder;
   await logExecution(order.id, "PRE_FLIGHT_PASS", `All 12 pre-flight checks passed — proceeding with order placement. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
-  // ── Gap guardrail \u2014 check open vs signal close ──
+  // ── Gap guardrail — check open vs signal close ──
   const gapSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
   const gapDownThreshold = gapSettings?.gapDownThreshold ?? 0.03;
   const gapUpResizeThreshold = gapSettings?.gapUpResizeThreshold ?? 0.05;
-  const signalClose = order.suggestedEntry;
+  const signalClose = adjustedOrder.suggestedEntry;
   const livePrice = liveQuote.price;
   const gapPct = (livePrice - signalClose) / signalClose;
 
@@ -668,33 +692,33 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
     return;
   }
 
-  // Gap UP \u2014 recalculate position size at new price
+  // Gap UP — recalculate position size at new price
   if (gapPct > gapUpResizeThreshold) {
-    const riskPerShare = livePrice - order.suggestedStop;
+    const riskPerShare = livePrice - adjustedOrder.suggestedStop;
     if (riskPerShare > 0) {
-      const newShares = parseFloat((order.dollarRisk / riskPerShare).toFixed(4));
+      const newShares = parseFloat((adjustedOrder.dollarRisk / riskPerShare).toFixed(4));
       await logExecution(
         order.id,
         "GAP_UP_RESIZE",
-        `Live price $${livePrice.toFixed(2)} is +${(gapPct * 100).toFixed(1)}% above signal close. Shares recalculated: ${order.suggestedShares} \u2192 ${newShares}`,
+        `Live price $${livePrice.toFixed(2)} is +${(gapPct * 100).toFixed(1)}% above signal close. Shares recalculated: ${adjustedOrder.suggestedShares} → ${newShares}`,
       );
-      order.suggestedShares = newShares;
-      order.suggestedEntry = livePrice;
+      adjustedOrder.suggestedShares = newShares;
+      adjustedOrder.suggestedEntry = livePrice;
     }
   }
-  // Update order with any price-drift adjustments before execution
-  if (result.adjustments.length > 0) {
+  // Update order with any adjustments before execution
+  if (result.adjustments.length > 0 || gapPct > gapUpResizeThreshold) {
     await db.pendingOrder.update({
       where: { id: order.id },
       data: {
-        suggestedShares: order.suggestedShares,
-        suggestedEntry: order.suggestedEntry,
+        suggestedShares: adjustedOrder.suggestedShares,
+        suggestedEntry: adjustedOrder.suggestedEntry,
       },
     });
   }
 
   // Execute the order
-  const execResult = await executeOrder(order);
+  const execResult = await executeOrder(adjustedOrder);
 
   if (execResult.success) {
     // Update PendingOrder
@@ -714,23 +738,23 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
     // Create Trade in DB (same as manual entry)
     await db.trade.create({
       data: {
-        ticker: order.ticker,
+        ticker: adjustedOrder.ticker,
         entryDate: new Date(),
-        entryPrice: execResult.actualPrice ?? order.suggestedEntry,
-        shares: execResult.actualShares ?? order.suggestedShares,
-        hardStop: order.suggestedStop,
-        trailingStop: order.suggestedStop,
-        hardStopPrice: order.suggestedStop,
-        trailingStopPrice: order.suggestedStop,
+        entryPrice: execResult.actualPrice ?? adjustedOrder.suggestedEntry,
+        shares: execResult.actualShares ?? adjustedOrder.suggestedShares,
+        hardStop: adjustedOrder.suggestedStop,
+        trailingStop: adjustedOrder.suggestedStop,
+        hardStopPrice: adjustedOrder.suggestedStop,
+        trailingStopPrice: adjustedOrder.suggestedStop,
         status: "OPEN",
         volumeRatio: 0,
         rangePosition: 0,
         atr20: 0,
-        signalSource: order.signalSource,
-        signalScore: order.compositeScore,
-        signalGrade: order.signalGrade,
-        sector: order.sector || null,
-        isRunner: order.isRunner,
+        signalSource: adjustedOrder.signalSource,
+        signalScore: adjustedOrder.compositeScore,
+        signalGrade: adjustedOrder.signalGrade,
+        sector: adjustedOrder.sector || null,
+        isRunner: adjustedOrder.isRunner,
         importedFromT212: false,
         manualEntry: false,
         // Stop push tracking (Layer 1 result)
@@ -741,10 +765,10 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
     });
 
     // Send execution alert
-    await sendExecutionAlert(order, execResult);
+    await sendExecutionAlert(adjustedOrder, execResult);
 
     // Ensure ticker exists in universe.csv for future sector lookups
-    ensureTickerInCsv(order.ticker, order.sector || "Technology");
+    ensureTickerInCsv(adjustedOrder.ticker, adjustedOrder.sector || "Unknown");
   } else {
     await db.pendingOrder.update({
       where: { id: order.id },

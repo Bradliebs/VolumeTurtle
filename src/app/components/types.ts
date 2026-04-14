@@ -274,7 +274,7 @@ export interface SignalFired {
   avgDollarVolume20: number;
 }
 
-export interface UINearMiss {
+export interface NearMiss {
   ticker: string;
   volumeRatio: number;
   rangePosition: number;
@@ -290,7 +290,7 @@ export interface ScanResponse {
   signalsFired: SignalFired[];
   tradesEntered: { ticker: string; shares: number; suggestedEntry: number; hardStop: number }[];
   tradesExited: { ticker: string; exitPrice: number; rMultiple: number }[];
-  nearMisses: UINearMiss[];
+  nearMisses: NearMiss[];
   openPositions: number;
   balance: number;
   regime?: RegimeData;

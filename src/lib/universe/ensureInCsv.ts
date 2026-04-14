@@ -5,7 +5,7 @@ const CSV_PATH = path.join(process.cwd(), "data", "universe.csv");
 
 /**
  * Ensure a ticker exists in data/universe.csv.
- * If missing, appends a row with the given sector (default "Unknown")
+ * If missing, appends a row with the given sector (default "Technology")
  * and returns true. If already present, returns false.
  */
 export function ensureTickerInCsv(

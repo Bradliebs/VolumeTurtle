@@ -20,6 +20,14 @@ const log = createLogger("api/journal");
 
 export const dynamic = "force-dynamic";
 
+/** Race a promise against a timeout. Returns fallback on timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 const db = prisma as unknown as {
   trade: {
     findMany: (args: unknown) => Promise<
@@ -164,7 +172,7 @@ export async function GET(req: Request) {
         }),
         db.accountSnapshot.findMany({ orderBy: { date: "asc" } }),
         db.accountSnapshot.findFirst({ orderBy: { date: "desc" } }),
-        getGbpUsdRate(),
+        withTimeout(getGbpUsdRate(), 8_000, 1.27),
       ]);
 
     const currentBalance = latestSnapshot?.balance ?? 0;
@@ -192,7 +200,11 @@ export async function GET(req: Request) {
     let cachedT212Positions: T212Position[] = [];
     if (t212Settings) {
       try {
-        const cached = await getCachedT212Positions(t212Settings);
+        const cached = await withTimeout(
+          getCachedT212Positions(t212Settings),
+          8_000,
+          { positions: [] as T212Position[], fromCache: true },
+        );
         cachedT212Positions = cached.positions;
         for (const pos of cached.positions) {
           t212PriceMap[pos.ticker] = pos.currentPrice;

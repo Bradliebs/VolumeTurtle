@@ -11,8 +11,8 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const rlResponse = rateLimit(getRateLimitKey(request), 10, 60_000);
-  if (rlResponse) return rlResponse;
+  const limited = rateLimit(getRateLimitKey(request), 20, 60_000);
+  if (limited) return limited;
 
   try {
     const { id } = await params;

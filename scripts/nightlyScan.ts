@@ -461,6 +461,21 @@ async function main() {
         }
 
         if (autoExecEnabled && isAutoGrade) {
+          // Check daily limit BEFORE creating pending order
+          const todayStart = new Date();
+          todayStart.setHours(0, 0, 0, 0);
+          const todayOrders = await prisma.pendingOrder.count({
+            where: {
+              createdAt: { gte: todayStart },
+              status: { in: ["pending", "executed"] },
+            },
+          });
+          const appSettingsForLimit = await prisma.appSettings.findFirst({ orderBy: { id: "asc" } });
+          const maxPerDay = (appSettingsForLimit as unknown as { autoExecutionMaxPerDay?: number })?.autoExecutionMaxPerDay ?? 2;
+          if (todayOrders >= maxPerDay) {
+            console.log(`  [AUTO-EXEC SKIP] Daily limit reached (${todayOrders}/${maxPerDay}) — skipping ${signal.ticker}`);
+            // Fall through to standard manual trade entry below
+          } else {
           // Create PendingOrder instead of immediate Trade entry
           try {
             // Determine runner eligibility
@@ -499,11 +514,31 @@ async function main() {
             console.log(`  [AUTO-EXEC] ${signal.ticker} — Grade ${grade} pending order created (${position.shares} shares)`);
           } catch (autoErr) {
             console.error(`  [AUTO-EXEC ERROR] ${signal.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
-            // Do NOT fall back to creating a trade without pre-flight checks.
-            // The pending order will be retried on the next scan cycle.
+            // Fallback: create trade normally
+            await prisma.trade.create({
+              data: {
+                ticker: signal.ticker,
+                entryDate: today,
+                entryPrice: signal.suggestedEntry,
+                shares: position.shares,
+                hardStop: signal.hardStop,
+                trailingStop: signal.hardStop,
+                status: "OPEN",
+                volumeRatio: signal.volumeRatio,
+                rangePosition: signal.rangePosition,
+                atr20: signal.atr20,
+              },
+            });
+            ensureTickerInCsv(signal.ticker, sector);
           }
+          } // end daily limit else
         } else {
           // Standard manual trade entry (original behavior)
+          let sector = "Unknown";
+          try {
+            const tickerRow = await prisma.ticker.findFirst({ where: { symbol: signal.ticker } });
+            if (tickerRow?.sector) sector = tickerRow.sector;
+          } catch { /* use default */ }
           await prisma.trade.create({
             data: {
               ticker: signal.ticker,
@@ -518,7 +553,7 @@ async function main() {
               atr20: signal.atr20,
             },
           });
-          ensureTickerInCsv(signal.ticker);
+          ensureTickerInCsv(signal.ticker, sector);
         }
 
         // ── Runner designation ────────────────────────────────────────
