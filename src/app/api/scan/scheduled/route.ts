@@ -70,6 +70,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, market, skipped: true, reason: "market_holiday" });
   }
 
+  // Concurrent scan guard — skip if another scan is already running
+  const runningScan = await prisma.scanRun.findFirst({
+    where: { status: "RUNNING" },
+    orderBy: { startedAt: "desc" },
+  });
+  if (runningScan) {
+    const runningForMs = Date.now() - new Date(runningScan.startedAt).getTime();
+    // Only skip if the running scan started less than 10 minutes ago (otherwise it's stale)
+    if (runningForMs < 10 * 60_000) {
+      log.warn({ existingRunId: runningScan.id, market }, "Scan already running — skipping concurrent execution");
+      return NextResponse.json({ success: false, error: "Scan already in progress", existingRunId: runningScan.id });
+    }
+  }
+
   // Create ScanRun record
   const scanRun = await prisma.scanRun.create({
     data: {

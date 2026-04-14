@@ -598,13 +598,13 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
     return;
   }
 
-  // Daily limit check
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  // Daily limit check (use UTC for consistent daily boundary)
+  const todayStartUTC = new Date();
+  todayStartUTC.setUTCHours(0, 0, 0, 0);
   const executedToday = await db.pendingOrder.count({
     where: {
       status: "executed",
-      executedAt: { gte: todayStart },
+      executedAt: { gte: todayStartUTC },
     },
   });
 

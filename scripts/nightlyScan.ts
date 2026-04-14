@@ -39,6 +39,7 @@ import { isAutoExecutionEnabled, createPendingOrder } from "../src/lib/execution
 import { calculateBreadth, breadthModifier, breadthSectorMultiplier } from "../src/lib/signals/breadthIndicator";
 import type { BreadthResult } from "../src/lib/signals/breadthIndicator";
 import { ensureTickerInCsv } from "../src/lib/universe/ensureInCsv";
+import { loadT212Settings, getCachedT212Positions } from "../src/lib/t212/client";
 
 
 // ---------------------------------------------------------------------------
@@ -285,6 +286,19 @@ async function main() {
   let openCount = openTrades.length;
 
   // 6. Process exits for open trades FIRST (before entries)
+  // Load T212 positions to prevent auto-closing trades still held on T212
+  let t212Tickers: Set<string> | null = null;
+  const t212Settings = loadT212Settings();
+  const t212Configured = t212Settings != null;
+  if (t212Settings && !DRY_RUN) {
+    try {
+      const cached = await getCachedT212Positions(t212Settings);
+      t212Tickers = new Set(cached.positions.map((p: { ticker: string }) => p.ticker));
+    } catch {
+      console.log("  [WARN] T212 positions unavailable — will skip auto-close if stop breached");
+    }
+  }
+
   console.log(`[nightlyScan] Checking ${openTrades.length} open trades for exits…`);
   for (const trade of openTrades) {
     const quotes = quoteMap[trade.ticker];
@@ -306,6 +320,16 @@ async function main() {
 
     // Check exit against the monotonic stop level
     if (currentClose < newCurrentStop) {
+      // T212 safety: don't auto-close if T212 still holds the position
+      if (t212Configured && t212Tickers == null) {
+        console.log(`  [SKIP] ${trade.ticker} — stop breached but T212 positions unavailable, skipping auto-close`);
+        continue;
+      }
+      if (t212Tickers?.has(trade.ticker)) {
+        console.log(`  [SKIP] ${trade.ticker} — stop breached but T212 position still held, skipping auto-close`);
+        continue;
+      }
+
       const exitReason = currentClose < trade.hardStop ? "HARD_STOP" : "TRAILING_STOP";
       const rMultiple = calculateRMultiple(currentClose, trade.entryPrice, trade.hardStop);
 

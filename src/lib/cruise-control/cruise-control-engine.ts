@@ -388,8 +388,12 @@ export async function runSinglePoll(): Promise<PollResult> {
     }
 
     // Reconcile T212 vs DB and build T212 stop map
+    let t212FetchOk = false;
     const t212Positions = await getOpenPositionsFromT212();
     const t212StopMap = new Map<string, number>();
+    if (t212Positions.length > 0) {
+      t212FetchOk = true;
+    }
     for (const pos of t212Positions) {
       if (pos.stopLoss != null && pos.stopLoss > 0) {
         t212StopMap.set(pos.ticker.toUpperCase(), pos.stopLoss);
@@ -546,26 +550,27 @@ export async function runSinglePoll(): Promise<PollResult> {
         continue;
       }
 
-      // We have a ratchet — update DB
+      // We have a ratchet — push to T212 FIRST, then update DB (prevents desync if T212 push fails)
       stopsRatcheted++;
 
       const profitPct = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
       const ratchetPct = currentStop > 0 ? ((newStop - currentStop) / currentStop) * 100 : 0;
 
-      // Update trade in DB
-      await db.trade.update({
-        where: { id: trade.id },
-        data: {
-          trailingStop: newStop,
-          trailingStopPrice: newStop,
-        },
-      });
+      // If T212 floor check failed this poll, skip ratchets to avoid pushing below T212's actual stop
+      if (!t212FetchOk && t212StopMap.size === 0) {
+        log.warn(
+          { ticker: trade.ticker, newStop },
+          "[CRUISE-CONTROL] Skipping ratchet — T212 positions unavailable, floor rule cannot be enforced",
+        );
+        stopsUnchanged++;
+        continue;
+      }
 
-      // Push to T212
+      // Push to T212 first
       const t212Result = await updateStopOnT212(trade.ticker, trade.shares, currentStop, newStop);
 
       if (!t212Result.success) {
-        // Queue for DB-persisted retry — survives daemon restarts
+        // T212 push failed — do NOT update DB (keep stops in sync)
         t212Unavailable = true;
         await enqueueRetry({
           position: trade,
@@ -576,6 +581,15 @@ export async function runSinglePoll(): Promise<PollResult> {
           attempts: 0,
         }, t212Result.error ?? undefined);
       } else {
+        // T212 push succeeded — now safe to update DB
+        await db.trade.update({
+          where: { id: trade.id },
+          data: {
+            trailingStop: newStop,
+            trailingStopPrice: newStop,
+          },
+        });
+
         // Record ratchet event
         await db.cruiseControlRatchetEvent.create({
           data: {

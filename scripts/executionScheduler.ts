@@ -62,6 +62,23 @@ async function main() {
     return;
   }
 
+  // Recover stale "processing" orders (stuck from crashed previous run)
+  // If an order has been "processing" for >5 minutes, mark it as "failed"
+  const staleThreshold = new Date(now.getTime() - 5 * 60_000);
+  const staleOrders = await db.pendingOrder.findMany({
+    where: {
+      status: "processing" as string,
+      cancelDeadline: { lte: staleThreshold },
+    },
+  });
+  for (const stale of staleOrders) {
+    console.log(`  [STALE] Recovering stuck order #${stale.id} (${stale.ticker}) — marking as failed`);
+    await db.pendingOrder.update({
+      where: { id: stale.id },
+      data: { status: "failed", failureReason: "Stuck in processing state — scheduler crash suspected" },
+    });
+  }
+
   // Load pending orders whose deadline has passed
   const pendingOrders = await db.pendingOrder.findMany({
     where: {
@@ -83,8 +100,21 @@ async function main() {
 
   for (const order of pendingOrders) {
     try {
+      // Atomically claim the order by setting status='processing'.
+      // If another scheduler instance already claimed it, updateMany returns count=0.
+      const claimed = await (db.pendingOrder as unknown as {
+        updateMany: (args: unknown) => Promise<{ count: number }>;
+      }).updateMany({
+        where: { id: order.id, status: "pending" },
+        data: { status: "processing" },
+      });
+      if (claimed.count === 0) {
+        console.log(`  [SKIP] ${order.ticker} (order #${order.id}) — already claimed by another instance`);
+        continue;
+      }
+
       console.log(`  [PROCESS] ${order.ticker} (order #${order.id})`);
-      await processPendingOrder(order);
+      await processPendingOrder({ ...order, status: "processing" });
 
       // Re-check status
       const updated = await db.pendingOrder.findMany({
