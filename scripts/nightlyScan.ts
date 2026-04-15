@@ -69,6 +69,7 @@ interface ScanSummary {
   tradesExited: { ticker: string; rMultiple: number }[];
   openPositions: string[];
   accountBalance: number;
+  liquidTickerCount: number;
   validationBlocked: number;
   validationWarnings: number;
   crossValidated: number;
@@ -80,6 +81,7 @@ const summary: ScanSummary = {
   tradesExited: [],
   openPositions: [],
   accountBalance: 0,
+  liquidTickerCount: 0,
   validationBlocked: 0,
   validationWarnings: 0,
   crossValidated: 0,
@@ -133,6 +135,7 @@ async function main() {
     return hasMinimumLiquidity(ticker, quotes);
   });
   console.log(`[nightlyScan] ${liquidTickers.length} tickers pass liquidity filter`);
+  summary.liquidTickerCount = liquidTickers.length;
 
   // 3b. Calculate market regime
   console.log(`[nightlyScan] Calculating market regime (QQQ + VIX)…`);
@@ -660,15 +663,42 @@ async function main() {
     : (await prisma.trade.findMany({ where: { status: "OPEN" }, select: { ticker: true } }))
         .map((t) => t.ticker);
 
-  // 8. Save AccountSnapshot
+  // 8. Save AccountSnapshot (with drift + seed guards)
   if (!DRY_RUN) {
-    await prisma.accountSnapshot.create({
-      data: {
-        date: today,
-        balance: accountBalance,
-        openTrades: finalOpenTrades,
-      },
-    });
+    let skipSnapshot = false;
+
+    // Guard 1: reject config seed when real snapshots exist
+    if (accountBalance === config.balance) {
+      const realCount = await prisma.accountSnapshot.count({ where: { balance: { not: config.balance } } });
+      if (realCount > 0) {
+        console.warn(`[nightlyScan] Skipping snapshot — balance £${accountBalance} matches config seed but DB has ${realCount} real snapshots`);
+        skipSnapshot = true;
+      }
+    }
+
+    // Guard 2: reject balance that drifted >50% from last snapshot
+    if (!skipSnapshot) {
+      const prev = await prisma.accountSnapshot.findMany({ orderBy: { date: "desc" }, take: 1 });
+      const prevBal = prev[0]?.balance;
+      if (prevBal && prevBal > 0) {
+        const driftPct = Math.abs(accountBalance - prevBal) / prevBal * 100;
+        if (driftPct > 50) {
+          console.error(`[nightlyScan] Skipping snapshot — balance £${accountBalance} is ${driftPct.toFixed(0)}% away from last (£${prevBal})`);
+          try { await sendTelegram({ text: `<b>⚠ BAD SNAPSHOT BLOCKED</b>\nBalance £${accountBalance} drifted ${driftPct.toFixed(0)}% from £${prevBal}` }); } catch { /* best effort */ }
+          skipSnapshot = true;
+        }
+      }
+    }
+
+    if (!skipSnapshot) {
+      await prisma.accountSnapshot.create({
+        data: {
+          date: today,
+          balance: accountBalance,
+          openTrades: finalOpenTrades,
+        },
+      });
+    }
   }
 
   // ── MOMENTUM SCAN ──────────────────────────────────────────────
@@ -980,12 +1010,30 @@ async function main() {
 // ---------------------------------------------------------------------------
 
 async function loadAccountBalance(): Promise<number> {
-  // DB snapshot is the source of truth — env var is only a seed fallback
-  const latest = await prisma.accountSnapshot.findFirst({
+  // DB snapshot is the source of truth — env var is only a seed for first-ever run.
+  // Use findMany+take:1 as robust alternative to findFirst (which can
+  // silently return null with certain PrismaPg adapter initialisation paths).
+  await prisma.$connect();
+  const results = await prisma.accountSnapshot.findMany({
     orderBy: { date: "desc" },
+    take: 1,
   });
-  if (latest) return latest.balance;
+  const latest = results[0];
+  if (latest) {
+    console.log(`[nightlyScan] Balance from DB snapshot: £${latest.balance} (${latest.date.toISOString().slice(0, 19)})`);
+    return latest.balance;
+  }
 
+  // No snapshots at all — only safe if there are also no open trades (i.e. first run).
+  const openTradeCount = await prisma.trade.count({ where: { status: "OPEN" } });
+  if (openTradeCount > 0) {
+    const msg = `Cannot determine balance: 0 snapshots in DB but ${openTradeCount} open trades. DB connection may be broken.`;
+    console.error(`[nightlyScan] FATAL: ${msg}`);
+    try { await sendTelegram({ text: `<b>⚠ SCAN ABORTED</b>\n${msg}` }); } catch { /* best effort */ }
+    process.exit(1);
+  }
+
+  console.warn(`[nightlyScan] First run — seeding balance from config: £${config.balance}`);
   return config.balance;
 }
 
@@ -996,7 +1044,7 @@ function printSummary(): void {
   console.log(`  Date:             ${todayStr}`);
   console.log(`  Account Balance:  $${summary.accountBalance.toLocaleString()}`);
   console.log("───────────────────────────────────────────────────────");
-  console.log(`  Validated:        ${liquidTickers.length} · Blocked: ${summary.validationBlocked} · Warnings: ${summary.validationWarnings} · Cross-validated: ${summary.crossValidated}`);
+  console.log(`  Validated:        ${summary.liquidTickerCount} · Blocked: ${summary.validationBlocked} · Warnings: ${summary.validationWarnings} · Cross-validated: ${summary.crossValidated}`);
 
   console.log(`  Signals Fired:    ${summary.signalsFired.length}`);
   for (const s of summary.signalsFired) {

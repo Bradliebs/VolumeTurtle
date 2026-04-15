@@ -16,8 +16,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Invalid entry/stop" }, { status: 400 });
   }
 
-  const latest = await prisma.accountSnapshot.findFirst({ orderBy: { date: "desc" } });
-  const balance = latest?.balance ?? config.balance;
+  const results = await prisma.accountSnapshot.findMany({ orderBy: { date: "desc" }, take: 1 });
+  const balance = results[0]?.balance ?? config.balance;
 
   const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
   const equityCurve = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);

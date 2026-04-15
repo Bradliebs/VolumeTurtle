@@ -23,10 +23,18 @@ import { validateTicker } from "@/lib/signals/dataValidator";
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
 async function loadAccountBalance(): Promise<number> {
-  const latest = await prisma.accountSnapshot.findFirst({
+  const results = await prisma.accountSnapshot.findMany({
     orderBy: { date: "desc" },
+    take: 1,
   });
+  const latest = results[0];
   if (latest) return latest.balance;
+
+  // No snapshots — only safe on first-ever run (no open trades)
+  const openTradeCount = await prisma.trade.count({ where: { status: "OPEN" } });
+  if (openTradeCount > 0) {
+    throw new Error(`Cannot determine balance: 0 snapshots but ${openTradeCount} open trades`);
+  }
   return config.balance;
 }
 
@@ -301,11 +309,37 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 7. Save snapshot
+    // 7. Save snapshot (with drift + seed guards)
     const finalOpenCount = openTrades.length - tradesExited.length;
-    await prisma.accountSnapshot.create({
-      data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
-    });
+    let skipSnapshot = false;
+
+    // Guard 1: reject config seed when real snapshots exist
+    if (accountBalance === config.balance) {
+      const realCount = await prisma.accountSnapshot.count({ where: { balance: { not: config.balance } } });
+      if (realCount > 0) {
+        log.warn({ balance: accountBalance, realCount }, "Skipping snapshot — balance matches config seed");
+        skipSnapshot = true;
+      }
+    }
+
+    // Guard 2: reject balance that drifted >50% from last snapshot
+    if (!skipSnapshot) {
+      const prev = await prisma.accountSnapshot.findMany({ orderBy: { date: "desc" }, take: 1 });
+      const prevBal = prev[0]?.balance;
+      if (prevBal && prevBal > 0) {
+        const driftPct = Math.abs(accountBalance - prevBal) / prevBal * 100;
+        if (driftPct > 50) {
+          log.error({ balance: accountBalance, prevBal, driftPct }, "Skipping snapshot — balance drift exceeds 50%");
+          skipSnapshot = true;
+        }
+      }
+    }
+
+    if (!skipSnapshot) {
+      await prisma.accountSnapshot.create({
+        data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
+      });
+    }
 
     const durationMs = Date.now() - startTime;
 

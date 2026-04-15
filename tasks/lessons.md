@@ -19,6 +19,10 @@
 ## Prisma / Database
 - `prisma generate` only updates TypeScript types — it does NOT create or alter database tables. Always run `npm run db:push` (or `npx prisma db push`) after editing `prisma/schema.prisma`.
 - Verify new tables exist with `npx prisma studio` before marking schema work complete.
+- **`findFirst` unreliable in standalone scripts**: With PrismaPg adapter in standalone scripts (nightlyScan.ts), `prisma.accountSnapshot.findFirst()` silently returns null even when rows exist. Use `findMany({ take: 1 })` instead. Also call `prisma.$connect()` explicitly before the first query.
+- **Snapshot sanity guard**: Always guard `accountSnapshot.create()` — if the balance equals the config seed (`VOLUME_TURTLE_BALANCE`) and real snapshots already exist, skip the write. Prevents env-var fallback from poisoning the equity curve.
+- **Balance drift guard**: Before saving any snapshot, check if the new balance drifted >50% from the last. If so, skip the write and alert via Telegram. Catches any future data corruption vector.
+- **Fail-closed on missing snapshots**: If `loadAccountBalance()` finds 0 snapshots but open trades exist, abort the scan instead of using the config seed. Zero snapshots + open trades = broken DB state, not first run.
 
 ## CSV / Data Files
 - `data/universe.csv` had mixed line endings (CRLF for first ~208 lines, LF for the rest). PapaParse choked on this, treating the rest of the file as extra fields of one row (3811 fields).
