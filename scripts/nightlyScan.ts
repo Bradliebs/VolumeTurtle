@@ -980,12 +980,7 @@ async function main() {
 // ---------------------------------------------------------------------------
 
 async function loadAccountBalance(): Promise<number> {
-  const envBalance = process.env["VOLUME_TURTLE_BALANCE"];
-  if (envBalance) {
-    const parsed = parseFloat(envBalance);
-    if (!isNaN(parsed) && parsed > 0) return parsed;
-  }
-
+  // DB snapshot is the source of truth — env var is only a seed fallback
   const latest = await prisma.accountSnapshot.findFirst({
     orderBy: { date: "desc" },
   });
