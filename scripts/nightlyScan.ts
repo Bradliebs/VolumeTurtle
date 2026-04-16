@@ -40,6 +40,7 @@ import { calculateBreadth, breadthModifier, breadthSectorMultiplier } from "../s
 import type { BreadthResult } from "../src/lib/signals/breadthIndicator";
 import { ensureTickerInCsv } from "../src/lib/universe/ensureInCsv";
 import { loadT212Settings, getCachedT212Positions } from "../src/lib/t212/client";
+import { cleanupExpiredSessions } from "../src/lib/sessions";
 
 
 // ---------------------------------------------------------------------------
@@ -99,6 +100,16 @@ async function main() {
   }
 
   console.log(`[nightlyScan] ${todayStr} — starting${DRY_RUN ? " (DRY RUN)" : ""}…`);
+
+  // Housekeeping — prune expired auth sessions (best-effort, never blocks scan)
+  if (!DRY_RUN) {
+    try {
+      const pruned = await cleanupExpiredSessions();
+      if (pruned > 0) console.log(`[nightlyScan] Pruned ${pruned} expired session(s)`);
+    } catch (err) {
+      console.warn(`[nightlyScan] Session cleanup failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // 1. Load account balance
   const accountBalance = await loadAccountBalance();

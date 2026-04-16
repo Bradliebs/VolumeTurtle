@@ -38,8 +38,10 @@ async function loadAccountBalance(): Promise<number> {
 }
 
 export async function GET(request: NextRequest) {
-  // Rate limit: max 5 scans per minute
-  const limited = rateLimit(getRateLimitKey(request), 5, 60_000);
+  // Rate limit: max 2 scans per minute. A full scan fetches quotes for the
+  // entire universe (1000+ tickers) and iterates every open position — 5/min
+  // was enough headroom to hammer Yahoo Finance and T212 with repeat clicks.
+  const limited = rateLimit(getRateLimitKey(request), 2, 60_000);
   if (limited) return limited;
 
   const dryRun = request.nextUrl.searchParams.get("dry") === "true";
