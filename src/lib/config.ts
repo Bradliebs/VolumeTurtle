@@ -127,8 +127,18 @@ const log = createLogger("config");
 
 const weightSum = config.scoreWeightRegime + config.scoreWeightTrend + config.scoreWeightVolume + config.scoreWeightLiquidity;
 if (Math.abs(weightSum - 1.0) > 0.01) {
-  log.warn({ weightSum: weightSum.toFixed(3) }, "Score weights do not sum to ~1.0");
+  // Hard fail: misconfigured weights silently produce wrong composite grades,
+  // which drive position entry/sizing. Better to crash at boot than trade on
+  // garbage scores. Adjust SCORE_WEIGHT_* env vars so they sum to 1.0.
+  throw new Error(
+    `Composite score weights must sum to ~1.0 (got ${weightSum.toFixed(3)}). ` +
+    `Check SCORE_WEIGHT_REGIME (${config.scoreWeightRegime}), ` +
+    `SCORE_WEIGHT_TREND (${config.scoreWeightTrend}), ` +
+    `SCORE_WEIGHT_VOLUME (${config.scoreWeightVolume}), ` +
+    `SCORE_WEIGHT_LIQUIDITY (${config.scoreWeightLiquidity}).`,
+  );
 }
+log.info({ weightSum: weightSum.toFixed(3) }, "Composite score weights validated");
 
 /**
  * Load AppSettings from the database and patch the in-memory config.
