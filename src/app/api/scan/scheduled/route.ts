@@ -109,6 +109,8 @@ export async function GET(req: NextRequest) {
     // 1a. Calculate equity curve state
     const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
     const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
+    // Override: keep position count at config.maxPositions even in CAUTION
+    equityCurveState.maxPositions = config.maxPositions;
 
     // 1b. Calculate market regime
     let marketRegime: Awaited<ReturnType<typeof calculateMarketRegime>>;

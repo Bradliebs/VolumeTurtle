@@ -108,6 +108,10 @@ async function main() {
   // 1a. Calculate equity curve state
   const allSnapshots = await prisma.accountSnapshot.findMany({ orderBy: { date: "asc" } });
   const equityCurveState = calculateEquityCurveState(allSnapshots, config.riskPctPerTrade * 100, config.maxPositions);
+  // Override: keep position count at config.maxPositions even in CAUTION.
+  // Risk-per-trade reduction still applies, but we don't want to block entries
+  // when we already hold positions from before the drawdown.
+  equityCurveState.maxPositions = config.maxPositions;
   console.log(`[nightlyScan] System state: ${equityCurveState.systemState}`);
   console.log(`[nightlyScan] Risk per trade: ${equityCurveState.riskPctPerTrade}%`);
   console.log(`[nightlyScan] Max positions: ${equityCurveState.maxPositions}`);
