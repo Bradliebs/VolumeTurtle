@@ -833,7 +833,32 @@ export async function createPendingOrder(
   const settings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
   const windowMins = settings?.autoExecutionWindowMins ?? 15;
 
-  const cancelDeadline = new Date(Date.now() + windowMins * 60_000);
+  // Set deadline to the next optimal execution window.
+  // If created during market hours and within the execution window, use now + windowMins.
+  // If created outside market hours (e.g. after-hours scan), target next trading day.
+  const startHour = settings?.autoExecutionStartHour ?? 8;
+  const endHour = settings?.autoExecutionEndHour ?? 17;
+  const now = new Date();
+  const utcHour = now.getUTCHours();
+  const dayOfWeek = now.getUTCDay();
+
+  let cancelDeadline: Date;
+  if (utcHour >= startHour && utcHour < endHour && dayOfWeek >= 1 && dayOfWeek <= 5) {
+    // During market hours — use the normal cancellation window
+    cancelDeadline = new Date(now.getTime() + windowMins * 60_000);
+  } else {
+    // Outside market hours — target next trading day at startHour + windowMins
+    const next = new Date(now);
+    // Advance to next day
+    next.setUTCDate(next.getUTCDate() + 1);
+    // Skip weekends
+    while (next.getUTCDay() === 0 || next.getUTCDay() === 6) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+    // Set to startHour + windowMins (e.g. 08:15 UTC)
+    next.setUTCHours(startHour, windowMins, 0, 0);
+    cancelDeadline = next;
+  }
 
   const order = await db.pendingOrder.create({
     data: {
