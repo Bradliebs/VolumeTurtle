@@ -72,9 +72,19 @@ describe("convertToGbp", () => {
     expect(result).toBe(100);
   });
 
-  it("treats EUR ticker as unconverted if no EUR rate provided", () => {
-    // Without gbpEurRate, EUR tickers aren't matched by isUsdTicker so fall through
-    const result = convertToGbp(100, "ASML.AS", gbpUsdRate);
-    expect(result).toBe(100);
+  it("falls back to default EUR rate when no rate is provided (never leaves EUR unconverted)", () => {
+    // Previously this silently returned the unconverted amount — a bug that
+    // corrupted GBP P&L for .AS/.HE positions. Now it falls back to 1.17.
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => { /* silence */ });
+    const result = convertToGbp(117, "ASML.AS", gbpUsdRate);
+    expect(result).toBeCloseTo(100, 1); // 117 / 1.17 fallback ≈ 100
+    warnSpy.mockRestore();
+  });
+
+  it("falls back to default EUR rate when gbpEurRate is zero", () => {
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => { /* silence */ });
+    const result = convertToGbp(117, "ASML.AS", gbpUsdRate, 0);
+    expect(result).toBeCloseTo(100, 1);
+    warnSpy.mockRestore();
   });
 });

@@ -409,9 +409,9 @@ export async function preFlightChecks(
   // ── Check 9: MINIMUM ORDER SIZE ──
   try {
     const gbpUsdRate = await getGbpUsdRate();
-    const orderValueGBP = isUsdTicker(order.ticker)
-      ? (order.suggestedShares * order.suggestedEntry) / gbpUsdRate
-      : order.suggestedShares * order.suggestedEntry;
+    const gbpEurRate = await getGbpEurRate();
+    const orderValueNative = order.suggestedShares * order.suggestedEntry;
+    const orderValueGBP = convertToGbp(orderValueNative, order.ticker, gbpUsdRate, gbpEurRate);
     if (orderValueGBP < 1.0) {
       failures.push(`ORDER_TOO_SMALL — £${orderValueGBP.toFixed(2)} below T212 minimum`);
     }
@@ -437,22 +437,25 @@ export async function preFlightChecks(
   // ── Check 11: MAX EXPOSURE CAP ──
   try {
     const gbpUsdRate = await getGbpUsdRate();
+    const gbpEurRate = await getGbpEurRate();
     const balance = (await db.accountSnapshot.findFirst({
       orderBy: { date: "desc" },
     }))?.balance ?? 0;
 
     if (balance > 0) {
-      const exposureGBP = isUsdTicker(order.ticker)
-        ? (order.suggestedShares * order.suggestedEntry) / gbpUsdRate
-        : order.suggestedShares * order.suggestedEntry;
+      const exposureNative = order.suggestedShares * order.suggestedEntry;
+      const exposureGBP = convertToGbp(exposureNative, order.ticker, gbpUsdRate, gbpEurRate);
       const exposurePct = (exposureGBP / balance) * 100;
 
       if (exposurePct > 25) {
-        const maxSharesGBP = balance * 0.25;
-        const maxSharesValue = isUsdTicker(order.ticker)
-          ? maxSharesGBP * gbpUsdRate
-          : maxSharesGBP;
-        const cappedShares = parseFloat((maxSharesValue / order.suggestedEntry).toFixed(4));
+        const maxExposureGBP = balance * 0.25;
+        // Convert GBP cap back to native currency for share calculation
+        const fxRate =
+          isUsdTicker(order.ticker) ? gbpUsdRate :
+          isEurTicker(order.ticker) ? gbpEurRate :
+          1; // .L and unconverted (SEK/DKK) treated as GBP 1:1
+        const maxExposureNative = maxExposureGBP * fxRate;
+        const cappedShares = parseFloat((maxExposureNative / order.suggestedEntry).toFixed(4));
 
         log.info(
           `[PreFlight] Check 11 — exposure cap: ${exposurePct.toFixed(1)}% > 25% limit. Shares: ${order.suggestedShares} → ${cappedShares}`,

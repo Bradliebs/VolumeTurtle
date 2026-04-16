@@ -85,12 +85,29 @@ export function isEurTicker(ticker: string): boolean {
   return ticker.endsWith(".AS") || ticker.endsWith(".HE");
 }
 
+let warnedMissingEurRate = false;
+
 /**
  * Convert a foreign-currency amount to GBP using the given rates.
+ *
+ * EUR tickers (.AS, .HE): if `gbpEurRate` is missing or non-positive, falls back
+ * to FALLBACK_EUR_RATE and logs a one-shot warning. This avoids silently treating
+ * EUR amounts as GBP 1:1 (the previous behaviour corrupted position sizing,
+ * cash checks, and P&L for European positions).
  */
 export function convertToGbp(amount: number, ticker: string, gbpUsdRate: number, gbpEurRate?: number): number {
   if (ticker.endsWith(".L")) return amount; // Already GBP
-  if (isEurTicker(ticker) && gbpEurRate) return amount / gbpEurRate;
+  if (isEurTicker(ticker)) {
+    if (gbpEurRate && gbpEurRate > 0) return amount / gbpEurRate;
+    if (!warnedMissingEurRate) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[currency] convertToGbp called for EUR ticker ${ticker} without a valid gbpEurRate — falling back to ${FALLBACK_EUR_RATE}. Pass getGbpEurRate() result to silence this.`,
+      );
+      warnedMissingEurRate = true;
+    }
+    return amount / FALLBACK_EUR_RATE;
+  }
   if (isUsdTicker(ticker)) return amount / gbpUsdRate;
   return amount; // SEK/DKK — small portion, not converted
 }

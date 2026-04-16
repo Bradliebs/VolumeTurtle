@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
-import { getGbpUsdRate, convertToGbp } from "@/lib/currency";
+import { getGbpUsdRate, getGbpEurRate, convertToGbp } from "@/lib/currency";
 import { calculateEquityCurveState } from "@/lib/risk/equityCurve";
 import { getCachedQuotes } from "@/lib/data/quoteCache";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
@@ -103,6 +103,7 @@ function computePeriodStats(
     currentPrice: number | null;
   }>,
   gbpUsdRate: number,
+  gbpEurRate: number,
 ): PeriodStats {
   let totalRR = 0;
   let profitGBP = 0;
@@ -116,7 +117,7 @@ function computePeriodStats(
     totalRR += r;
     const rawPnl =
       (t.exitPrice != null ? t.exitPrice - t.entryPrice : 0) * t.shares;
-    profitGBP += convertToGbp(rawPnl, t.ticker, gbpUsdRate);
+    profitGBP += convertToGbp(rawPnl, t.ticker, gbpUsdRate, gbpEurRate);
 
     if (r > 0.05) wins++;
     else if (r < -0.05) losses++;
@@ -132,7 +133,7 @@ function computePeriodStats(
       : 0;
     totalRR += r;
     const rawPnl = (t.currentPrice - t.entryPrice) * t.shares;
-    profitGBP += convertToGbp(rawPnl, t.ticker, gbpUsdRate);
+    profitGBP += convertToGbp(rawPnl, t.ticker, gbpUsdRate, gbpEurRate);
   }
 
   const closedTotal = closed.length;
@@ -164,7 +165,7 @@ export async function GET(req: Request) {
       tradeWhere.signalSource = sourceFilter;
     }
 
-    const [allTrades, snapshots, latestSnapshot, gbpUsdRate] =
+    const [allTrades, snapshots, latestSnapshot, gbpUsdRate, gbpEurRate] =
       await Promise.all([
         db.trade.findMany({
           where: tradeWhere,
@@ -173,6 +174,7 @@ export async function GET(req: Request) {
         db.accountSnapshot.findMany({ orderBy: { date: "asc" } }),
         db.accountSnapshot.findFirst({ orderBy: { date: "desc" } }),
         withTimeout(getGbpUsdRate(), 8_000, 1.27),
+        withTimeout(getGbpEurRate(), 8_000, 1.17),
       ]);
 
     const currentBalance = latestSnapshot?.balance ?? 0;
@@ -279,10 +281,10 @@ export async function GET(req: Request) {
       },
     );
 
-    const weekStats = computePeriodStats(closedThisWeek, openThisWeek, gbpUsdRate);
-    const monthStats = computePeriodStats(closedThisMonth, openThisMonth, gbpUsdRate);
-    const yearStats = computePeriodStats(closedThisYear, openThisYear, gbpUsdRate);
-    const allTimeStats = computePeriodStats(closedTrades, openWithPrices, gbpUsdRate);
+    const weekStats = computePeriodStats(closedThisWeek, openThisWeek, gbpUsdRate, gbpEurRate);
+    const monthStats = computePeriodStats(closedThisMonth, openThisMonth, gbpUsdRate, gbpEurRate);
+    const yearStats = computePeriodStats(closedThisYear, openThisYear, gbpUsdRate, gbpEurRate);
+    const allTimeStats = computePeriodStats(closedTrades, openWithPrices, gbpUsdRate, gbpEurRate);
 
     // Compute pctReturn using balance context
     if (currentBalance > 0) {
@@ -310,7 +312,7 @@ export async function GET(req: Request) {
     const monthlyStats: MonthStat[] = [];
     for (const [key, trades] of monthlyMap) {
       const [yearStr, monthStr] = key.split("-");
-      const stats = computePeriodStats(trades, [], gbpUsdRate);
+      const stats = computePeriodStats(trades, [], gbpUsdRate, gbpEurRate);
       monthlyStats.push({
         year: Number(yearStr),
         month: Number(monthStr),
@@ -340,7 +342,7 @@ export async function GET(req: Request) {
         currentPrice != null
           ? (currentPrice - t.entryPrice) * t.shares
           : 0;
-      const profitGBP = convertToGbp(rawPnl, t.ticker, gbpUsdRate);
+      const profitGBP = convertToGbp(rawPnl, t.ticker, gbpUsdRate, gbpEurRate);
       const pctReturn =
         t.entryPrice > 0 && currentPrice != null
           ? ((currentPrice - t.entryPrice) / t.entryPrice) * 100
@@ -399,7 +401,7 @@ export async function GET(req: Request) {
           // Skip positions already tracked as trades
           if (trackedTickers.has(pos.ticker)) continue;
           const rawPnl = pos.ppl ?? 0;
-          const profitGBP = convertToGbp(rawPnl, pos.ticker, gbpUsdRate);
+          const profitGBP = convertToGbp(rawPnl, pos.ticker, gbpUsdRate, gbpEurRate);
           const pctReturn =
             pos.averagePrice > 0
               ? ((pos.currentPrice - pos.averagePrice) / pos.averagePrice) * 100
