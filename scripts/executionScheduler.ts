@@ -24,6 +24,7 @@ const db = prisma as unknown as {
   pendingOrder: {
     findMany: (args: unknown) => Promise<PendingOrderRow[]>;
     update: (args: unknown) => Promise<PendingOrderRow>;
+    deleteMany: (args: unknown) => Promise<{ count: number }>;
   };
   appSettings: {
     findFirst: (args: { orderBy: { id: "asc" } }) => Promise<{
@@ -36,6 +37,19 @@ const db = prisma as unknown as {
 
 async function main() {
   console.log(`[executionScheduler] ${new Date().toISOString()} — checking for pending orders…`);
+
+  // Cleanup: delete expired/failed orders older than 24h to keep the table tidy.
+  // ExecutionLog rows cascade-delete with their parent PendingOrder.
+  const cleanupCutoff = new Date(Date.now() - 24 * 60 * 60_000);
+  const cleaned = await db.pendingOrder.deleteMany({
+    where: {
+      status: { in: ["expired", "failed"] },
+      createdAt: { lt: cleanupCutoff },
+    },
+  });
+  if (cleaned.count > 0) {
+    console.log(`[executionScheduler] Cleaned up ${cleaned.count} expired/failed order(s) older than 24h`);
+  }
 
   // Check if auto-execution is globally enabled
   const settings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
