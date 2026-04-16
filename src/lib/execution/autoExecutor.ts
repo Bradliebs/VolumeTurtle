@@ -167,6 +167,26 @@ export async function preFlightChecks(
   const warnings: string[] = [];
   const adjustments: string[] = [];
 
+  // Fetch 90 days of candles once — shared by Check 5 (ticker regime / MA50)
+  // and Check 6 (data validator / avg20 / anomaly detection).
+  // Without candles, Check 5 loses 1/4 regime points (always CAUTION) and
+  // Check 6 short-circuits to INSUFFICIENT_HISTORY.
+  let candles: Candle[] = [];
+  try {
+    const { fetchHistory } = await import("@/lib/data/yahoo");
+    const bars = await fetchHistory(order.ticker, new Date(Date.now() - 90 * 86400_000));
+    candles = bars.map((b) => ({
+      date: b.date,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+      volume: b.volume,
+    }));
+  } catch (err) {
+    log.warn({ ticker: order.ticker, err: err instanceof Error ? err.message : String(err) }, "Failed to fetch candles for pre-flight checks — regime/validation degraded");
+  }
+
   // ── Check 1: CASH AVAILABLE ──
   try {
     const t212Settings = loadT212Settings();
@@ -301,7 +321,16 @@ export async function preFlightChecks(
   // ── Check 5: REGIME GATE ──
   try {
     const regime = await calculateMarketRegime();
-    const tickerRegime = await calculateTickerRegime(order.ticker, []);
+    // Convert our Candle[] to DailyQuote[] (date as YYYY-MM-DD string) for regime ticker trend.
+    const regimeQuotes = candles.map((c) => ({
+      date: typeof c.date === "string" ? c.date : c.date.toISOString().slice(0, 10),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+    }));
+    const tickerRegime = await calculateTickerRegime(order.ticker, regimeQuotes);
 
     // Fetch breadth for 4-layer assessment
     let breadth = null;
@@ -372,24 +401,6 @@ export async function preFlightChecks(
 
   // ── Check 6: DATA VALIDATION ──
   try {
-    // Fetch last 45 days of candles so the validator can compute avg20 + detect anomalies.
-    // Without candles the validator short-circuits to INSUFFICIENT_HISTORY.
-    let candles: Candle[] = [];
-    try {
-      const { fetchHistory } = await import("@/lib/data/yahoo");
-      const bars = await fetchHistory(order.ticker, new Date(Date.now() - 45 * 86400_000));
-      candles = bars.map((b) => ({
-        date: b.date,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-        volume: b.volume,
-      }));
-    } catch (err) {
-      log.warn({ ticker: order.ticker, err: err instanceof Error ? err.message : String(err) }, "Failed to fetch candles for data validation");
-    }
-
     const validation = await validateTicker(order.ticker, candles, liveQuote);
     if (!validation.valid) {
       failures.push(`DATA_VALIDATION — ${validation.flags.join(", ")}`);
