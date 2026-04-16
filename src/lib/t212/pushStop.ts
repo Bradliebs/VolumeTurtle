@@ -98,7 +98,10 @@ export async function pushStopToT212(
           (o.type?.toUpperCase().includes("STOP") ?? false),
       );
       if (existing) {
-        oldStopPrice = (existing as unknown as Record<string, unknown>)["stopPrice"] as number | null;
+        const rawOldStop = (existing as unknown as Record<string, unknown>)["stopPrice"];
+        // Coerce both null and undefined to null, and reject non-finite values
+        // (malformed T212 responses have been observed to return strings here).
+        oldStopPrice = typeof rawOldStop === "number" && Number.isFinite(rawOldStop) ? rawOldStop : null;
         await cancelOrder(t212Settings, existing.id);
         cancelledOrderId = existing.id;
         await sleep(2500); // T212 rate limit buffer after cancel

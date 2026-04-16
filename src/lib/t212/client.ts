@@ -308,10 +308,17 @@ export async function getInstruments(settings: T212Settings): Promise<T212Instru
 }
 
 // Cache instruments to avoid repeated API calls (promise-based to prevent races)
-// TTL: 12 hours — refreshes on cache miss or expiry
+// TTL is configurable via T212_INSTRUMENT_CACHE_HOURS (default 12h).
+// Shorter TTL = fresher listings visible sooner, at cost of a 50s-paced API call.
 let instrumentCachePromise: Promise<T212Instrument[]> | null = null;
 let instrumentCacheFetchedAt = 0;
-const INSTRUMENT_CACHE_TTL_MS = 12 * 3600_000; // 12 hours
+const INSTRUMENT_CACHE_TTL_HOURS = (() => {
+  const raw = process.env["T212_INSTRUMENT_CACHE_HOURS"];
+  if (!raw) return 12;
+  const parsed = parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 12;
+})();
+const INSTRUMENT_CACHE_TTL_MS = INSTRUMENT_CACHE_TTL_HOURS * 3600_000;
 
 async function getInstrumentCache(settings: T212Settings): Promise<T212Instrument[]> {
   const isExpired = Date.now() - instrumentCacheFetchedAt > INSTRUMENT_CACHE_TTL_MS;
@@ -420,12 +427,17 @@ export async function getPositionsWithStopsMapped(settings: T212Settings): Promi
 // ── Shared T212 positions cache (survives across routes, avoids 429 blanking) ──
 let sharedT212Cache: T212Position[] = [];
 let sharedT212CacheAt = 0;
-const SHARED_CACHE_TTL_MS = 60_000; // 1 minute
+const SHARED_CACHE_TTL_MS = 60_000; // 1 minute — normal freshness
+const SHARED_CACHE_STALE_CEILING_MS = 10 * 60_000; // 10 minutes — hard limit on error-path staleness
 
 /**
  * Cached wrapper around getPositionsWithStopsMapped.
  * All routes should use this instead of calling getPositionsWithStopsMapped directly
  * to avoid hitting T212 rate limits when multiple routes fetch in quick succession.
+ *
+ * On fetch failure, returns the cached snapshot ONLY if it is younger than
+ * SHARED_CACHE_STALE_CEILING_MS. Beyond that ceiling the error propagates so
+ * callers don't silently trade on hours-old position data.
  */
 export async function getCachedT212Positions(settings: T212Settings): Promise<{ positions: T212Position[]; fromCache: boolean }> {
   const now = Date.now();
@@ -438,8 +450,9 @@ export async function getCachedT212Positions(settings: T212Settings): Promise<{ 
     sharedT212CacheAt = now;
     return { positions, fromCache: false };
   } catch (err) {
-    // On failure, return stale cache if available
-    if (sharedT212Cache.length > 0) {
+    // On failure, return stale cache ONLY if within the staleness ceiling.
+    const cacheAge = now - sharedT212CacheAt;
+    if (sharedT212Cache.length > 0 && cacheAge < SHARED_CACHE_STALE_CEILING_MS) {
       return { positions: sharedT212Cache, fromCache: true };
     }
     throw err;
