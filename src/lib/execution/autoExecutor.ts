@@ -834,8 +834,10 @@ export async function createPendingOrder(
   const windowMins = settings?.autoExecutionWindowMins ?? 15;
 
   // Set deadline to the next optimal execution window.
+  // Key principle: London/NY overlap (13:00–16:00 UTC) has maximum liquidity.
+  // LSE tickers (.L) → target 13:00 UTC (London/NY overlap start)
+  // US tickers → target 14:30 UTC (US market open, 9:30 AM ET)
   // If created during market hours and within the execution window, use now + windowMins.
-  // If created outside market hours (e.g. after-hours scan), target next trading day.
   const startHour = settings?.autoExecutionStartHour ?? 8;
   const endHour = settings?.autoExecutionEndHour ?? 17;
   const now = new Date();
@@ -847,7 +849,13 @@ export async function createPendingOrder(
     // During market hours — use the normal cancellation window
     cancelDeadline = new Date(now.getTime() + windowMins * 60_000);
   } else {
-    // Outside market hours — target next trading day at startHour + windowMins
+    // Outside market hours — target next trading day at optimal execution time
+    const isLSE = input.ticker.endsWith(".L");
+    // LSE: 13:00 UTC (1 PM GMT — London/NY overlap start)
+    // US:  14:30 UTC (2:30 PM GMT — US market open, 9:30 AM ET)
+    const targetHour = isLSE ? 13 : 14;
+    const targetMin = isLSE ? windowMins : 30 + windowMins;
+
     const next = new Date(now);
     // Advance to next day
     next.setUTCDate(next.getUTCDate() + 1);
@@ -855,8 +863,7 @@ export async function createPendingOrder(
     while (next.getUTCDay() === 0 || next.getUTCDay() === 6) {
       next.setUTCDate(next.getUTCDate() + 1);
     }
-    // Set to startHour + windowMins (e.g. 08:15 UTC)
-    next.setUTCHours(startHour, windowMins, 0, 0);
+    next.setUTCHours(targetHour, targetMin, 0, 0);
     cancelDeadline = next;
   }
 
