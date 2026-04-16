@@ -835,9 +835,36 @@ export async function createPendingOrder(
 ): Promise<PendingOrderRow> {
   const settings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
   const windowMins = settings?.autoExecutionWindowMins ?? 15;
+  const endHour = settings?.autoExecutionEndHour ?? 17;
 
-  // Cancellation window: executes `windowMins` from now unless cancelled.
-  const cancelDeadline = new Date(Date.now() + windowMins * 60_000);
+  // Default: executes `windowMins` from now (simple countdown UX).
+  // Fallback: if that deadline falls outside scheduler hours (weekend or past end-of-day),
+  // roll forward to the next trading day's London/NY overlap window for maximum liquidity:
+  //   LSE/EU tickers → 13:00 UTC + windowMins
+  //   US tickers     → 14:30 UTC + windowMins
+  const now = new Date();
+  const simpleDeadline = new Date(now.getTime() + windowMins * 60_000);
+
+  const deadlineDay = simpleDeadline.getUTCDay();
+  const deadlineHour = simpleDeadline.getUTCHours();
+  const isWeekend = deadlineDay === 0 || deadlineDay === 6;
+  const outsideSchedulerHours = deadlineHour >= endHour;
+
+  let cancelDeadline: Date;
+  if (!isWeekend && !outsideSchedulerHours) {
+    cancelDeadline = simpleDeadline;
+  } else {
+    const isLSE = input.ticker.endsWith(".L") || input.ticker.endsWith(".AS") || input.ticker.endsWith(".HE") || input.ticker.endsWith(".ST");
+    const targetHour = isLSE ? 13 : 14;
+    const targetMin = isLSE ? windowMins : 30 + windowMins;
+    const next = new Date(now);
+    next.setUTCDate(next.getUTCDate() + 1);
+    while (next.getUTCDay() === 0 || next.getUTCDay() === 6) {
+      next.setUTCDate(next.getUTCDate() + 1);
+    }
+    next.setUTCHours(targetHour, targetMin, 0, 0);
+    cancelDeadline = next;
+  }
 
   const order = await db.pendingOrder.create({
     data: {
@@ -978,6 +1005,10 @@ async function sendPendingAlert(order: PendingOrderRow): Promise<void> {
     const runnerNote = order.isRunner ? "\n🏃 RUNNER designated" : "";
     const secsRemaining = Math.max(0, Math.round((order.cancelDeadline.getTime() - Date.now()) / 1000));
     const minsRemaining = Math.ceil(secsRemaining / 60);
+    // If execution is >60 min away (rolled to next trading day's overlap), show the UTC time instead of raw minutes.
+    const executesLine = minsRemaining > 60
+      ? `⏱ Executes at ${order.cancelDeadline.toISOString().slice(11, 16)} UTC on ${order.cancelDeadline.toISOString().slice(0, 10)} unless cancelled.`
+      : `⏱ Executes in ${minsRemaining} minutes unless cancelled.`;
 
     let regimeInfo = "";
     try {
@@ -999,7 +1030,7 @@ async function sendPendingAlert(order: PendingOrderRow): Promise<void> {
         `  Risk:    £${order.dollarRisk.toFixed(2)} (${riskPct}%)` +
         runnerNote +
         regimeInfo +
-        `\n\n⏱ Executes in ${minsRemaining} minutes unless cancelled.`,
+        `\n\n${executesLine}`,
     });
   } catch (err) {
     log.error({ error: err instanceof Error ? err.message : String(err) }, "Failed to send pending alert");
