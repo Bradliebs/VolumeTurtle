@@ -5,6 +5,15 @@ export interface TrailingStopResult {
   peakClosePrice: number;
   activeStop: number;
   stopSource: "atr" | "trailing";
+  /**
+   * @deprecated Not consumed anywhere. Kept for type compatibility.
+   * For the real exit rule used by the nightly scan, call
+   * `shouldExit()` from `@/lib/signals/exitSignal` — that is the
+   * single source of truth. The two use different semantics:
+   *   - exitSignal: strict `<`, window excludes today (breakout convention)
+   *   - this field: `<=`, window includes today (broker-style touch)
+   * Do NOT use this field without reconciling with exitSignal first.
+   */
   shouldExit: boolean;
   rMultiple: number | null;
 }

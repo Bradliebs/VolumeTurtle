@@ -24,7 +24,14 @@ export function calculateTrailingLow(quotes: DailyQuote[]): number | null {
 
 /**
  * Returns true if currentClose < the trailing low.
- * This is the sole mechanical exit rule.
+ * This is the sole mechanical exit rule for the nightly scan.
+ *
+ * NOTE: comparison is strict (`<`), not `<=`. A close that exactly equals
+ * the trailing low does NOT trigger an exit. This is intentional and is
+ * locked in by the test "returns false when currentClose equals trailing low".
+ * The trailing window ALSO excludes today (see calculateTrailingLow), so the
+ * semantic is: "today's close broke below the lowest close of the prior N days".
+ *
  * Returns false when insufficient data (no trailing low to compare).
  */
 export function shouldExit(
