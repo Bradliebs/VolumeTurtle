@@ -12,7 +12,7 @@ import { createLogger } from "@/lib/logger";
 import { sendTelegram } from "@/lib/telegram";
 import { getGbpUsdRate, getGbpEurRate, getCurrencySymbol, isUsdTicker, isEurTicker, convertToGbp } from "@/lib/currency";
 import { validateTicker } from "@/lib/signals/dataValidator";
-import type { LiveQuote } from "@/lib/signals/dataValidator";
+import type { LiveQuote, Candle } from "@/lib/signals/dataValidator";
 import { calculateMarketRegime, assessRegime, calculateTickerRegime } from "@/lib/signals/regimeFilter";
 import { calculateBreadth } from "@/lib/signals/breadthIndicator";
 import { calculateEquityCurveState, type SnapshotInput } from "@/lib/risk/equityCurve";
@@ -372,7 +372,25 @@ export async function preFlightChecks(
 
   // ── Check 6: DATA VALIDATION ──
   try {
-    const validation = await validateTicker(order.ticker, [], liveQuote);
+    // Fetch last 45 days of candles so the validator can compute avg20 + detect anomalies.
+    // Without candles the validator short-circuits to INSUFFICIENT_HISTORY.
+    let candles: Candle[] = [];
+    try {
+      const { fetchHistory } = await import("@/lib/data/yahoo");
+      const bars = await fetchHistory(order.ticker, new Date(Date.now() - 45 * 86400_000));
+      candles = bars.map((b) => ({
+        date: b.date,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        volume: b.volume,
+      }));
+    } catch (err) {
+      log.warn({ ticker: order.ticker, err: err instanceof Error ? err.message : String(err) }, "Failed to fetch candles for data validation");
+    }
+
+    const validation = await validateTicker(order.ticker, candles, liveQuote);
     if (!validation.valid) {
       failures.push(`DATA_VALIDATION — ${validation.flags.join(", ")}`);
     }
