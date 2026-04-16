@@ -50,17 +50,17 @@ schtasks /create /tn "VolumeTurtle_CruiseControl" ^
 
 echo   Cruise control — hourly 08:00-17:00 on weekdays
 
-REM --- Execution Scheduler: every 1 min 14:00-20:00 weekdays ---
+REM --- Execution Scheduler: every 5 min 14:00-20:00 weekdays ---
 schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
   /tr "cmd /c cd /d \"!INSTALL_DIR!\" && npx tsx scripts/executionScheduler.ts" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 14:00 ^
-  /ri 1 ^
+  /ri 5 ^
   /du 06:00 ^
   /f
 
-echo   Execution scheduler — every minute 14:00-20:00 on weekdays
+echo   Execution scheduler — every 5 min 14:00-20:00 on weekdays
 echo.
 
 echo Done. Verifying tasks:

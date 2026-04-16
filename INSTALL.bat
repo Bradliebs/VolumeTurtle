@@ -264,7 +264,7 @@ schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 14:00 ^
-  /ri 1 ^
+  /ri 5 ^
   /du 06:00 ^
   /f >nul 2>nul
 if errorlevel 1 (
@@ -272,7 +272,7 @@ if errorlevel 1 (
   echo         [!] Could not create Execution Scheduler task
 ) else (
   set /a SCHED_OK+=1
-  echo         Execution scheduler — every minute 14:00-20:00 on weekdays
+  echo         Execution scheduler — every 5 min 14:00-20:00 on weekdays
 )
 
 if !SCHED_FAIL! gtr 0 (

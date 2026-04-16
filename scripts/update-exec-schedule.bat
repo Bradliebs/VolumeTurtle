@@ -10,8 +10,8 @@
 :: ─────────────────────────────────────────────────────────
 
 echo.
-echo === Updating Execution Scheduler: 08:00-17:00 UTC ===
-schtasks /change /tn "VolumeTurtle_ExecutionScheduler" /st 08:00 /ri 1 /du 09:00
+echo === Updating Execution Scheduler: 08:00-17:00 UTC (every 5 min) ===
+schtasks /change /tn "VolumeTurtle_ExecutionScheduler" /st 08:00 /ri 5 /du 09:00
 if not errorlevel 1 (
     echo   SUCCESS
 ) else (
