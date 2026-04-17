@@ -720,6 +720,24 @@ async function main() {
   if (config.MOMENTUM_ENABLED && !DRY_RUN) {
     console.log("\n── MOMENTUM SCAN ──");
 
+    // Reap stale RUNNING ScanRuns from prior crashes (>30min old)
+    try {
+      const cutoff = new Date(Date.now() - 30 * 60_000);
+      const reaped = await prisma.scanRun.updateMany({
+        where: { status: "RUNNING", startedAt: { lt: cutoff } },
+        data: {
+          status: "FAILED",
+          completedAt: new Date(),
+          error: "Marked FAILED by reaper — RUNNING for >30min, presumed crashed",
+        },
+      });
+      if (reaped.count > 0) {
+        console.warn(`[nightlyScan] Reaped ${reaped.count} stale RUNNING ScanRun records`);
+      }
+    } catch (reapErr) {
+      console.error("[nightlyScan] Stale ScanRun reaper failed:", reapErr);
+    }
+
     // Create a ScanRun for momentum (reuse marketRegime from above)
     const momentumScanRun = await prisma.scanRun.create({
       data: {

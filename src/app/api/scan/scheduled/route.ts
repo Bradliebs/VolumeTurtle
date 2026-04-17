@@ -19,6 +19,7 @@ import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { sendTelegram, formatAlertMessage } from "@/lib/telegram";
 import { UK_BANK_HOLIDAYS, US_HOLIDAYS } from "@/lib/cruise-control/market-hours";
 import { validateTicker } from "@/lib/signals/dataValidator";
+import { reapStaleScanRuns } from "@/lib/scanRuns";
 
 const SCHEDULED_SCAN_TOKEN = process.env.SCHEDULED_SCAN_TOKEN;
 
@@ -77,6 +78,9 @@ export async function GET(req: NextRequest) {
     } catch { /* best effort */ }
     return NextResponse.json({ success: true, market, skipped: true, reason: "market_holiday" });
   }
+
+  // Reap stale RUNNING ScanRuns from prior crashes before checking concurrency
+  await reapStaleScanRuns();
 
   // Concurrent scan guard — skip if another scan is already running
   const runningScan = await prisma.scanRun.findFirst({
@@ -337,31 +341,35 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    if (!skipSnapshot) {
-      await prisma.accountSnapshot.create({
-        data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
-      });
-    }
-
     const durationMs = Date.now() - startTime;
 
-    // 8. Update ScanRun
-    await prisma.scanRun.update({
-      where: { id: scanRun.id },
-      data: {
-        completedAt: new Date(),
-        tickersScanned: liquidTickers.length,
-        signalsFound: signals.length,
-        status: "COMPLETED",
-        durationMs,
-        marketRegime: marketRegime.marketRegime,
-        vixLevel: marketRegime.vixLevel != null ? String(marketRegime.vixLevel) : null,
-        vixValue: marketRegime.vixLevel,
-        qqqVs200MA: marketRegime.qqqPctAboveMA,
-        validationBlocked,
-        validationWarnings,
-        crossValidated: crossValidatedCount,
-      },
+    // 8. Persist snapshot + ScanRun completion atomically. Without the
+    //    transaction a crash between the two writes would leave the run
+    //    "RUNNING" while a snapshot already exists (or vice versa),
+    //    corrupting daily counts and producing a zombie scan record.
+    await prisma.$transaction(async (tx) => {
+      if (!skipSnapshot) {
+        await tx.accountSnapshot.create({
+          data: { date: today, balance: accountBalance, openTrades: finalOpenCount },
+        });
+      }
+      await tx.scanRun.update({
+        where: { id: scanRun.id },
+        data: {
+          completedAt: new Date(),
+          tickersScanned: liquidTickers.length,
+          signalsFound: signals.length,
+          status: "COMPLETED",
+          durationMs,
+          marketRegime: marketRegime.marketRegime,
+          vixLevel: marketRegime.vixLevel != null ? String(marketRegime.vixLevel) : null,
+          vixValue: marketRegime.vixLevel,
+          qqqVs200MA: marketRegime.qqqPctAboveMA,
+          validationBlocked,
+          validationWarnings,
+          crossValidated: crossValidatedCount,
+        },
+      });
     });
 
     // 9. Send Telegram summary

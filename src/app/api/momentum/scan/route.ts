@@ -11,6 +11,7 @@ import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { createLogger } from "@/lib/logger";
 import type { Candle } from "@/lib/hbme/types";
 import { validateTicker } from "@/lib/signals/dataValidator";
+import { reapStaleScanRuns } from "@/lib/scanRuns";
 
 const log = createLogger("momentum-scan");
 
@@ -33,6 +34,7 @@ export async function POST(req: NextRequest) {
   let scanRunId: number | null = null;
 
   try {
+    await reapStaleScanRuns();
     const scanRun = await prisma.scanRun.create({
       data: {
         startedAt: new Date(),

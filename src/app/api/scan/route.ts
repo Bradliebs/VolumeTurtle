@@ -20,6 +20,7 @@ import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition } from "@
 import type { ExitReason } from "@/lib/trades/types";
 import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { validateTicker } from "@/lib/signals/dataValidator";
+import { reapStaleScanRuns } from "@/lib/scanRuns";
 
 async function loadAccountBalance(): Promise<number> {
   const results = await prisma.accountSnapshot.findMany({
@@ -50,6 +51,9 @@ export async function GET(request: NextRequest) {
   let scanRunId: number | null = null;
 
   try {
+    // Reap stale RUNNING ScanRuns from prior crashes
+    if (!dryRun) await reapStaleScanRuns();
+
     // Create ScanRun record (unless dry run)
     if (!dryRun) {
       const scanRun = await prisma.scanRun.create({
