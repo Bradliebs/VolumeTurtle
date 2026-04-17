@@ -66,6 +66,10 @@ const db = prisma as unknown as {
   accountSnapshot: {
     findFirst: (args: unknown) => Promise<{ balance: number } | null>;
   };
+  retryQueue: {
+    create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
+    findFirst: (args: { where: Record<string, unknown> }) => Promise<{ id: number } | null>;
+  };
 };
 
 // ── Row types ──────────────────────────────────────────────────────────────
@@ -588,10 +592,34 @@ export async function executeOrder(
       // CRITICAL: Stop push failed — Layer 2 (cruise daemon) will retry
       await logExecution(order.id, "STOP_PUSH_L1_FAIL", stopResult.error ?? "Unknown stop push error");
 
+      // Enqueue Layer 2 retry — guarantees the next cruise poll (or 10-min retry timer)
+      // will pick this up. Without this, the position has NO stop on T212 until the
+      // next regular cruise poll happens to retry the stop on this ticker.
+      try {
+        const existing = await db.retryQueue.findFirst({
+          where: { ticker: order.ticker, attempts: { lt: 15 } },
+        });
+        if (!existing) {
+          await db.retryQueue.create({
+            data: {
+              ticker: order.ticker,
+              stopPrice: order.suggestedStop,
+              quantity: filledQty,
+              attempts: 0,
+              lastError: `L1 stop push failed: ${stopResult.error ?? "Unknown"}`,
+              nextRetryAt: new Date(Date.now() + 60_000), // first retry in 60s
+            },
+          });
+          log.warn({ ticker: order.ticker, stopPrice: order.suggestedStop, quantity: filledQty }, "L1 stop push failed — enqueued for L2 retry");
+        }
+      } catch (enqueueErr) {
+        log.error({ ticker: order.ticker, error: enqueueErr instanceof Error ? enqueueErr.message : String(enqueueErr) }, "Failed to enqueue retry — manual intervention required");
+      }
+
       // Send CRITICAL Telegram alert
       try {
         await sendTelegram({
-          text: `<b>⚠ CRITICAL — STOP NOT SET</b>\n<code>${order.ticker}</code> — market order filled but stop push failed!\n<b>Layer 2 will retry on next cruise poll</b>\nStop target: $${order.suggestedStop.toFixed(2)}\nError: ${stopResult.error ?? "Unknown"}`,
+          text: `<b>⚠ CRITICAL — STOP NOT SET</b>\n<code>${order.ticker}</code> — market order filled but stop push failed!\n<b>Layer 2 retry queued — next attempt in ~60s</b>\nStop target: $${order.suggestedStop.toFixed(2)}\nError: ${stopResult.error ?? "Unknown"}`,
         });
       } catch { /* best effort */ }
     }

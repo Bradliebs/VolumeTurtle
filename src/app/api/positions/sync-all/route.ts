@@ -263,14 +263,44 @@ export async function POST(_request: Request) {
 
     // Save balance from T212 as AccountSnapshot
     if (t212Balance != null) {
-      await prisma.accountSnapshot.create({
-        data: {
-          date: now,
-          balance: t212Balance,
-          openTrades: openTrades.length,
-        },
-      });
-      log.info({ balance: t212Balance }, "Balance auto-synced from T212");
+      // Sanity guards: reject obvious bad data + 50% drift outliers (matches lessons.md)
+      if (!Number.isFinite(t212Balance) || t212Balance <= 0) {
+        log.error({ balance: t212Balance }, "Invalid T212 balance \u2014 skipping snapshot");
+      } else {
+        const lastSnapshot = await prisma.accountSnapshot.findFirst({
+          orderBy: { date: "desc" },
+        });
+        const drift = lastSnapshot && lastSnapshot.balance > 0
+          ? Math.abs((t212Balance - lastSnapshot.balance) / lastSnapshot.balance)
+          : 0;
+
+        if (drift > 0.5) {
+          log.error(
+            { balance: t212Balance, lastBalance: lastSnapshot?.balance, driftPct: (drift * 100).toFixed(1) },
+            "Balance drift >50% from last snapshot \u2014 skipping write to protect equity curve",
+          );
+          // Best-effort alert via DB (Telegram path not imported here)
+          try {
+            await prisma.alert.create({
+              data: {
+                type: "BALANCE_DRIFT",
+                ticker: "_SYSTEM_",
+                severity: "critical",
+                message: `T212 balance drift ${(drift * 100).toFixed(1)}% (last: ${lastSnapshot?.balance}, new: ${t212Balance}) \u2014 snapshot skipped`,
+              },
+            });
+          } catch { /* best effort */ }
+        } else {
+          await prisma.accountSnapshot.create({
+            data: {
+              date: now,
+              balance: t212Balance,
+              openTrades: openTrades.length,
+            },
+          });
+          log.info({ balance: t212Balance }, "Balance auto-synced from T212");
+        }
+      }
     }
 
     return NextResponse.json({

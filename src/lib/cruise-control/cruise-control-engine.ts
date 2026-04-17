@@ -252,9 +252,18 @@ async function processRetryQueue(): Promise<void> {
 
   for (const row of rows) {
     if (row.attempts >= 15) {
-      // Max retries — alert and remove
-      await db.retryQueue.delete({ where: { id: row.id } });
-      await sendAlert("warning", `T212 stop update failed after 15 attempts: ${row.ticker} — manual intervention needed`, {
+      // Max retries reached \u2014 mark as TERMINAL but do NOT delete (preserve forensics).
+      // The findMany filter (attempts: { lt: 15 }) already excludes these from future polls.
+      // Bump attempts to a sentinel value (99) and prefix lastError so it's obvious in DB inspection.
+      await db.retryQueue.update({
+        where: { id: row.id },
+        data: {
+          attempts: 99,
+          lastError: `TERMINAL after 15 attempts: ${row.lastError ?? "unknown"}`,
+          nextRetryAt: new Date("2099-01-01"),
+        },
+      });
+      await sendAlert("warning", `T212 stop update failed after 15 attempts: ${row.ticker} \u2014 manual intervention needed`, {
         ticker: row.ticker,
         stopPrice: row.stopPrice,
         attempts: row.attempts,
@@ -262,11 +271,11 @@ async function processRetryQueue(): Promise<void> {
       await db.cruiseControlAlert.create({
         data: {
           alertType: "warning",
-          message: `Retry exhausted for ${row.ticker} stop at ${row.stopPrice} after ${row.attempts} attempts — MANUAL SET REQUIRED`,
-          context: { ticker: row.ticker, stopPrice: row.stopPrice },
+          message: `Retry exhausted for ${row.ticker} stop at ${row.stopPrice} after ${row.attempts} attempts \u2014 MANUAL SET REQUIRED (RetryQueue row #${row.id} preserved for forensics)`,
+          context: { ticker: row.ticker, stopPrice: row.stopPrice, retryQueueRowId: row.id },
         },
       });
-      log.warn({ ticker: row.ticker, stopPrice: row.stopPrice }, "[CRUISE-CONTROL] Retry exhausted — removed from queue");
+      log.warn({ ticker: row.ticker, stopPrice: row.stopPrice, rowId: row.id }, "[CRUISE-CONTROL] Retry exhausted \u2014 marked TERMINAL (row preserved)");
       continue;
     }
 
@@ -760,6 +769,11 @@ export async function startCruiseControl(): Promise<void> {
 
   // On startup: drain any persisted retry queue items from previous session
   await drainRetryQueueOnStartup();
+
+  // Start retry timer unconditionally so any items enqueued by autoExecutor
+  // (e.g. failed L1 stop pushes after market fills) are processed within ~10 min,
+  // even if no cruise poll has triggered the timer via t212Unavailable yet.
+  startRetryTimer();
 
   // Immediate poll if market is open
   if (isMarketOpen()) {
