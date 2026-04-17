@@ -762,6 +762,7 @@ const g = globalThis as unknown as {
   __ccPollInterval?: ReturnType<typeof setInterval> | null;
   __ccDaemonRunning?: boolean;
   __ccPollInProgress?: boolean;
+  __ccConsecutivePollFailures?: number;
 };
 
 function getPollIntervalRef() { return g.__ccPollInterval ?? null; }
@@ -822,12 +823,36 @@ export async function startCruiseControl(): Promise<void> {
       return;
     }
 
+    // Circuit breaker: if last 3 polls failed, skip this cycle (back off ~3h).
+    // After 5 consecutive failures, send a single escalated alert and keep skipping.
+    const consecutiveFailures = (g.__ccConsecutivePollFailures as number | undefined) ?? 0;
+    if (consecutiveFailures >= 3 && consecutiveFailures < 8) {
+      log.warn({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: skipping poll due to recent failures");
+      return;
+    }
+    if (consecutiveFailures === 5) {
+      await sendAlert("critical", `Cruise control daemon has failed ${consecutiveFailures} consecutive polls — likely DB or network issue. Manual investigation needed.`);
+    }
+    // After 8 failures, allow one probe attempt to detect recovery
+    if (consecutiveFailures >= 8) {
+      log.info({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: probing for recovery");
+    }
+
     try {
       g.__ccPollInProgress = true;
       await runSinglePoll();
+      // Success — reset failure counter
+      if (consecutiveFailures > 0) {
+        log.info({ previousFailures: consecutiveFailures }, "[CRUISE-CONTROL] Poll recovered after failures");
+        g.__ccConsecutivePollFailures = 0;
+      }
     } catch (err) {
-      log.error({ err: String(err) }, "[CRUISE-CONTROL] Poll cycle crashed");
-      await sendAlert("critical", `Cruise control daemon poll crashed: ${err instanceof Error ? err.message : String(err)}`);
+      g.__ccConsecutivePollFailures = consecutiveFailures + 1;
+      log.error({ err: String(err), consecutiveFailures: g.__ccConsecutivePollFailures }, "[CRUISE-CONTROL] Poll cycle crashed");
+      // Only alert on first failure to avoid spam (escalation alert handled above at threshold 5)
+      if (consecutiveFailures === 0) {
+        await sendAlert("critical", `Cruise control daemon poll crashed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     } finally {
       g.__ccPollInProgress = false;
     }
