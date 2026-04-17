@@ -38,29 +38,29 @@ schtasks /create /tn "VolumeTurtle_Scan_US" ^
 
 echo   US scan  — every weekday at 22:00
 
-REM --- Cruise Control: hourly 08:00-17:00 weekdays ---
+REM --- Cruise Control: hourly 08:00-21:00 weekdays (covers LSE + US sessions) ---
 schtasks /create /tn "VolumeTurtle_CruiseControl" ^
   /tr "cmd /c \"!INSTALL_DIR!\scripts\cruise-daemon.bat\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 08:00 ^
   /ri 60 ^
-  /du 09:00 ^
+  /du 13:00 ^
   /f
 
-echo   Cruise control — hourly 08:00-17:00 on weekdays
+echo   Cruise control — hourly 08:00-21:00 on weekdays
 
-REM --- Execution Scheduler: every 5 min 14:00-20:00 weekdays ---
+REM --- Execution Scheduler: every 5 min 08:00-21:00 weekdays ---
 schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
   /tr "cmd /c cd /d \"!INSTALL_DIR!\" && npx tsx scripts/executionScheduler.ts" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
-  /st 14:00 ^
+  /st 08:00 ^
   /ri 5 ^
-  /du 06:00 ^
+  /du 13:00 ^
   /f
 
-echo   Execution scheduler — every 5 min 14:00-20:00 on weekdays
+echo   Execution scheduler — every 5 min 08:00-21:00 on weekdays
 echo.
 
 echo Done. Verifying tasks:
