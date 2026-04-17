@@ -123,13 +123,16 @@ export async function calculateMarketRegime(): Promise<RegimeState> {
 
   const marketRegime: MarketRegime = qqqClose >= qqq200MA ? "BULLISH" : "BEARISH";
 
-  // VIX regime
+  // VIX regime — fail-safe: if VIX data is unavailable we cannot assume calm
+  // markets. Defaulting to ELEVATED triggers the conservative size multiplier
+  // (vixElevatedSizeMult) in positionSizer, which is the correct posture when
+  // we are flying blind on volatility.
   if (vixQuotes.length === 0) {
-    log.warn("VIX data unavailable — defaulting to NORMAL volatility");
+    log.warn("VIX data unavailable — defaulting to ELEVATED volatility (fail-safe)");
   }
   const vixLevel = vixQuotes.length > 0 ? vixQuotes[vixQuotes.length - 1]!.close : null;
 
-  let volatilityRegime: VolatilityRegime = "NORMAL";
+  let volatilityRegime: VolatilityRegime = vixLevel === null ? "ELEVATED" : "NORMAL";
   if (vixLevel !== null) {
     if (vixLevel > 35) volatilityRegime = "PANIC";
     else if (vixLevel > 25) volatilityRegime = "ELEVATED";
