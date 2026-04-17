@@ -119,6 +119,14 @@ const db = prisma as unknown as {
   cruiseControlAlert: {
     create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
   };
+  appSettings: {
+    findFirst: (args: { orderBy: { id: "asc" } }) => Promise<{
+      cruisePollIntervalMins?: number;
+      cruisePollFastIntervalMins?: number;
+      cruisePollFastStartUtcHour?: number;
+      cruisePollFastEndUtcHour?: number;
+    } | null>;
+  };
 };
 
 interface RetryQueueRow {
@@ -766,7 +774,9 @@ const g = globalThis as unknown as {
 };
 
 function getPollIntervalRef() { return g.__ccPollInterval ?? null; }
-function setPollIntervalRef(ref: ReturnType<typeof setInterval> | null) { g.__ccPollInterval = ref; }
+function setPollIntervalRef(ref: ReturnType<typeof setInterval> | ReturnType<typeof setTimeout> | null) {
+  g.__ccPollInterval = ref as ReturnType<typeof setInterval> | null;
+}
 function isDaemonRunningInternal() { return g.__ccDaemonRunning ?? false; }
 function setDaemonRunning(v: boolean) { g.__ccDaemonRunning = v; }
 
@@ -787,7 +797,15 @@ export async function startCruiseControl(): Promise<void> {
   setDaemonRunning(true);
   await updateState({ isEnabled: true, enabledAt: new Date() });
   await sendAlert("info", "Cruise control turned ON");
-  log.info("[CRUISE-CONTROL] State: ON — polling every 60 minutes");
+  const sched = await getPollSchedule();
+  log.info(
+    {
+      baseMins: sched.baseMs / 60_000,
+      fastMins: sched.fastMs / 60_000,
+      fastWindowUtc: `${sched.fastStartHour}-${sched.fastEndHour}`,
+    },
+    "[CRUISE-CONTROL] State: ON \u2014 adaptive polling (fast during high-action UTC window, base off-peak)",
+  );
 
   // On startup: drain any persisted retry queue items from previous session
   await drainRetryQueueOnStartup();
@@ -808,55 +826,111 @@ export async function startCruiseControl(): Promise<void> {
     log.info("[CRUISE-CONTROL] Market closed — will poll when market opens");
   }
 
-  // Schedule hourly polls
-  setPollIntervalRef(setInterval(async () => {
-    if (!isDaemonRunningInternal()) return;
+  // Self-rescheduling poll loop. Uses setTimeout (not setInterval) so each
+  // cycle can pick the right interval based on current UTC hour: fast (default
+  // 30 min) during the high-action window (default 08:00-16:00 UTC weekdays),
+  // base interval (default 60 min) otherwise. Both intervals + window
+  // boundaries are tunable via AppSettings.cruisePoll* fields.
+  scheduleNextPoll();
+}
 
-    if (!isMarketOpen()) {
-      log.info("[CRUISE-CONTROL] Market closed — poll skipped");
-      return;
-    }
+/**
+ * Read poll-cadence settings from AppSettings; fall back to defaults if missing.
+ */
+async function getPollSchedule(): Promise<{
+  baseMs: number;
+  fastMs: number;
+  fastStartHour: number;
+  fastEndHour: number;
+}> {
+  try {
+    const s = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+    return {
+      baseMs: ((s?.cruisePollIntervalMins as number | undefined) ?? 60) * 60_000,
+      fastMs: ((s?.cruisePollFastIntervalMins as number | undefined) ?? 30) * 60_000,
+      fastStartHour: (s?.cruisePollFastStartUtcHour as number | undefined) ?? 8,
+      fastEndHour: (s?.cruisePollFastEndUtcHour as number | undefined) ?? 16,
+    };
+  } catch {
+    return { baseMs: 60 * 60_000, fastMs: 30 * 60_000, fastStartHour: 8, fastEndHour: 16 };
+  }
+}
 
-    // Guard against concurrent polls
-    if (g.__ccPollInProgress) {
-      log.warn("[CRUISE-CONTROL] Previous poll still running — skipping this cycle");
-      return;
-    }
+function isInFastWindow(hourUtc: number, dayUtc: number, fastStart: number, fastEnd: number): boolean {
+  // Weekdays only (1-5 Mon-Fri); fast window is [start, end) in UTC hours
+  if (dayUtc === 0 || dayUtc === 6) return false;
+  return hourUtc >= fastStart && hourUtc < fastEnd;
+}
 
-    // Circuit breaker: if last 3 polls failed, skip this cycle (back off ~3h).
-    // After 5 consecutive failures, send a single escalated alert and keep skipping.
-    const consecutiveFailures = (g.__ccConsecutivePollFailures as number | undefined) ?? 0;
-    if (consecutiveFailures >= 3 && consecutiveFailures < 8) {
-      log.warn({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: skipping poll due to recent failures");
-      return;
-    }
-    if (consecutiveFailures === 5) {
-      await sendAlert("critical", `Cruise control daemon has failed ${consecutiveFailures} consecutive polls — likely DB or network issue. Manual investigation needed.`);
-    }
-    // After 8 failures, allow one probe attempt to detect recovery
-    if (consecutiveFailures >= 8) {
-      log.info({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: probing for recovery");
-    }
+function scheduleNextPoll(): void {
+  if (!isDaemonRunningInternal()) return;
 
-    try {
-      g.__ccPollInProgress = true;
-      await runSinglePoll();
-      // Success — reset failure counter
-      if (consecutiveFailures > 0) {
-        log.info({ previousFailures: consecutiveFailures }, "[CRUISE-CONTROL] Poll recovered after failures");
-        g.__ccConsecutivePollFailures = 0;
-      }
-    } catch (err) {
-      g.__ccConsecutivePollFailures = consecutiveFailures + 1;
-      log.error({ err: String(err), consecutiveFailures: g.__ccConsecutivePollFailures }, "[CRUISE-CONTROL] Poll cycle crashed");
-      // Only alert on first failure to avoid spam (escalation alert handled above at threshold 5)
-      if (consecutiveFailures === 0) {
-        await sendAlert("critical", `Cruise control daemon poll crashed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } finally {
-      g.__ccPollInProgress = false;
+  // Clear any prior scheduled timeout
+  const old = getPollIntervalRef();
+  if (old) clearTimeout(old);
+
+  // Pick interval based on current UTC time
+  void (async () => {
+    const sched = await getPollSchedule();
+    const now = new Date();
+    const fast = isInFastWindow(now.getUTCHours(), now.getUTCDay(), sched.fastStartHour, sched.fastEndHour);
+    const intervalMs = fast ? sched.fastMs : sched.baseMs;
+
+    const ref = setTimeout(async () => {
+      await runScheduledPoll();
+      scheduleNextPoll(); // chain to next cycle, re-evaluating window
+    }, intervalMs);
+    setPollIntervalRef(ref);
+  })();
+}
+
+async function runScheduledPoll(): Promise<void> {
+  if (!isDaemonRunningInternal()) return;
+
+  if (!isMarketOpen()) {
+    log.info("[CRUISE-CONTROL] Market closed — poll skipped");
+    return;
+  }
+
+  // Guard against concurrent polls
+  if (g.__ccPollInProgress) {
+    log.warn("[CRUISE-CONTROL] Previous poll still running — skipping this cycle");
+    return;
+  }
+
+  // Circuit breaker: if last 3 polls failed, skip this cycle.
+  // After 5 consecutive failures, send a single escalated alert and keep skipping.
+  const consecutiveFailures = (g.__ccConsecutivePollFailures as number | undefined) ?? 0;
+  if (consecutiveFailures >= 3 && consecutiveFailures < 8) {
+    log.warn({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: skipping poll due to recent failures");
+    return;
+  }
+  if (consecutiveFailures === 5) {
+    await sendAlert("critical", `Cruise control daemon has failed ${consecutiveFailures} consecutive polls — likely DB or network issue. Manual investigation needed.`);
+  }
+  // After 8 failures, allow one probe attempt to detect recovery
+  if (consecutiveFailures >= 8) {
+    log.info({ consecutiveFailures }, "[CRUISE-CONTROL] Circuit breaker: probing for recovery");
+  }
+
+  try {
+    g.__ccPollInProgress = true;
+    await runSinglePoll();
+    // Success — reset failure counter
+    if (consecutiveFailures > 0) {
+      log.info({ previousFailures: consecutiveFailures }, "[CRUISE-CONTROL] Poll recovered after failures");
+      g.__ccConsecutivePollFailures = 0;
     }
-  }, 60 * 60 * 1000)); // 60 minutes
+  } catch (err) {
+    g.__ccConsecutivePollFailures = consecutiveFailures + 1;
+    log.error({ err: String(err), consecutiveFailures: g.__ccConsecutivePollFailures }, "[CRUISE-CONTROL] Poll cycle crashed");
+    // Only alert on first failure to avoid spam (escalation alert handled above at threshold 5)
+    if (consecutiveFailures === 0) {
+      await sendAlert("critical", `Cruise control daemon poll crashed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } finally {
+    g.__ccPollInProgress = false;
+  }
 }
 
 /**

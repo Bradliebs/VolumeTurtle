@@ -316,6 +316,11 @@ model AppSettings {
   vixElevatedSizeMult    Float   @default(0.75)   // VIX 25-35: 75% size
   earlyPauseToCautionPct Float   @default(22.0)   // early PAUSE→CAUTION when drawdown < this % (above 20% PAUSE threshold)
   earlyCautionToNormalPct Float  @default(12.0)    // early CAUTION→NORMAL when drawdown < this % (above 10% CAUTION threshold)
+  // Cruise control polling cadence
+  cruisePollIntervalMins      Int @default(60)    // base interval (off-peak hours)
+  cruisePollFastIntervalMins  Int @default(30)    // fast interval during high-action window
+  cruisePollFastStartUtcHour  Int @default(8)     // fast window start (UTC)
+  cruisePollFastEndUtcHour    Int @default(16)    // fast window end (UTC, exclusive)
   updatedAt             DateTime @updatedAt
 }
 
