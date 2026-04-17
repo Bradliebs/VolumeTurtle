@@ -43,17 +43,29 @@ export async function POST(_request: Request) {
     const t212Settings = loadT212Settings();
     const t212Configured = t212Settings != null;
     if (t212Settings) {
+      // Hard 10s timeout to prevent the route hanging on a slow/unresponsive T212.
+      // On timeout, we proceed with Yahoo-only data (t212Loaded stays false, so
+      // ghost-detection / auto-close logic is skipped this cycle).
+      const T212_FETCH_TIMEOUT_MS = 10_000;
       try {
-        const [cached, account] = await Promise.all([
+        const fetchPromise = Promise.all([
           getCachedT212Positions(t212Settings),
           getAccountCash(t212Settings),
         ]);
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("T212_FETCH_TIMEOUT")), T212_FETCH_TIMEOUT_MS),
+        );
+        const [cached, account] = await Promise.race([fetchPromise, timeoutPromise]);
         t212Positions = cached.positions;
         t212Loaded = true;
         t212Balance = account.total ?? account.cash ?? null;
         t212Currency = account.currencyCode ?? "GBP";
-      } catch {
-        // T212 fetch failed — continue with Yahoo only
+      } catch (err) {
+        const isTimeout = err instanceof Error && err.message === "T212_FETCH_TIMEOUT";
+        if (isTimeout) {
+          log.warn({ timeoutMs: T212_FETCH_TIMEOUT_MS }, "T212 fetch timed out \u2014 proceeding with Yahoo data only");
+        }
+        // T212 fetch failed or timed out \u2014 continue with Yahoo only
       }
     }
 

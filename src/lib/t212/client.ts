@@ -3,6 +3,10 @@
  * All credentials are stored in environment variables.
  */
 
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("t212-client");
+
 export interface T212Settings {
   environment: "demo" | "live";
   apiKey: string;
@@ -91,11 +95,38 @@ async function reserveSharedEndpointSlot(
         return slotStartAt;
       }
     }
+    // CAS loop exhausted — 6 concurrent processes contended for the same slot
+    // and we were always last. Caller falls back to in-process pacing, which
+    // means cross-process coordination is lost for this call only. Throttle the
+    // warning to once per minute per endpoint to avoid log spam.
+    logCasExhaustion(endpoint);
   } catch {
     // DB unavailable: caller will fall back to in-process pacing.
+    logCasDbUnavailable(endpoint);
   }
 
   return null;
+}
+
+// Throttle warnings: one log per endpoint per minute
+const lastCasExhaustionLog = new Map<EndpointKey, number>();
+const lastCasDbErrorLog = new Map<EndpointKey, number>();
+const CAS_WARN_THROTTLE_MS = 60_000;
+
+function logCasExhaustion(endpoint: EndpointKey): void {
+  const now = Date.now();
+  const last = lastCasExhaustionLog.get(endpoint) ?? 0;
+  if (now - last < CAS_WARN_THROTTLE_MS) return;
+  lastCasExhaustionLog.set(endpoint, now);
+  log.warn({ endpoint }, "[T212] Cross-process pacing CAS loop exhausted after 6 attempts \u2014 falling back to in-process pacing (multi-process 429 risk)");
+}
+
+function logCasDbUnavailable(endpoint: EndpointKey): void {
+  const now = Date.now();
+  const last = lastCasDbErrorLog.get(endpoint) ?? 0;
+  if (now - last < CAS_WARN_THROTTLE_MS) return;
+  lastCasDbErrorLog.set(endpoint, now);
+  log.warn({ endpoint }, "[T212] Cross-process pacing DB unavailable \u2014 falling back to in-process pacing (multi-process 429 risk)");
 }
 
 async function paceEndpoint(endpoint: EndpointKey, settings: T212Settings): Promise<void> {
@@ -439,9 +470,9 @@ const SHARED_CACHE_STALE_CEILING_MS = 10 * 60_000; // 10 minutes — hard limit 
  * SHARED_CACHE_STALE_CEILING_MS. Beyond that ceiling the error propagates so
  * callers don't silently trade on hours-old position data.
  */
-export async function getCachedT212Positions(settings: T212Settings): Promise<{ positions: T212Position[]; fromCache: boolean }> {
+export async function getCachedT212Positions(settings: T212Settings, opts?: { forceRefresh?: boolean }): Promise<{ positions: T212Position[]; fromCache: boolean }> {
   const now = Date.now();
-  if (sharedT212Cache.length > 0 && now - sharedT212CacheAt < SHARED_CACHE_TTL_MS) {
+  if (!opts?.forceRefresh && sharedT212Cache.length > 0 && now - sharedT212CacheAt < SHARED_CACHE_TTL_MS) {
     return { positions: sharedT212Cache, fromCache: true };
   }
   try {
@@ -451,8 +482,9 @@ export async function getCachedT212Positions(settings: T212Settings): Promise<{ 
     return { positions, fromCache: false };
   } catch (err) {
     // On failure, return stale cache ONLY if within the staleness ceiling.
+    // Skip cache fallback when caller explicitly forced a refresh.
     const cacheAge = now - sharedT212CacheAt;
-    if (sharedT212Cache.length > 0 && cacheAge < SHARED_CACHE_STALE_CEILING_MS) {
+    if (!opts?.forceRefresh && sharedT212Cache.length > 0 && cacheAge < SHARED_CACHE_STALE_CEILING_MS) {
       return { positions: sharedT212Cache, fromCache: true };
     }
     throw err;

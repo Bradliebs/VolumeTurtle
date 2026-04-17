@@ -458,7 +458,29 @@ export async function runSinglePoll(): Promise<PollResult> {
             consecutiveDetections: newCount,
           });
         } else if (newCount === 2) {
-          // Confirmed ghost — auto-close in DB
+          // Second detection — force a fresh T212 fetch (bypass 1-min cache).
+          // If ticker reappears in fresh data, clear tracker (was cache staleness).
+          // If still missing, leave tracker at 2 and wait for 3rd poll to confirm.
+          try {
+            const fresh = await getOpenPositionsFromT212({ forceRefresh: true });
+            const stillGhost = !fresh.some((p) => p.ticker.toUpperCase() === ghostTicker);
+            if (!stillGhost) {
+              ghostTracker.delete(ghostTicker);
+              log.info({ ticker: ghostTicker }, "[CRUISE-CONTROL] Ghost cleared by force-refresh — was cache staleness");
+              await sendAlert("info", `Ghost ${ghostTicker} cleared — fresh T212 fetch confirms position exists`, {
+                ticker: ghostTicker,
+              });
+            } else {
+              await sendAlert("warning", `Ghost confirmed by fresh fetch: ${ghostTicker} — will auto-close on next poll if still missing`, {
+                ticker: ghostTicker,
+                consecutiveDetections: newCount,
+              });
+            }
+          } catch (refreshErr) {
+            log.error({ ticker: ghostTicker, err: String(refreshErr) }, "[CRUISE-CONTROL] Force-refresh failed during ghost confirmation");
+          }
+        } else if (newCount >= 3) {
+          // Third confirmed detection across 3 polls (~3 hours) — auto-close in DB
           const ghostTrade = openTrades.find(
             (t) => t.ticker.toUpperCase() === ghostTicker,
           );
@@ -471,19 +493,18 @@ export async function runSinglePoll(): Promise<PollResult> {
                 exitReason: "T212_STOP",
               },
             });
-            await sendAlert("critical", `Ghost confirmed & auto-closed: ${ghostTicker} — position stopped out on T212 but DB was stale`, {
+            await sendAlert("critical", `Ghost confirmed & auto-closed (3 polls): ${ghostTicker} — position stopped out on T212 but DB was stale`, {
               ticker: ghostTicker,
               tradeId: ghostTrade.id,
               consecutiveDetections: newCount,
             });
             log.warn(
-              { ticker: ghostTicker, tradeId: ghostTrade.id },
-              "[CRUISE-CONTROL] Ghost position auto-closed in DB",
+              { ticker: ghostTicker, tradeId: ghostTrade.id, consecutiveDetections: newCount },
+              "[CRUISE-CONTROL] Ghost position auto-closed in DB after 3 confirmed polls",
             );
           }
           ghostTracker.delete(ghostTicker);
         }
-        // No further alerts for count > 2 (already closed)
       }
     }
 

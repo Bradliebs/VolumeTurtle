@@ -135,13 +135,15 @@ export async function updateStopOnT212(
 
 /**
  * Fetch all currently open positions from T212 (mapped to Yahoo tickers).
+ * Pass `forceRefresh: true` to bypass the 1-min shared cache (use for ghost
+ * confirmation before auto-closing a DB position).
  */
-export async function getOpenPositionsFromT212(): Promise<T212Position[]> {
+export async function getOpenPositionsFromT212(opts?: { forceRefresh?: boolean }): Promise<T212Position[]> {
   const settings = loadT212Settings();
   if (!settings) return [];
 
   try {
-    const { positions } = await getCachedT212Positions(settings);
+    const { positions } = await getCachedT212Positions(settings, opts);
     return positions;
   } catch (err) {
     log.error({ err: String(err) }, "Failed to fetch T212 positions");
