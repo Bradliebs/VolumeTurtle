@@ -64,6 +64,16 @@ export function calculatePositionSize(
 
   const dollarRisk = accountBalance * effectiveRiskPct;
 
+  // Guard: ATR must be a positive finite number. ATR=0 would cause division by
+  // zero below (infinite shares); NaN/negative would produce nonsense sizing.
+  // This can occur with stale/empty quote series or data-validator misses.
+  if (!Number.isFinite(signal.atr20) || signal.atr20 <= 0) {
+    console.warn(
+      `[PositionSizer] ${signal.ticker}: invalid ATR (${signal.atr20}) — skipping position sizing`,
+    );
+    return null;
+  }
+
   // Compute riskPerShare from config ATR multiplier — aligns with volumeSignal hardStop
   const riskPerShare = config.hardStopAtrMultiple * signal.atr20;
   const hardStop = signal.suggestedEntry - riskPerShare;

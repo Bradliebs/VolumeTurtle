@@ -57,6 +57,24 @@ describe("calculatePositionSize", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when ATR is zero (division-by-zero guard)", () => {
+    const signal = makeSignal({ atr20: 0 });
+    const result = calculatePositionSize(signal, 10000);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when ATR is negative", () => {
+    const signal = makeSignal({ atr20: -1 });
+    const result = calculatePositionSize(signal, 10000);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when ATR is NaN", () => {
+    const signal = makeSignal({ atr20: NaN });
+    const result = calculatePositionSize(signal, 10000);
+    expect(result).toBeNull();
+  });
+
   it("returns null when equity curve is PAUSE", () => {
     const signal = makeSignal();
     const pauseState: EquityCurveState = {
