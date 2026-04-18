@@ -64,6 +64,10 @@ export interface VolumeTurtleConfig {
   vixNormalSizeMult: number;
   vixElevatedSizeMult: number;
   vixPanicSizeMult: number;
+  // ── AI / Claude ──
+  ANTHROPIC_API_KEY: string;
+  AGENT_ENABLED: boolean;
+  TRADECORE_BASE_URL: string;
 }
 
 const volumeSpikeMin = envFloat("VOLUME_SPIKE_MIN", envFloat("VOLUME_SPIKE_MULTIPLIER", 2.0));
@@ -110,6 +114,10 @@ export const config: VolumeTurtleConfig = {
   vixNormalSizeMult: envFloat("VIX_NORMAL_SIZE_MULT", 1.0),
   vixElevatedSizeMult: envFloat("VIX_ELEVATED_SIZE_MULT", 0.75),
   vixPanicSizeMult: envFloat("VIX_PANIC_SIZE_MULT", 0.0),
+  // ── AI / Claude ──
+  ANTHROPIC_API_KEY: process.env["ANTHROPIC_API_KEY"] ?? "",
+  AGENT_ENABLED: envBool("AGENT_ENABLED", false),
+  TRADECORE_BASE_URL: process.env["TRADECORE_BASE_URL"] ?? "http://localhost:3000",
 };
 
 // Validate config at load time

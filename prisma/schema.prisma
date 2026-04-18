@@ -583,3 +583,37 @@ model UniverseSnapshot {
   @@unique([snapshotDate, ticker])
   @@index([snapshotDate])
 }
+// ── Agent models ──────────────────────────────────────────────────
+
+model AiSettings {
+  id              Int      @id @default(1)
+  enabled         Boolean  @default(false)
+  anthropicApiKey String?
+  model           String   @default("claude-sonnet-4-20250514")
+  maxTokens       Int      @default(2048)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model AgentHaltFlag {
+  id        Int       @id @default(1)
+  halted    Boolean   @default(false)
+  reason    String?
+  setAt     DateTime?
+  setBy     String?
+  updatedAt DateTime  @updatedAt
+}
+
+model AgentDecisionLog {
+  id             Int      @id @default(autoincrement())
+  cycleId        String
+  cycleStartedAt DateTime
+  contextJson    String   @db.Text
+  reasoning      String   @db.Text
+  actionsJson    String   @db.Text
+  outcomeJson    String   @db.Text
+  telegramSent   Boolean  @default(false)
+  durationMs     Int
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+}

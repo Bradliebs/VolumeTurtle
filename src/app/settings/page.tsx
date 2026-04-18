@@ -99,6 +99,17 @@ export default function SettingsPage() {
   const [runnerSaving, setRunnerSaving] = useState(false);
   const [runnerStatus, setRunnerStatus] = useState<string | null>(null);
 
+  // Agent state
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentHalted, setAgentHalted] = useState(false);
+  const [agentHaltReason, setAgentHaltReason] = useState<string | null>(null);
+  const [agentLastCycleAt, setAgentLastCycleAt] = useState<string | null>(null);
+  const [agentLastDurationMs, setAgentLastDurationMs] = useState<number | null>(null);
+  const [agentLastToolCalls, setAgentLastToolCalls] = useState<number | null>(null);
+  const [agentLastTelegramSent, setAgentLastTelegramSent] = useState<boolean | null>(null);
+  const [agentSaving, setAgentSaving] = useState(false);
+  const [agentStatus, setAgentStatus] = useState<string | null>(null);
+
   // Auto-execution state
   const [autoExecEnabled, setAutoExecEnabled] = useState(false);
   const [autoExecMinGrade, setAutoExecMinGrade] = useState("B");
@@ -142,7 +153,48 @@ export default function SettingsPage() {
     fetchRunnerStatus();
     fetchAutoExecSettings();
     fetchUnprotected();
+    fetchAgentSettings();
   }, []);
+
+  async function fetchAgentSettings() {
+    try {
+      const res = await fetch("/api/agent/settings");
+      if (res.ok) {
+        const d = await res.json();
+        setAgentEnabled(d.enabled);
+        setAgentHalted(d.halted);
+        setAgentHaltReason(d.haltReason);
+        setAgentLastCycleAt(d.lastCycleAt);
+        setAgentLastDurationMs(d.lastCycleDurationMs);
+        setAgentLastToolCalls(d.lastCycleToolCalls);
+        setAgentLastTelegramSent(d.lastCycleTelegramSent);
+      }
+    } catch { /* silent */ }
+  }
+
+  async function saveAgentSetting(patch: Record<string, unknown>) {
+    setAgentSaving(true);
+    setAgentStatus(null);
+    try {
+      const res = await fetch("/api/agent/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        setAgentStatus("✓ Saved");
+        await fetchAgentSettings();
+      } else {
+        const d = await res.json();
+        setAgentStatus(`✗ ${d.error ?? "Failed"}`);
+      }
+    } catch (err) {
+      setAgentStatus(`✗ ${err instanceof Error ? err.message : "Error"}`);
+    } finally {
+      setAgentSaving(false);
+      setTimeout(() => setAgentStatus(null), 4000);
+    }
+  }
 
   async function fetchAutoExecSettings() {
     try {
@@ -1230,6 +1282,82 @@ export default function SettingsPage() {
               )}
             </div>
           )}
+        </div>
+      </section>
+
+      {/* AUTONOMOUS AGENT */}
+      <section className="mb-8">
+        <h2 className="text-xs font-semibold text-[#a78bfa] mb-4 tracking-widest border-b border-[#a78bfa]/30 pb-2">
+          🤖 AUTONOMOUS AGENT
+        </h2>
+        <div className="space-y-4 text-xs" style={mono}>
+          {/* Enable toggle */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Agent enabled</span>
+            <button
+              onClick={() => {
+                const next = !agentEnabled;
+                setAgentEnabled(next);
+                saveAgentSetting({ enabled: next });
+              }}
+              disabled={agentSaving}
+              className={`w-10 h-5 rounded-full transition-colors relative ${agentEnabled ? "bg-[#a78bfa]" : "bg-[#333]"}`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${agentEnabled ? "left-5" : "left-0.5"}`} />
+            </button>
+            <span className={agentEnabled ? "text-[#a78bfa]" : "text-[#555]"}>
+              {agentEnabled ? "ACTIVE" : "OFF"}
+            </span>
+            {agentStatus && (
+              <span className={agentStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{agentStatus}</span>
+            )}
+          </div>
+
+          {/* Halt controls */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Halt flag</span>
+            <span className={`font-semibold ${agentHalted ? "text-[var(--red)]" : "text-[var(--green)]"}`}>
+              {agentHalted ? `🛑 HALTED${agentHaltReason ? ` — ${agentHaltReason}` : ""}` : "✓ Clear"}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 ml-32">
+            {!agentHalted ? (
+              <button
+                onClick={() => {
+                  setAgentHalted(true);
+                  saveAgentSetting({ halted: true, reason: "Manual halt from settings UI" });
+                }}
+                disabled={agentSaving}
+                className="px-3 py-1.5 border border-[var(--red)] text-[var(--red)] hover:bg-[var(--red)] hover:text-black transition-colors text-[10px] uppercase tracking-wider disabled:opacity-40"
+              >
+                🛑 HALT AGENT
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setAgentHalted(false);
+                  setAgentHaltReason(null);
+                  saveAgentSetting({ halted: false });
+                }}
+                disabled={agentSaving}
+                className="px-3 py-1.5 border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors text-[10px] uppercase tracking-wider disabled:opacity-40"
+              >
+                ▶ RESUME AGENT
+              </button>
+            )}
+          </div>
+
+          {/* Last cycle info */}
+          <div className="flex items-center gap-4 mt-2">
+            <span className="text-[var(--dim)] w-28 shrink-0">Last cycle</span>
+            {agentLastCycleAt ? (
+              <span className="text-[#888]">
+                {new Date(agentLastCycleAt).toLocaleString()} ({agentLastDurationMs != null ? `${(agentLastDurationMs / 1000).toFixed(1)}s` : "—"}) · {agentLastToolCalls ?? 0} tools · Telegram: {agentLastTelegramSent ? "✓" : "✗"}
+              </span>
+            ) : (
+              <span className="text-[#555]">Never</span>
+            )}
+          </div>
         </div>
       </section>
 

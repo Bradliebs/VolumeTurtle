@@ -59,29 +59,31 @@ After setup, **the system runs itself**. Scheduled tasks handle:
 | Mon-Fri 22:00 | US scan → creates PendingOrders |
 | Mon-Fri every 5 min, 08:00–21:00 | Executor processes PendingOrders → sends to T212 |
 | Mon-Fri hourly, 08:00–21:00 | Cruise control ratchets stops upward |
-| Sun 18:00 | Universe snapshot for backtest replay |
-| Sun 19:00 | Auto-tune → writes recommendation + Telegram alert |
+| Mon-Fri hourly, 08:00–21:00 | **Agent cycle** → ratchets stops, executes signals, sends Telegram summary |
+| Mon-Fri every 2 min, 08:00–21:00 | **Agent Telegram listener** → processes HALT/RESUME/STATUS commands |
+| Sun 18:00 | **Agent** triggers universe snapshot for backtest replay |
+| Sun 19:00 | **Agent** runs auto-tune, interprets results, sends plain-English verdict to Telegram |
 
-**Your only job during the week:** check Telegram for trade alerts and daily reports.
+**Your only job during the week:** check Telegram for trade alerts and the Sunday verdict.
 
 ---
 
-## C. Monday morning routine (5 min)
+## C. Monday morning routine (2 min)
 
-**1. Check the auto-tune recommendation from Sunday**
-```powershell
-type data\recommendations\latest.json
-```
-Look at `oosValidation.verdict`:
-- `PROMOTE_OK` + same combo as last week → no action needed
-- `PROMOTE_OK` + new combo → consider applying it (see section E)
-- `OOS_GATE_FAILED` → don't change anything, system flagged uncertainty
+**1. Check Telegram for the Sunday auto-tune verdict**
+
+The agent already ran the auto-tune, interpreted the results, and sent you one of three verdicts:
+
+- **APPLY** — new config validated. The message includes the exact `setx` commands to run. Copy-paste them, then restart the dev server (`START.bat`).
+- **MONITOR** — improvement is marginal. No action needed.
+- **IGNORE** — OOS gate failed. Do not change anything.
 
 **2. Verify scheduler is healthy**
 ```powershell
 npm run schedule:status
+npm run schedule:agent:status
 ```
-All 6 tasks should show "Ready" or "Running".
+All tasks should show "Ready" or "Running".
 
 **3. Check trades dashboard**
 - Open `http://localhost:3000`
@@ -166,12 +168,70 @@ Removes all scheduled tasks. Re-run `npm run schedule:setup` when you want it ba
 | Order didn't execute | Check `ExecutionLog` in DB or `/execution` page in UI for the failed pre-flight check |
 | Stop didn't push to T212 | Check `T212Connection.connected` is true; check rate limit in logs |
 | Auto-tune failed | Check `%USERPROFILE%\VolumeTurtle\logs\autotune.log` |
+| Agent cycle failed | Check `%USERPROFILE%\VolumeTurtle\logs\agent.log` |
+| Agent Sunday failed | Check `%USERPROFILE%\VolumeTurtle\logs\agent-sunday.log` |
 | Telegram silent | Verify `TelegramSettings.enabled = true` in DB |
+
+---
+
+## H. Agent control
+
+### Enable / disable
+
+**Settings UI** — go to `http://localhost:3000/settings`, scroll to "Autonomous Agent", toggle on/off. Takes effect on the next cycle.
+
+**Direct DB** — for scripting:
+```powershell
+# Enable
+echo 'UPDATE "AiSettings" SET enabled = true, "updatedAt" = NOW() WHERE id = 1;' | npx prisma db execute --stdin
+
+# Disable
+echo 'UPDATE "AiSettings" SET enabled = false, "updatedAt" = NOW() WHERE id = 1;' | npx prisma db execute --stdin
+```
+
+### Telegram commands
+
+Send these to the Telegram bot chat (the agent listener checks every 2 min):
+
+| Command | What it does |
+|---|---|
+| `HALT` | Sets the halt flag — agent skips all execution until resumed |
+| `HALT reason text` | Halt with a specific reason |
+| `RESUME` | Clears the halt flag — agent resumes on the next cycle |
+| `PAUSE` | Turns off auto-execution — signals still scanned but no orders sent |
+| `UNPAUSE` | Re-enables auto-execution |
+| `STATUS` | Returns current positions, heat, regime, halt status |
+
+### Halt vs Pause
+
+- **HALT** stops the agent entirely — no ratchets, no executions, no actions. Use for emergencies.
+- **PAUSE** only stops new entries — stops are still ratcheted, positions monitored. Use for "I want to watch but not trade."
+
+### Log locations
+
+| Log | Path |
+|---|---|
+| Weekday agent | `%USERPROFILE%\VolumeTurtle\logs\agent.log` |
+| Sunday maintenance | `%USERPROFILE%\VolumeTurtle\logs\agent-sunday.log` |
+| Telegram listener | `%USERPROFILE%\VolumeTurtle\logs\agent-listen.log` |
+
+### Schedule management
+
+```powershell
+# Install agent tasks
+npm run schedule:agent:setup
+
+# Check agent task status
+npm run schedule:agent:status
+
+# Remove agent tasks (keeps core trading tasks)
+npm run schedule:agent:remove
+```
 
 ---
 
 ## TL;DR
 
-**Set up once → it runs itself → check Telegram & Monday recommendation file.**
+**Set up once → it runs itself → check Telegram.**
 
-The only weekly decision: do you trust the latest `data/recommendations/latest.json` enough to update env vars? If `PROMOTE_OK` + meaningful `deltaPF` → yes. Otherwise leave it.
+The agent handles everything: hourly ratchets, signal execution, Sunday auto-tune with plain-English verdicts. The only manual step is running the `setx` commands when the agent says APPLY.

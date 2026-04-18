@@ -39,7 +39,14 @@
     "walkforward": "npx tsx scripts/walkForward.ts",
     "walkforward:quick": "npx tsx scripts/walkForward.ts --quick",
     "snapshot:universe": "npx tsx scripts/snapshotUniverse.ts",
-    "backfill:quotes": "npx tsx scripts/backfillQuotes.ts"
+    "backfill:quotes": "npx tsx scripts/backfillQuotes.ts",
+    "agent": "npx tsx src/agent/runner.ts",
+    "agent:sunday": "npx tsx src/agent/runner-sunday.ts",
+    "agent:friday": "npx tsx src/agent/runner-friday.ts",
+    "agent:listen": "npx tsx src/agent/telegram-listener.ts",
+    "schedule:agent:setup": "npx tsx scripts/schedule-agent.ts setup",
+    "schedule:agent:remove": "npx tsx scripts/schedule-agent.ts remove",
+    "schedule:agent:status": "npx tsx scripts/schedule-agent.ts status"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.5.0",
