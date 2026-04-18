@@ -41,8 +41,14 @@ An algorithmic trading system that detects volume-spike entries on a curated equ
 └──────────────────────────────────────────────────────────────────────┘
                               ↓
 ┌──────────────────────────────────────────────────────────────────────┐
-│  AUTO-TUNE  (weekly Sunday 19:00) ★ NEW                              │
+│  AUTO-TUNE  (weekly Sunday 19:00)                                    │
 │  Parameter sweep → robustness check → OOS gate → recommendation file │
+└──────────────────────────────────────────────────────────────────────┘
+                              ↓
+┌──────────────────────────────────────────────────────────────────────┐
+│  AUTONOMOUS AGENT  (Claude-powered, hourly weekdays + Sun/Fri) ★ NEW │
+│  T212 check → equity curve → ratchets → pre-market risk → execute    │
+│  13 tools │ Telegram control │ Sunday auto-tune │ Friday debrief     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -186,11 +192,14 @@ BacktestTrade   ← simulated trades for analysis
 UniverseSnapshot ← weekly POV-time-correct universe (anti-survivorship)
 AccountSnapshot  ← daily T212 balance for equity curve
 AppSettings      ← single-row DB-overridable config
+AiSettings       ← agent on/off, model, API key
+AgentHaltFlag    ← emergency halt with reason
+AgentDecisionLog ← full audit trail of every agent cycle
 ```
 
 ---
 
-## 9. Schedule (after `npm run schedule:setup`)
+## 9. Schedule (after `npm run schedule:setup` + `npm run schedule:agent:setup`)
 
 | Task | When | What |
 |---|---|---|
@@ -199,7 +208,12 @@ AppSettings      ← single-row DB-overridable config
 | `VolumeTurtle_ExecutionScheduler` | Mon-Fri every 5 min, 08:00–21:00 | Process PendingOrders → T212 |
 | `VolumeTurtle_CruiseControl` | Mon-Fri hourly, 08:00–21:00 | Ratchet stops on open trades |
 | `VolumeTurtle_UniverseSnapshot` | Sun 18:00 | Snapshot universe for backtest replay |
-| `VolumeTurtle_AutoTune` ★ NEW | Sun 19:00 | Sweep + OOS-validate + recommend |
+| `VolumeTurtle_AutoTune` | Sun 19:00 | Sweep + OOS-validate + recommend |
+| `VolumeTurtle_Agent` | Mon-Fri hourly, 08:00–21:00 | Claude agent cycle (ratchets, executions, Telegram) |
+| `VolumeTurtle_AgentListen` | Mon-Fri every 2 min, 08:00–21:00 | Telegram HALT/RESUME/STATUS listener |
+| `VolumeTurtle_AgentSnapshot` | Sun 18:00 | Agent triggers universe snapshot |
+| `VolumeTurtle_AgentAutoTune` | Sun 19:00 | Agent interprets auto-tune + sends verdict |
+| `VolumeTurtle_AgentFriday` | Fri 21:30 | Weekly performance debrief to Telegram |
 
 ---
 
@@ -219,6 +233,9 @@ Env-driven knobs the auto-tune currently recommends:
 | `HEAT_CAP_PCT` | (unset → off) | **0.08** |
 | `HARD_STOP_ATR_MULTIPLE` | 1.5 | not yet swept |
 | `TRAIL_ATR_MULTIPLE` | 2 | not yet swept |
+| `ANTHROPIC_API_KEY` | (unset) | your Claude API key |
+| `AGENT_ENABLED` | false | true when ready |
+| `TRADECORE_BASE_URL` | http://localhost:3000 | agent API target |
 
 ---
 
@@ -240,7 +257,7 @@ Frozen — extend via new modules, never edit:
 
 | Boundary | Why manual |
 |---|---|
-| Promoting recommendations to live env | Real money — final human gate |
+| Promoting auto-tune recommendations to live env | Real money — agent sends verdict, human runs `setx` |
 | Universe additions/removals | Strategy decision, not optimization |
 | Telegram bot setup | Credentials |
 | First-time T212 connection | API key entry |
@@ -272,10 +289,19 @@ npm run walkforward                     # Honest train/test validation
 npm run universe:health
 npm run verify:execution
 npm run schedule:status
+
+# Agent
+npm run agent                           # Manual agent cycle
+npm run agent:sunday                    # Sunday maintenance
+npm run agent:friday                    # Friday debrief
+npm run agent:listen                    # Telegram listener
+npm run schedule:agent:setup            # Install agent tasks
+npm run schedule:agent:status           # Check agent tasks
+npm run schedule:agent:remove           # Remove agent tasks
 ```
 
 ---
 
 ## 14. Summary in one paragraph
 
-VolumeTurtle is a vertically-integrated trading platform: it collects market data, scans for volume-spike entries on a curated 1480-ticker universe, scores each signal A/B/C/D, executes B+ grades through Trading 212 with 13 layers of pre-flight risk checks, ratchets stops upward as positions move, and as of 2026-04-18 **automatically re-evaluates its own parameters weekly using a sweep + out-of-sample validation pipeline that emits a PROMOTE_OK / OOS_GATE_FAILED recommendation to a JSON file (and Telegram), which a human reviews before applying to live config.** The system is auditable end-to-end (every order, stop, and ratchet persisted), reproducible (UniverseSnapshot eliminates survivorship bias in backtests), and the strategy currently validates at PF 3.42 out-of-sample using G≥B, 1% risk, 8% portfolio heat cap.
+VolumeTurtle is a vertically-integrated trading platform: it collects market data, scans for volume-spike entries on a curated 1480-ticker universe, scores each signal A/B/C/D, and is managed by an **autonomous Claude-powered agent** that runs hourly during market hours. The agent checks T212 connectivity, monitors the equity curve for drawdown, ratchets stops, verifies tickers against T212, checks for pre-market binary events, flags position health concerns, and executes B+ grade signals — all while sending plain-English Telegram summaries. On Sundays it runs the auto-tune pipeline and sends an APPLY/MONITOR/IGNORE verdict; on Fridays it produces a weekly performance debrief. The system is auditable end-to-end (every order, stop, ratchet, and agent decision persisted to `AgentDecisionLog`), reproducible (UniverseSnapshot eliminates survivorship bias in backtests), and the strategy currently validates at PF 3.42 out-of-sample using G≥B, 1% risk, 8% portfolio heat cap.

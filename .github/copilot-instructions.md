@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Algorithmic trading system: volume-spike detection, mechanical trailing stops, composite scoring, and Trading 212 integration. Next.js 14 + TypeScript strict + PostgreSQL + Prisma.
+Algorithmic trading system: volume-spike detection, mechanical trailing stops, composite scoring, Trading 212 integration, and autonomous Claude-powered agent. Next.js 14 + TypeScript strict + PostgreSQL + Prisma.
 
 ## Quick Reference
 
@@ -14,29 +14,43 @@ Algorithmic trading system: volume-spike detection, mechanical trailing stops, c
 | Run scan | `npm run scan` (full) or `npm run scan:dry` (preview) |
 | DB push schema | `npm run db:push` |
 | DB studio | `npm run db:studio` |
-| Backup | `npm run backup` |
-
+| Backup | `npm run backup` || Agent cycle | `npm run agent` |
+| Sunday maintenance | `npm run agent:sunday` |
+| Friday debrief | `npm run agent:friday` |
+| Agent schedule setup | `npm run schedule:agent:setup` |
+| Auto-tune | `npm run tune` or `npm run tune:notify` |
 ## Architecture
 
 ```
 src/
 ├── app/                # Next.js pages + API routes
-│   ├── api/            # ~20 REST endpoints
+│   ├── api/            # REST endpoints (scans, trades, execution, agent, telegram)
 │   └── components/     # Dashboard UI components
+├── agent/              # Autonomous Claude agent
+│   ├── prompt.ts       # System prompts (weekday, Sunday, Friday)
+│   ├── context.ts      # Market state gatherer (positions, signals, risk)
+│   ├── tools.ts        # 13 tool definitions + handlers
+│   ├── executor.ts     # Claude agentic loop (tool calling)
+│   ├── logger.ts       # Decision audit logging
+│   ├── runner.ts       # Weekday entry point
+│   ├── runner-sunday.ts   # Sunday maintenance (snapshot + auto-tune)
+│   ├── runner-friday.ts   # Friday weekly debrief
+│   └── telegram-listener.ts # HALT/RESUME/STATUS via Telegram
 ├── lib/
 │   ├── signals/        # Volume signal, exit signal, regime filter, composite score
 │   ├── risk/           # ATR, position sizing, equity curve, stop ratcheting
 │   ├── data/           # Yahoo Finance fetching + DB caching
 │   ├── cruise-control/ # Intraday stop ratchet daemon
+│   ├── execution/      # Auto-executor with 13 pre-flight checks
 │   ├── t212/           # Trading 212 API client
 │   ├── hbme/           # Momentum/breakout engine
 │   └── config.ts       # Env-driven config with DB overrides
 ├── db/client.ts        # Prisma singleton (globalThis pattern)
 └── __tests__/          # Jest unit tests
-prisma/schema.prisma    # All data models
+prisma/schema.prisma    # All data models (incl. AiSettings, AgentHaltFlag, AgentDecisionLog)
 ```
 
-Detailed system docs: [SYSTEM_BREAKDOWN.md](SYSTEM_BREAKDOWN.md)
+Detailed system docs: [SYSTEM_BREAKDOWN.md](SYSTEM_BREAKDOWN.md) | [SYSTEM_BREAKDOWN_2026-04-18.md](SYSTEM_BREAKDOWN_2026-04-18.md) | [HOW_TO_RUN.md](HOW_TO_RUN.md)
 
 ## Sacred Files — Do Not Modify
 
@@ -89,6 +103,8 @@ Define only the fields/methods you need in that file.
 ### Config
 All config comes from env vars with fallbacks via `envFloat()` / `envInt()` / `envBool()` in `src/lib/config.ts`. DB overrides via `AppSettings` model.
 
+Agent-specific config: `ANTHROPIC_API_KEY`, `AGENT_ENABLED`, `TRADECORE_BASE_URL` (all in `.env`). Agent on/off is also controllable via `AiSettings.enabled` in the DB (Settings UI toggle).
+
 ### Currency
 - Ticker suffix determines currency: `.L` = £ (GBP), `.AS`/`.HE` = € (EUR), no suffix = $ (USD)
 - LSE prices from Yahoo arrive in pence (GBX) — divide by 100 for GBP
@@ -116,6 +132,9 @@ All config comes from env vars with fallbacks via `envFloat()` / `envInt()` / `e
 - **HMR resets module-level state** — use `globalThis` for singletons that must survive Next.js hot reload (see `db/client.ts` pattern).
 - **T212 ticker mapping**: T212 internal tickers (e.g. `PMOl_EQ`) differ from Yahoo tickers (e.g. `HBR.L`). Always map through `getInstruments()`.
 - **Dev server port conflicts**: Kill stale `node.exe` before starting. `START.bat` handles this automatically.
+- **Agent requires dev server running**: The agent calls API routes over HTTP (`TRADECORE_BASE_URL`). If the dev server is down, all tool calls return 4xx/5xx errors.
+- **Agent DB rows must be seeded**: `AiSettings` (id=1) and `AgentHaltFlag` (id=1) must exist. `INSTALL.bat` handles this. If missing, agent exits with context error.
+- **Agent entry-point scripts need `import "dotenv/config"`**: Scripts in `src/agent/` run via `npx tsx`, not Next.js — they don't auto-load `.env`.
 
 ## Task Management
 

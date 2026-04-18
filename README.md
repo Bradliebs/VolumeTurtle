@@ -1,6 +1,6 @@
 # 🐢 VolumeTurtle
 
-A fully mechanical algorithmic trading system. Dual-engine signal detection (volume spikes + momentum breakouts), automated stop management, composite scoring, and Trading 212 integration — no discretionary overrides.
+A fully mechanical algorithmic trading system with an autonomous Claude-powered agent. Dual-engine signal detection (volume spikes + momentum breakouts), automated stop management, composite scoring, Trading 212 integration, and AI-driven execution with Telegram control.
 
 ## What It Does
 
@@ -13,7 +13,11 @@ A fully mechanical algorithmic trading system. Dual-engine signal detection (vol
 - **Equity Curve Circuit Breaker** — Auto-reduces risk at 10% drawdown, pauses at 20%
 - **Composite Scoring** — Ranks signals 0.0–1.0 (grades A/B/C/D)
 - **Position Sizing** — Fixed 2% risk per trade, 1.5× ATR stop distance, fractional shares, max 5 open positions
-- **Auto-Execution** — Two-phase order queue with cancellation window, 11 pre-flight checks, T212 market orders
+- **Auto-Execution** — Two-phase order queue with cancellation window, 13 pre-flight checks, T212 market orders
+- **Autonomous Agent** — Claude-powered hourly cycles: T212 health check, equity curve monitoring, pre-market risk screening, position health flags, plain-English trade explanations via Telegram
+- **Agent Control** — Telegram commands (HALT/RESUME/PAUSE/STATUS), Settings UI toggle, halt flag with reason
+- **Sunday Auto-Tune** — Agent runs parameter sweep + OOS validation, interprets results, sends APPLY/MONITOR/IGNORE verdict
+- **Friday Debrief** — Agent produces weekly performance summary with P&L, win rate, and look-ahead
 - **Trading 212 Integration** — Position sync, stop order management, automatic stop pushing
 - **Scheduled Automation** — Windows Task Scheduler (LSE 17:30, US 22:00)
 - **Backup & Restore** — Auto-backup to local filesystem, JSON/CSV export
@@ -23,9 +27,11 @@ A fully mechanical algorithmic trading system. Dual-engine signal detection (vol
 | Layer | Technology |
 |-------|-----------|
 | Frontend | Next.js 14, React 18, Tailwind CSS |
-| Backend | Next.js API Routes (47 endpoints) |
-| Database | PostgreSQL 15 + Prisma ORM (21 models) |
+| Backend | Next.js API Routes |
+| Database | PostgreSQL 15 + Prisma ORM (24 models) |
 | Data Source | Yahoo Finance (yahoo-finance2) |
+| AI Agent | Anthropic Claude (tool-calling agentic loop) |
+| Notifications | Telegram Bot API |
 | Language | TypeScript (strict mode) |
 | Testing | Jest + ts-jest |
 | Logging | pino (structured JSON) |
@@ -75,6 +81,13 @@ Double-click `START.bat` — it starts Docker, waits for the database, and launc
 | `npm run validate` | Validate ticker universe against Yahoo |
 | `npm run backup` | Manual database backup |
 | `npm run restore` | Restore from JSON backup |
+| `npm run agent` | Run one agent cycle manually |
+| `npm run agent:sunday` | Sunday maintenance (snapshot + auto-tune) |
+| `npm run agent:friday` | Friday weekly debrief |
+| `npm run agent:listen` | Telegram command listener |
+| `npm run tune` | Auto-tune with OOS gate |
+| `npm run walkforward` | Walk-forward validation |
+| `npm run schedule:agent:setup` | Install agent scheduled tasks |
 | `npm run db:push` | Push schema changes to database |
 | `npm run db:studio` | Open Prisma Studio GUI |
 
@@ -97,10 +110,20 @@ src/
 │   ├── login/           # Auth login page
 │   ├── execution/       # Auto-execution pending orders dashboard
 │   ├── journal/         # Trade journal with analytics
-│   ├── settings/        # Settings page
+│   ├── settings/        # Settings page (incl. Agent toggle)
 │   ├── momentum/        # Momentum dashboard page
 │   ├── watchlist/        # Watchlist page
-│   └── api/             # 47 REST endpoints
+│   └── api/             # REST endpoints (scans, trades, execution, agent, telegram)
+├── agent/               # Autonomous Claude agent
+│   ├── prompt.ts        # System prompts (weekday, Sunday, Friday)
+│   ├── context.ts       # Market state gatherer
+│   ├── tools.ts         # 13 tool definitions + handlers
+│   ├── executor.ts      # Claude agentic loop
+│   ├── logger.ts        # Decision audit logging
+│   ├── runner.ts        # Weekday entry point
+│   ├── runner-sunday.ts # Sunday maintenance
+│   ├── runner-friday.ts # Friday weekly debrief
+│   └── telegram-listener.ts # HALT/RESUME/STATUS
 ├── lib/
 │   ├── signals/         # Volume signal, exit signal, regime filter, composite score
 │   ├── risk/            # ATR, position sizing, equity curve, stop ratcheting
@@ -116,18 +139,20 @@ src/
 │   ├── currency.ts      # GBP/USD/EUR ticker currency handling
 │   └── config.ts        # Environment configuration + DB overrides
 ├── db/                  # Prisma client singleton
-└── __tests__/           # Unit tests (Jest, 292 tests)
+└── __tests__/           # Unit tests (Jest)
 prisma/
-└── schema.prisma        # 21 data models
+└── schema.prisma        # 24 data models (incl. AiSettings, AgentHaltFlag, AgentDecisionLog)
 ```
 
 ## Authentication
 
-Set `DASHBOARD_TOKEN` in `.env` to enable dashboard authentication. When set, all routes require a valid token (cookie or Bearer header). The scheduled scan endpoint uses its own `SCHEDULED_SCAN_TOKEN`.
+Set `DASHBOARD_TOKEN` in `.env` to enable dashboard authentication. When set, all routes require a valid token (cookie or Bearer header). The scheduled scan endpoint uses its own `SCHEDULED_SCAN_TOKEN`. The agent uses `ANTHROPIC_API_KEY` for Claude API access.
 
 ## Documentation
 
-See [SYSTEM_BREAKDOWN.md](SYSTEM_BREAKDOWN.md) for comprehensive system documentation including signal engine, risk management, API reference, and design decisions.
+See [HOW_TO_RUN.md](HOW_TO_RUN.md) for the step-by-step operational runbook.
+See [SYSTEM_BREAKDOWN_2026-04-18.md](SYSTEM_BREAKDOWN_2026-04-18.md) for the full system architecture.
+See [SYSTEM_BREAKDOWN.md](SYSTEM_BREAKDOWN.md) for the original signal engine documentation.
 
 ## Disclaimer
 

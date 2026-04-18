@@ -44,8 +44,9 @@ setx HEAT_CAP_PCT 0.08
 **6. Install the scheduled tasks**
 ```powershell
 npm run schedule:setup
+npm run schedule:agent:setup
 ```
-This adds 6 Windows scheduled tasks (scans, executor, cruise control, snapshots, auto-tune).
+This adds 6 core trading tasks + 5 agent tasks to Windows Task Scheduler.
 
 ---
 
@@ -155,8 +156,9 @@ setx HEAT_CAP_PCT 0.05
 **Stop everything cleanly:**
 ```powershell
 npm run schedule:remove
+npm run schedule:agent:remove
 ```
-Removes all scheduled tasks. Re-run `npm run schedule:setup` when you want it back.
+Removes all scheduled tasks. Re-run the setup commands when you want them back.
 
 ---
 
@@ -170,6 +172,7 @@ Removes all scheduled tasks. Re-run `npm run schedule:setup` when you want it ba
 | Auto-tune failed | Check `%USERPROFILE%\VolumeTurtle\logs\autotune.log` |
 | Agent cycle failed | Check `%USERPROFILE%\VolumeTurtle\logs\agent.log` |
 | Agent Sunday failed | Check `%USERPROFILE%\VolumeTurtle\logs\agent-sunday.log` |
+| Agent can't execute | Verify dev server is running + check `TRADECORE_BASE_URL` in `.env` |
 | Telegram silent | Verify `TelegramSettings.enabled = true` in DB |
 
 ---

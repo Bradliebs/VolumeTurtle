@@ -294,6 +294,18 @@ if !SCHED_FAIL! gtr 0 (
 )
 
 :: ─────────────────────────────────────────
+:: Step 6b: Set up agent scheduled tasks
+:: ─────────────────────────────────────────
+echo  [6b/7] Setting up AI agent scheduled tasks...
+echo         (These are optional — agent requires ANTHROPIC_API_KEY in .env)
+call npx tsx scripts/schedule-agent.ts setup >nul 2>nul
+if errorlevel 1 (
+  echo         [!] Could not create agent tasks — run "npm run schedule:agent:setup" manually
+) else (
+  echo         Agent tasks created (hourly cycle, Telegram listener, Sunday/Friday runners)
+)
+
+:: ─────────────────────────────────────────
 :: Step 7: Start the app
 :: ─────────────────────────────────────────
 echo.
@@ -316,6 +328,12 @@ echo  ║   - LSE scan runs at 17:30 (weekdays)     ║
 echo  ║   - US  scan runs at 22:00 (weekdays)     ║
 echo  ║   - Stops updated hourly 08:00-17:00      ║
 echo  ║   - Execution scheduler 14:00-20:00       ║
+echo  ║                                           ║
+echo  ║   AI AGENT (if ANTHROPIC_API_KEY set):     ║
+echo  ║   - Agent cycle hourly 08:00-21:00        ║
+echo  ║   - Telegram listener every 2 min         ║
+echo  ║   - Sunday snapshot + auto-tune           ║
+echo  ║   - Friday weekly debrief                 ║
 echo  ║                                           ║
 echo  ║   These run automatically as long as      ║
 echo  ║   your computer is on and logged in.      ║

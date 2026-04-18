@@ -46,6 +46,11 @@ for %%n in (
   "VolumeTurtle_Scan_US"
   "VolumeTurtle_CruiseControl"
   "VolumeTurtle_ExecutionScheduler"
+  "VolumeTurtle_Agent"
+  "VolumeTurtle_AgentListen"
+  "VolumeTurtle_AgentSnapshot"
+  "VolumeTurtle_AgentAutoTune"
+  "VolumeTurtle_AgentFriday"
 ) do (
   schtasks /delete /tn %%n /f >nul 2>nul
   if errorlevel 1 (
@@ -85,7 +90,7 @@ echo  ║                                           ║
 echo  ║   Uninstall complete.                     ║
 echo  ║                                           ║
 echo  ║   Removed:                                ║
-echo  ║   - Scheduled tasks (automatic scans)     ║
+echo  ║   - Scheduled tasks (scans + agent)       ║
 echo  ║   - SCHEDULED_SCAN_TOKEN system variable  ║
 echo  ║   - Database container                    ║
 echo  ║                                           ║
