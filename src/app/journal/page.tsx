@@ -92,6 +92,12 @@ export default function JournalPage() {
             PENDING
           </Link>
           <Link
+            href="/backtest"
+            className="text-[var(--dim)] hover:text-white transition-colors"
+          >
+            BACKTEST
+          </Link>
+          <Link
             href="/settings"
             className="text-[var(--dim)] hover:text-white transition-colors"
           >

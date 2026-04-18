@@ -474,3 +474,112 @@ model RetryQueue {
   @@index([nextRetryAt])
   @@index([ticker])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Backtester models — see src/lib/backtest/
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One backtest execution. Stores parameters + summary metrics.
+model BacktestRun {
+  id              Int       @id @default(autoincrement())
+  startedAt       DateTime  @default(now())
+  completedAt     DateTime?
+  label           String?   // human-friendly description
+  startDate       DateTime  // inclusive backtest window start
+  endDate         DateTime  // inclusive backtest window end
+  initialCapital  Float
+  // Strategy params snapshot (so results are reproducible)
+  engine          String    @default("volume") // "volume" | "momentum"
+  volumeMultiplier Float?
+  rangePosThreshold Float?
+  hardStopAtrMult  Float?
+  trailingStopDays Int?
+  riskPctPerTrade  Float?
+  // Cost model snapshot
+  commissionPerTrade Float
+  slippageBps      Float
+  spreadBps        Float
+  // Tier-2 risk control snapshot
+  convictionMultA  Float?
+  convictionMultB  Float?
+  convictionMultC  Float?
+  convictionMultD  Float?
+  portfolioHeatCapPct Float?
+  maxPositionsPerSector Int?
+  // Result metrics (filled at completion)
+  trades           Int      @default(0)
+  wins             Int      @default(0)
+  losses           Int      @default(0)
+  winRate          Float?
+  profitFactor     Float?
+  expectancyR      Float?   // average R-multiple per trade
+  totalReturnPct   Float?
+  cagrPct          Float?
+  sharpe           Float?
+  sortino          Float?
+  maxDrawdownPct   Float?
+  maxDrawdownDays  Int?
+  finalEquity      Float?
+  // Tier-2 diagnostics — count of would-be entries blocked by gates.
+  blockedByHeatCap     Int?
+  blockedBySectorCap   Int?
+  // Actual covered window (may be narrower than [startDate, endDate] when
+  // historical quote coverage is sparse — surfaced as a UI warning).
+  actualStartDate  DateTime?
+  actualEndDate    DateTime?
+  actualYears      Float?
+  status           String   @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  error            String?
+  // For walk-forward — links train/validate/test windows
+  parentRunId      Int?
+  fold             String?  // "train" | "validate" | "test" | null
+  notes            String?
+
+  backtestTrades   BacktestTrade[]
+
+  @@index([startedAt])
+  @@index([parentRunId])
+}
+
+/// A simulated trade in a backtest. Mirrors live Trade fields where relevant.
+model BacktestTrade {
+  id              Int       @id @default(autoincrement())
+  runId           Int
+  run             BacktestRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ticker          String
+  entryDate       DateTime
+  entryPrice      Float    // includes slippage
+  rawEntryPrice   Float    // close before slippage
+  shares          Float
+  hardStop        Float
+  exitDate        DateTime?
+  exitPrice       Float?   // includes slippage
+  rawExitPrice    Float?
+  exitReason      String?  // "HARD_STOP" | "TRAILING_STOP" | "END_OF_BACKTEST"
+  rMultiple       Float?
+  pnl             Float?   // gross P&L in account currency
+  pnlNet          Float?   // after commission + slippage
+  costs           Float?   // commission + spread + slippage cost
+  barsHeld        Int?
+  signalGrade     String?
+  signalScore     Float?
+  volumeRatio     Float?
+  atr20           Float?
+
+  @@index([runId])
+  @@index([ticker])
+}
+
+/// Point-in-time snapshot of the trading universe.
+/// Eliminates survivorship bias in backtests by replaying signals only
+/// against tickers that were actually in the universe on that historical date.
+model UniverseSnapshot {
+  id          Int      @id @default(autoincrement())
+  snapshotDate DateTime
+  ticker      String
+  sector      String?
+  source      String   @default("manual") // "manual" | "csv" | "auto"
+
+  @@unique([snapshotDate, ticker])
+  @@index([snapshotDate])
+}

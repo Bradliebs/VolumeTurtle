@@ -534,6 +534,53 @@ export async function preFlightChecks(
     log.warn({ error: err instanceof Error ? err.message : String(err) }, "Sector concentration check failed — continuing");
   }
 
+  // ── Check 13: PORTFOLIO HEAT CAP ──
+  // Total open risk = sum of (entryPrice − hardStop) × shares across OPEN trades.
+  // Walk-forward validation (npm run walkforward) recommends 5% as the OOS-stable cap.
+  // Opt-in via env var HEAT_CAP_PCT (decimal, e.g. 0.05). When unset, no enforcement.
+  try {
+    const heatCapEnv = process.env["HEAT_CAP_PCT"];
+    const heatCapPct = heatCapEnv ? parseFloat(heatCapEnv) : NaN;
+
+    if (Number.isFinite(heatCapPct) && heatCapPct > 0 && heatCapPct <= 0.5) {
+      const balance = (await db.accountSnapshot.findFirst({
+        orderBy: { date: "desc" },
+      }))?.balance ?? 0;
+
+      if (balance > 0) {
+        // Compute existing open risk in GBP (account currency).
+        const openTrades = await db.trade.findMany({ where: { status: "OPEN" } });
+        const gbpUsdRate = await getGbpUsdRate();
+        const gbpEurRate = await getGbpEurRate();
+
+        let openRiskGbp = 0;
+        for (const t of openTrades) {
+          const riskNative = Math.max(0, (t.entryPrice - t.hardStop) * t.shares);
+          openRiskGbp += convertToGbp(riskNative, t.ticker, gbpUsdRate, gbpEurRate);
+        }
+
+        const newRiskNative = Math.max(0, (order.suggestedEntry - order.suggestedStop) * order.suggestedShares);
+        const newRiskGbp = convertToGbp(newRiskNative, order.ticker, gbpUsdRate, gbpEurRate);
+        const totalRiskGbp = openRiskGbp + newRiskGbp;
+        const totalRiskPct = totalRiskGbp / balance;
+
+        if (totalRiskPct > heatCapPct) {
+          failures.push(
+            `HEAT_CAP_EXCEEDED — open risk ${(openRiskGbp / balance * 100).toFixed(2)}% + new ${(newRiskGbp / balance * 100).toFixed(2)}% = ${(totalRiskPct * 100).toFixed(2)}% > cap ${(heatCapPct * 100).toFixed(1)}%. Close an existing position first.`,
+          );
+        } else {
+          log.info(`[PreFlight] Check 13 — heat OK: ${(totalRiskPct * 100).toFixed(2)}% / ${(heatCapPct * 100).toFixed(1)}% cap (${openTrades.length} open positions)`);
+        }
+      } else {
+        log.info("[PreFlight] Check 13 — no account balance, skipping heat cap");
+      }
+    } else {
+      log.info("[PreFlight] Check 13 — heat cap not configured (set HEAT_CAP_PCT env var to enable)");
+    }
+  } catch (err) {
+    log.warn({ error: err instanceof Error ? err.message : String(err) }, "Heat cap check failed — continuing");
+  }
+
   return {
     passed: failures.length === 0,
     failures,

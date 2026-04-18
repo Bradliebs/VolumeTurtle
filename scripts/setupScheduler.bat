@@ -61,6 +61,26 @@ schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
   /f
 
 echo   Execution scheduler — every 5 min 08:00-21:00 on weekdays
+
+REM --- Universe Snapshot: Sunday 18:00 (markets closed, no live activity) ---
+schtasks /create /tn "VolumeTurtle_UniverseSnapshot" ^
+  /tr "cmd /c cd /d \"!INSTALL_DIR!\" && npx tsx scripts/snapshotUniverse.ts >> \"%USERPROFILE%\VolumeTurtle\logs\snapshot.log\" 2>&1" ^
+  /sc weekly ^
+  /d SUN ^
+  /st 18:00 ^
+  /f
+
+echo   Universe snapshot — every Sunday at 18:00
+
+REM --- Auto-Tune: Sunday 19:00 (after snapshot, before Mon trading) ---
+schtasks /create /tn "VolumeTurtle_AutoTune" ^
+  /tr "cmd /c cd /d \"!INSTALL_DIR!\" && npx tsx scripts/autoTune.ts --years 2 --notify >> \"%USERPROFILE%\VolumeTurtle\logs\autotune.log\" 2>&1" ^
+  /sc weekly ^
+  /d SUN ^
+  /st 19:00 ^
+  /f
+
+echo   Auto-tune — every Sunday at 19:00 (writes data\recommendations\latest.json)
 echo.
 
 echo Done. Verifying tasks:
@@ -69,10 +89,14 @@ schtasks /query /tn "VolumeTurtle_Scan_LSE"
 schtasks /query /tn "VolumeTurtle_Scan_US"
 schtasks /query /tn "VolumeTurtle_CruiseControl"
 schtasks /query /tn "VolumeTurtle_ExecutionScheduler"
+schtasks /query /tn "VolumeTurtle_UniverseSnapshot"
+schtasks /query /tn "VolumeTurtle_AutoTune"
 echo.
 echo To remove all tasks:
 echo   schtasks /delete /tn "VolumeTurtle_Scan_LSE" /f
 echo   schtasks /delete /tn "VolumeTurtle_Scan_US" /f
 echo   schtasks /delete /tn "VolumeTurtle_CruiseControl" /f
 echo   schtasks /delete /tn "VolumeTurtle_ExecutionScheduler" /f
+echo   schtasks /delete /tn "VolumeTurtle_UniverseSnapshot" /f
+echo   schtasks /delete /tn "VolumeTurtle_AutoTune" /f
 pause

@@ -84,9 +84,23 @@ if errorlevel 1 (
 echo         Database is ready
 
 :: ─────────────────────────────────────────
-:: Step 3: Start the app
+:: Step 3: Sync Prisma client with current schema
 :: ─────────────────────────────────────────
-echo  [3/3] Starting VolumeTurtle...
+:: Cheap and idempotent — ensures any schema changes since last start
+:: (new models, added fields, etc.) are reflected in the generated client.
+:: Skips itself silently on failure so a transient issue doesn't block startup.
+echo  [3/4] Syncing Prisma client...
+call npx prisma generate >nul 2>nul
+if errorlevel 1 (
+  echo         WARNING: prisma generate failed — continuing with existing client
+) else (
+  echo         Prisma client up to date
+)
+
+:: ─────────────────────────────────────────
+:: Step 4: Start the app
+:: ─────────────────────────────────────────
+echo  [4/4] Starting VolumeTurtle...
 
 :: Kill any stale node processes on port 3000
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3000 " ^| findstr "LISTENING" 2^>nul') do (

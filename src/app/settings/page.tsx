@@ -616,6 +616,7 @@ export default function SettingsPage() {
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
+          <Link href="/backtest" className="text-[var(--dim)] hover:text-white transition-colors">BACKTEST</Link>
           <span className="text-white font-semibold border-b-2 border-[var(--green)] pb-0.5">SETTINGS</span>
         </nav>
       </header>

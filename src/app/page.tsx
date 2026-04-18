@@ -278,6 +278,7 @@ export default function Home() {
           <Link href="/momentum" className="text-[var(--dim)] hover:text-white transition-colors">MOMENTUM</Link>
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
+          <Link href="/backtest" className="text-[var(--dim)] hover:text-white transition-colors">BACKTEST</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--green)]">

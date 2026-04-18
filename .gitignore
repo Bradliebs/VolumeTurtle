@@ -39,4 +39,9 @@ next-env.d.ts
 # logs
 /logs
 
+# auto-tune recommendation outputs (generated, not source)
+/data/recommendations
+/data/walkforward
+/sweep-*.csv
+
 /src/generated/prisma

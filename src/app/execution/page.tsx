@@ -168,6 +168,7 @@ export default function PendingOrdersPage() {
           <span className="text-white font-semibold border-b-2 border-[var(--amber)] pb-0.5">
             PENDING {pendingCount > 0 && <span className="text-[var(--amber)]">({pendingCount})</span>}
           </span>
+          <Link href="/backtest" className="text-[var(--dim)] hover:text-white transition-colors">BACKTEST</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
       </header>
