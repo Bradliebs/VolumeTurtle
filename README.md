@@ -148,6 +148,85 @@ prisma/
 
 Set `DASHBOARD_TOKEN` in `.env` to enable dashboard authentication. When set, all routes require a valid token (cookie or Bearer header). The scheduled scan endpoint uses its own `SCHEDULED_SCAN_TOKEN`. The agent uses `ANTHROPIC_API_KEY` for Claude API access.
 
+## Autonomous Agent
+
+The system includes a Claude-powered autonomous agent that manages trades, monitors risk, and reports via Telegram.
+
+### What the agent needs
+
+1. **Dev server running** — agent calls `http://localhost:3000/api/...` for all operations
+2. **`ANTHROPIC_API_KEY`** in `.env` — get from [console.anthropic.com](https://console.anthropic.com)
+3. **`AGENT_ENABLED=true`** in `.env` or toggle on in Settings UI
+4. **`DASHBOARD_TOKEN`** in `.env` — agent authenticates with `Bearer {token}`
+5. **DB rows seeded** — `AiSettings` (id=1) and `AgentHaltFlag` (id=1) must exist. `INSTALL.bat` handles this.
+
+### How it works
+
+Each hourly cycle, the agent gathers your live positions, pending signals, account balance, and market state. It sends this to Claude with 13 tool definitions. Claude reasons through a 6-step decision framework:
+
+1. **Safety check** — halt flag, drawdown state, regime
+2. **T212 connection** — is the broker API reachable? Auto-halts if not.
+3. **Equity curve** — drawdown from peak. CRITICAL (>7%) → auto-halt.
+4. **Stop ratchets** — push stops upward + check pre-market risk for open positions + flag position health
+5. **New entries** — verify ticker on T212 → check for earnings/FDA events → execute if all clear
+6. **Telegram summary** — plain-English report of everything that happened
+
+### The 13 tools
+
+| Tool | Purpose |
+|---|---|
+| `check_t212_connection` | Verify broker is reachable. Halt if down. |
+| `check_equity_curve` | Drawdown from peak. WATCH/CAUTION/CRITICAL levels. |
+| `ratchet_stops` | Push stops upward for all open positions. |
+| `check_premarket_risk` | Web-search for earnings/FDA events. HIGH → skip signal. |
+| `flag_position_health` | Flag stagnant/underwater positions (WATCH/CONCERN/URGENT). |
+| `verify_ticker` | Confirm ticker exists on T212, map Yahoo → T212 symbol. |
+| `execute_signal` | Place market order + stop via T212. |
+| `close_position` | Market-sell an open position. |
+| `set_halt` | Emergency halt — pauses all execution. |
+| `send_telegram_summary` | Send cycle report to your phone. |
+| `run_universe_snapshot` | Trigger weekly universe snapshot (Sunday). |
+| `run_autotune` | Run parameter sweep + OOS validation (Sunday). |
+| `get_weekly_summary` | Query week's trades and P&L (Friday). |
+
+### API routes the agent calls
+
+| Route | Method | What it does |
+|---|---|---|
+| `/api/cruise-control/ratchet` | POST | Triggers stop ratchet for all open positions |
+| `/api/execution/execute` | POST | Executes a PendingOrder through 13 pre-flight checks |
+| `/api/trades/[id]/close` | POST | Closes an open trade with agent reasoning |
+| `/api/telegram/send` | POST | Sends a message via Telegram |
+| `/api/agent/settings` | GET/PATCH | Agent state (enabled, halted, last cycle) |
+
+### Three cycle types
+
+| Cycle | Schedule | What it does |
+|---|---|---|
+| **Weekday** (`npm run agent`) | Mon-Fri hourly 08:00–21:00 | Full trading cycle with all 6 steps above |
+| **Sunday** (`npm run agent:sunday`) | Sun 18:00 + 19:00 | Universe snapshot → auto-tune → APPLY/MONITOR/IGNORE verdict |
+| **Friday** (`npm run agent:friday`) | Fri 21:30 | Weekly P&L, win rate, position review, look-ahead |
+
+### Telegram control
+
+Send these messages to your Telegram bot:
+
+| Command | Effect |
+|---|---|
+| `HALT` | Stop all execution immediately |
+| `HALT market crash` | Halt with a specific reason |
+| `RESUME` | Clear the halt flag |
+| `PAUSE` | Stop new entries only (stops still ratchet) |
+| `UNPAUSE` | Re-enable entries |
+| `STATUS` | Get current positions, heat, regime |
+
+### Settings UI
+
+Open `http://localhost:3000/settings` → scroll to **🤖 Autonomous Agent**:
+- Toggle agent on/off
+- See last cycle time and tool call count
+- HALT / RESUME buttons with reason display
+
 ## Documentation
 
 See [HOW_TO_RUN.md](HOW_TO_RUN.md) for the step-by-step operational runbook.

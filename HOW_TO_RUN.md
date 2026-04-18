@@ -179,6 +179,76 @@ Removes all scheduled tasks. Re-run the setup commands when you want them back.
 
 ## H. Agent control
 
+### What the agent needs to run
+
+The agent is a separate process that calls your Next.js API routes over HTTP. For it to work:
+
+1. **Dev server must be running** — the agent calls `http://localhost:3000/api/...` for everything. If the server is down, all tool calls fail.
+2. **`ANTHROPIC_API_KEY`** must be set in `.env` — get yours from [console.anthropic.com](https://console.anthropic.com) → API Keys.
+3. **`AGENT_ENABLED=true`** in `.env` or `AiSettings.enabled = true` in the DB (Settings UI toggle).
+4. **`DASHBOARD_TOKEN`** must be set — the agent authenticates its API calls with `Authorization: Bearer {DASHBOARD_TOKEN}`.
+5. **`AiSettings` and `AgentHaltFlag` rows must exist** in the DB (id=1). `INSTALL.bat` handles this. If missing, run:
+   ```powershell
+   echo 'INSERT INTO "AiSettings" (id, enabled, model, "maxTokens", "createdAt", "updatedAt") VALUES (1, false, ''claude-sonnet-4-20250514'', 2048, NOW(), NOW()) ON CONFLICT (id) DO NOTHING;' | npx prisma db execute --stdin
+   echo 'INSERT INTO "AgentHaltFlag" (id, halted, "updatedAt") VALUES (1, false, NOW()) ON CONFLICT (id) DO NOTHING;' | npx prisma db execute --stdin
+   ```
+
+### How the agent works
+
+Each hourly cycle, the agent:
+
+1. **Checks AiSettings** — is it enabled? If not, exits immediately.
+2. **Gathers context** — queries open positions, pending signals, account balance, halt flag, and recent activity from the DB.
+3. **Calls Claude** with the context + system prompt + 13 tool definitions.
+4. **Claude reasons** through a 6-step decision framework and calls tools in order:
+   - `check_t212_connection` — is T212 reachable?
+   - `check_equity_curve` — drawdown from peak? Warning level?
+   - `ratchet_stops` — push stops upward for all open positions
+   - `check_premarket_risk` — any earnings/FDA events for open or pending tickers?
+   - `flag_position_health` — flag stagnant, underwater, or aging positions
+   - `verify_ticker` → `execute_signal` — validate then execute new signals
+   - `send_telegram_summary` — plain-English summary of everything
+5. **Logs the decision** to `AgentDecisionLog` — full context, reasoning, actions, and outcome.
+
+### API routes the agent uses
+
+| Route | Method | What it does |
+|---|---|---|
+| `/api/cruise-control/ratchet` | POST | Triggers stop ratchet for all open positions |
+| `/api/execution/execute` | POST | Executes a PendingOrder through all 13 pre-flight checks |
+| `/api/trades/[id]/close` | POST | Closes an open trade with agent reasoning |
+| `/api/telegram/send` | POST | Sends a message via Telegram |
+| `/api/agent/settings` | GET | Fetches agent state (enabled, halted, last cycle) |
+| `/api/agent/settings` | PATCH | Toggles agent enabled/halted from Settings UI |
+
+All routes require `Authorization: Bearer {DASHBOARD_TOKEN}`.
+
+### The 13 agent tools
+
+| Tool | When called | What it does |
+|---|---|---|
+| `check_t212_connection` | Every cycle, first | Verifies T212 is reachable. Halts if down. |
+| `check_equity_curve` | Every cycle, after T212 check | Checks drawdown from peak. CRITICAL → auto-halt. |
+| `ratchet_stops` | Every cycle | Pushes stops upward for all open positions. |
+| `check_premarket_risk` | Before executing + for open positions | Web-searches for earnings/FDA events. HIGH → skip. |
+| `flag_position_health` | After ratcheting | Flags stagnant/underwater positions (WATCH/CONCERN/URGENT). |
+| `verify_ticker` | Before every execution | Confirms ticker exists on T212 and maps the symbol. |
+| `execute_signal` | When a pending signal passes all checks | Places market order + stop via T212. |
+| `close_position` | On HALT command or critical risk | Market-sells an open position. |
+| `set_halt` | On T212 outage or critical drawdown | Sets the halt flag to pause all execution. |
+| `send_telegram_summary` | Every cycle, last | Sends the cycle summary to your phone. |
+| `run_universe_snapshot` | Sunday 18:00 | Triggers the weekly universe snapshot. |
+| `run_autotune` | Sunday 19:00 | Runs the auto-tune pipeline, returns recommendation. |
+| `get_weekly_summary` | Friday 21:30 | Queries the week's trades, P&L, and agent activity. |
+
+### Three cycle types
+
+| Cycle | When | What it does |
+|---|---|---|
+| **Weekday** (`npm run agent`) | Mon-Fri hourly | Full trading cycle: T212 check → equity curve → ratchets → risk checks → executions → telegram |
+| **Sunday** (`npm run agent:sunday`) | Sun 18:00 + 19:00 | Maintenance: universe snapshot → auto-tune → interpret results → APPLY/MONITOR/IGNORE verdict |
+| **Friday** (`npm run agent:friday`) | Fri 21:30 | Debrief: weekly P&L, win rate, position health, agent activity, look-ahead |
+
 ### Enable / disable
 
 **Settings UI** — go to `http://localhost:3000/settings`, scroll to "Autonomous Agent", toggle on/off. Takes effect on the next cycle.
