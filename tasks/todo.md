@@ -63,6 +63,23 @@
 ### Review
 
 - Added DB-backed endpoint slot reservation in `src/lib/t212/client.ts` using the existing `Settings` table (`t212_rate_next_allowed_at:*` keys).
+
+## Backlog
+
+- [ ] **Conditional Displacement Rule** — When all position slots are occupied AND an incoming signal is Grade B or better AND an existing position is >15 days old with P&L between -1R and +0.5R, flag it as a displacement candidate so the new signal can take its slot.
+  - **Source:** Agent-proposed design (2026-04-19) after spotting tension between full-portfolio state and a fresh Grade B signal with no available slot.
+  - **Key insight:** This is a *slot-quality gate*, not a time-stop. The rule deliberately excludes positions running well (e.g. +1R at 20 days does NOT get displaced) — only genuinely dead weight in the dead band qualifies. Preserves right-tail convexity.
+  - **Thresholds (proposed, conservative):**
+    - Age: ≥15 days since entry
+    - P&L band: between -1R and +0.5R (the "neither working nor stopped out" zone)
+    - Incoming signal: Grade B or better
+    - Trigger condition: all slots occupied (no free capacity)
+  - **Implementation guardrails:**
+    - Agent **flags only** — never auto-closes. Human confirms displacement.
+    - Requires backtest validation against historical trades before shipping (does displacing dead-band positions actually improve aggregate R? or does it churn names that would have eventually mean-reverted to a winner?)
+    - Likely lives as a new module under `src/lib/risk/` (do not modify sacred files like `positionSizer.ts` or `ratchetStops.ts`).
+    - New tool for the agent (`flag_displacement_candidate`) added to `src/agent/tools.ts` once validated.
+  - **Status:** Not approved for implementation. Backtest first, then re-evaluate thresholds.
 - Reservation uses a compare-and-set loop (`findUnique` + `updateMany where key+value`) so concurrent processes serialize endpoint access without requiring schema migrations.
 - Existing in-memory pacing remains as fallback if DB access fails.
 - Verification: `npm test` passed with 13/13 suites and 193/193 tests.
