@@ -35,12 +35,24 @@ const TASKS = [
     tr: `cmd /c cd /d "${INSTALL_DIR}" && npx tsx src/agent/runner-friday.ts >> "${LOG_DIR}\\agent-friday.log" 2>&1`,
     schedule: `/sc weekly /d FRI /st 21:30`,
   },
-    {
-      name: "VolumeTurtle_Cleanup",
-      description: "Daily DB cleanup — stale RetryQueue + expired PendingOrders at 06:00",
-      tr: `cmd /c curl -s -X POST http://localhost:3000/api/internal/cleanup -H "Authorization: Bearer %DASHBOARD_TOKEN%" >> "${LOG_DIR}\\cleanup.log" 2>&1`,
-      schedule: `/sc daily /st 06:00`,
-    },
+  {
+    name: "VolumeTurtle_Cleanup",
+    description: "Daily DB cleanup — stale RetryQueue + expired PendingOrders at 06:00",
+    tr: `cmd /c cd /d "${INSTALL_DIR}" && scripts\\cleanup.bat`,
+    schedule: `/sc daily /st 06:00`,
+  },
+  {
+    name: "VolumeTurtle_Watchdog",
+    description: "Dev server watchdog — every 5 min 07:55–21:05 weekdays, restarts if down",
+    tr: `cmd /c cd /d "${INSTALL_DIR}" && scripts\\watchdog.bat`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:55 /ri 5 /du 13:15`,
+  },
+];
+
+function run(cmd: string): void {
+  try {
+    execSync(cmd, { stdio: "inherit" });
+  } catch {
     // schtasks returns non-zero on some queries when task doesn't exist
   }
 }
