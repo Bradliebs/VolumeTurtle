@@ -79,6 +79,26 @@ export async function POST(
 
     log.info({ id, ticker, exitPrice, agentReasoning }, "Trade closed by agent");
 
+    // Fire-and-forget: ask the agent to write a post-mortem journal entry.
+    // We do not await — journal writing calls Anthropic and can take seconds.
+    try {
+      const baseUrl =
+        process.env["TRADECORE_BASE_URL"] ?? `http://localhost:${process.env["PORT"] ?? 3000}`;
+      const dashToken = process.env["DASHBOARD_TOKEN"] ?? "";
+      void fetch(`${baseUrl}/api/agent/journal`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(dashToken ? { Authorization: `Bearer ${dashToken}` } : {}),
+        },
+        body: JSON.stringify({ tradeId: id }),
+      }).catch((err: unknown) => {
+        log.warn({ id, err }, "Trade journal POST failed (non-fatal)");
+      });
+    } catch {
+      /* non-fatal */
+    }
+
     return NextResponse.json({
       ok: true,
       tradeId: id,

@@ -80,6 +80,14 @@
     - Likely lives as a new module under `src/lib/risk/` (do not modify sacred files like `positionSizer.ts` or `ratchetStops.ts`).
     - New tool for the agent (`flag_displacement_candidate`) added to `src/agent/tools.ts` once validated.
   - **Status:** Not approved for implementation. Backtest first, then re-evaluate thresholds.
+- [ ] **Close route latent bug** — `currentStop` reference reads a field that doesn't exist on Trade model (field is `trailingStop` or `trailingStopPrice`). Fix when touching the close route next.
+- [ ] **GBX→GBP normalisation** — `pnlGbp` calculation in trade journal and close route uses raw price units. For `.L` tickers Yahoo prices are in pence, so `pnlGbp` is actually `pnlGbx`. Needs a normalisation pass across all pnl calculations.
+- [ ] **Regime health data resilience** — `check_regime_health` fetches SPY/^FTSE live from Yahoo. If Yahoo is down, regime health fails. Consider seeding these benchmark tickers into the `DailyQuote` universe so the handler can fall back to cached DB data.
+- [ ] **Universe curation N+1 queries** — `curate_universe` runs 3 queries per ticker × 1,429 tickers ≈ 4,300 queries. Currently fast enough locally but should be refactored to batch queries using `groupBy` over `DailyQuote` and `PendingOrder` if it becomes slow. Low priority.
+- [ ] **Regime health cross-process cache** — current cache is module-level (resets per `tsx` invocation). For true daily caching across hourly cycles, store the result in `AppSettings` or a new `AgentCache` table keyed by date. Low priority — one Yahoo call per cycle is within rate limits.
+- [ ] **Regime history table** — `run_drawdown_forensics` uses a heuristic for `REGIME_FAILURE` cause (currently bearish + 5d window). True detection needs a `RegimeHistory` table logging each regime flip with date. Add when drawdown forensics needs more precision.
+- [ ] **Drawdown forensics open position P&L** — currently uses mark-to-stop. Consider mark-to-last-price for more accurate contribution calc, but requires Yahoo fetch per ticker during CRITICAL alert. Evaluate cost vs accuracy tradeoff.
+- [ ] **AgentDecisionLog skipped signal detection** — currently uses brittle string match on `actionsJson`. Add a structured `skippedSignals` Json field to `AgentDecisionLog` so forensics can query it reliably.
 - Reservation uses a compare-and-set loop (`findUnique` + `updateMany where key+value`) so concurrent processes serialize endpoint access without requiring schema migrations.
 - Existing in-memory pacing remains as fallback if DB access fails.
 - Verification: `npm test` passed with 13/13 suites and 193/193 tests.

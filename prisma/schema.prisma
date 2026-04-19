@@ -621,3 +621,25 @@ model AgentDecisionLog {
   errorMessage   String?
   createdAt      DateTime @default(now())
 }
+
+/// Plain-English post-mortem written by the agent when a trade closes.
+/// One entry per trade. tradeId is String to match Trade.id (cuid).
+model TradeJournal {
+  id          Int      @id @default(autoincrement())
+  tradeId     String   @unique
+  ticker      String
+  openedAt    DateTime
+  closedAt    DateTime
+  holdDays    Int
+  entryPrice  Float
+  exitPrice   Float
+  pnlR        Float
+  pnlGbp      Float
+  grade       String
+  narrative   String   @db.Text
+  lessonsJson Json
+  createdAt   DateTime @default(now())
+
+  @@index([ticker])
+  @@index([closedAt])
+}
