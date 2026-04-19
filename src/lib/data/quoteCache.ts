@@ -1,5 +1,17 @@
 import { prisma } from "@/db/client";
 import type { DailyQuote } from "@/lib/data/fetchQuotes";
+import { createLogger } from "@/lib/logger";
+
+const log = createLogger("quoteCache");
+
+/** Safe BigInt conversion — returns BigInt(0) for non-finite values. */
+function safeBigIntVolume(volume: number, ticker?: string): bigint {
+  if (!Number.isFinite(volume)) {
+    log.warn({ ticker, rawVolume: volume }, "Non-finite volume — defaulting to 0");
+    return BigInt(0);
+  }
+  return BigInt(Math.round(volume));
+}
 
 /**
  * Load cached daily quotes for a ticker from the database.
@@ -79,7 +91,7 @@ export async function cacheQuotes(
         low: q.low,
         close: q.close,
         adjClose: q.close,
-        volume: BigInt(Math.round(q.volume)),
+        volume: safeBigIntVolume(q.volume, symbol),
       },
       update: {
         open: q.open,
@@ -87,7 +99,7 @@ export async function cacheQuotes(
         low: q.low,
         close: q.close,
         adjClose: q.close,
-        volume: BigInt(Math.round(q.volume)),
+        volume: safeBigIntVolume(q.volume, symbol),
       },
     }),
   );

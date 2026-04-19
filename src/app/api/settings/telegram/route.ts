@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { sendTelegram } from "@/lib/telegram";
+import { telegramSettingsSchema, validateBody } from "@/lib/validation";
 
 const db = prisma as unknown as {
   telegramSettings: {
@@ -34,13 +35,11 @@ export async function POST(req: NextRequest) {
   const limited = rateLimit(getRateLimitKey(req), 5, 60_000);
   if (limited) return limited;
 
-  const body = await req.json();
-  const { botToken, chatId, enabled, sendTest } = body as {
-    botToken?: string;
-    chatId?: string;
-    enabled?: boolean;
-    sendTest?: boolean;
-  };
+  const parsed = await validateBody(req, telegramSettingsSchema);
+  if (parsed.error) {
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+  }
+  const { botToken, chatId, enabled, sendTest } = parsed.data;
 
   if (sendTest) {
     try {

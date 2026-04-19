@@ -381,6 +381,16 @@ export async function runSinglePoll(): Promise<PollResult> {
       where: { status: "OPEN" },
     });
 
+    // Clean up ghost/orphan trackers: remove entries for positions no longer open.
+    // Without this, the Maps grow unboundedly over days of operation.
+    const openTickerSet = new Set(openTrades.map((t) => t.ticker.toUpperCase()));
+    for (const key of ghostTracker.keys()) {
+      if (!openTickerSet.has(key.toUpperCase())) ghostTracker.delete(key);
+    }
+    for (const key of orphanTracker.keys()) {
+      if (!openTickerSet.has(key.toUpperCase())) orphanTracker.delete(key);
+    }
+
     if (openTrades.length === 0) {
       log.info("[CRUISE-CONTROL] No open positions — poll complete");
       const pollEnd = new Date();

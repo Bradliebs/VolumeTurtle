@@ -30,7 +30,10 @@ export async function GET(req: Request) {
 
   try {
     const url = new URL(req.url);
-    const historyCount = Math.min(Number(url.searchParams.get("history") ?? "30"), 180);
+    const rawHistory = Number(url.searchParams.get("history") ?? "30");
+    const historyCount = Number.isFinite(rawHistory) && rawHistory > 0 && Number.isInteger(rawHistory)
+      ? Math.min(rawHistory, 180)
+      : 20;
 
     // Get historical breadth from ScanRun records
     const runs = await db.scanRun.findMany({

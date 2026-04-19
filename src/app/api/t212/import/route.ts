@@ -29,17 +29,6 @@ export async function POST(req: NextRequest) {
     }
     const { ticker, quantity, avgPrice } = parsed.data!;
 
-    // Prevent duplicate open trades for the same ticker
-    const existingOpen = await prisma.trade.findFirst({
-      where: { ticker, status: "OPEN" },
-    });
-    if (existingOpen) {
-      return NextResponse.json(
-        { error: `An open trade already exists for ${ticker}` },
-        { status: 409 },
-      );
-    }
-
     // Fetch historical quotes
     const quotes = await fetchEODQuotes([ticker]);
     const tickerQuotes = quotes[ticker];
@@ -97,27 +86,37 @@ export async function POST(req: NextRequest) {
     const entryDate = recentSignal ? recentSignal.scanDate : new Date();
     const signalSource = recentSignal ? "volume" : "manual";
 
-    // Create Trade record
-    const trade = await prisma.trade.create({
-      data: {
-        ticker,
-        entryDate,
-        entryPrice: avgPrice,
-        shares: quantity,
-        hardStop,
-        hardStopPrice: hardStop,
-        trailingStop: currentStop,
-        trailingStopPrice: currentStop,
-        status: "OPEN",
-        volumeRatio,
-        rangePosition,
-        atr20,
-        signalSource,
-        signalScore: compositeScore,
-        signalGrade: compositeGrade,
-        importedFromT212: true,
-        importedAt: new Date(),
-      },
+    // Atomic duplicate check + trade creation to prevent race conditions
+    // where two concurrent imports could both pass the duplicate check
+    const trade = await prisma.$transaction(async (tx) => {
+      const existingInTx = await tx.trade.findFirst({
+        where: { ticker, status: "OPEN" },
+      });
+      if (existingInTx) {
+        throw new Error(`DUPLICATE:An open trade already exists for ${ticker}`);
+      }
+
+      return tx.trade.create({
+        data: {
+          ticker,
+          entryDate,
+          entryPrice: avgPrice,
+          shares: quantity,
+          hardStop,
+          hardStopPrice: hardStop,
+          trailingStop: currentStop,
+          trailingStopPrice: currentStop,
+          status: "OPEN",
+          volumeRatio,
+          rangePosition,
+          atr20,
+          signalSource,
+          signalScore: compositeScore,
+          signalGrade: compositeGrade,
+          importedFromT212: true,
+          importedAt: new Date(),
+        },
+      });
     });
 
     // Write initial stop history record
@@ -156,10 +155,12 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to import position";
+    // Transaction throws DUPLICATE: prefix for race-safe duplicate detection
+    if (message.startsWith("DUPLICATE:")) {
+      return NextResponse.json({ error: message.slice(10) }, { status: 409 });
+    }
     log.error({ err }, "Failed to import T212 position");
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to import position" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

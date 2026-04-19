@@ -99,6 +99,11 @@ export function calculateLadderStop(
     const atrTrail = highestClose - (atr * config.trailAtrMultiple);
     const oneRLock = position.entryPrice + riskPerShare;
     ladderStop = Math.max(oneRLock, atrTrail);
+    // Guard: stop must never be above current price (can happen with expanded ATR)
+    const currentClose = quotes.length > 0 ? quotes[quotes.length - 1]!.close : highestClose;
+    if (ladderStop >= currentClose) {
+      ladderStop = currentClose * 0.99;
+    }
   } else if (maxR >= 2) {
     // Lock in ~1R
     ladderStop = position.entryPrice + riskPerShare;

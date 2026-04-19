@@ -88,7 +88,7 @@ export async function runAlertCheck() {
     const quote = await fetchQuote(item.ticker);
     if (!quote || quote.regularMarketPrice == null || quote.regularMarketPreviousClose == null) continue;
 
-    const bars = await fetchHistory(item.ticker, new Date(Date.now() - 35 * 24 * 60 * 60 * 1000));
+    const { data: bars } = await fetchHistory(item.ticker, new Date(Date.now() - 35 * 24 * 60 * 60 * 1000));
     if (bars.length < 21) continue;
 
     const closes = bars.map((b) => b.close);
@@ -137,7 +137,7 @@ export async function runUniverseBreakoutCheck() {
     const change1d = pctChange(quote.regularMarketPreviousClose, quote.regularMarketPrice);
     if (change1d < config.BREAKOUT_MIN_CHG) continue;
 
-    const bars = await fetchHistory(row.ticker, new Date(Date.now() - 35 * 24 * 60 * 60 * 1000));
+    const { data: bars } = await fetchHistory(row.ticker, new Date(Date.now() - 35 * 24 * 60 * 60 * 1000));
     if (bars.length < 21) continue;
 
     const volumes = bars.slice(-21).map((b) => b.volume);

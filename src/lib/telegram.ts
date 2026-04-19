@@ -42,19 +42,45 @@ export async function sendTelegram(message: TelegramMessage): Promise<void> {
   if (!botToken || !chatId) return;
 
   const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: message.text,
-      parse_mode: message.parseMode ?? "HTML",
-    }),
-  });
+  const MAX_LENGTH = 4000; // Telegram limit is 4096; leave margin for safety
+  const text = message.text;
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Telegram send failed: ${err}`);
+  // Split long messages into chunks at line boundaries
+  const chunks: string[] = [];
+  if (text.length <= MAX_LENGTH) {
+    chunks.push(text);
+  } else {
+    let remaining = text;
+    let part = 1;
+    while (remaining.length > 0) {
+      if (remaining.length <= MAX_LENGTH) {
+        chunks.push(remaining);
+        break;
+      }
+      // Find a line break near the limit to split cleanly
+      let splitAt = remaining.lastIndexOf("\n", MAX_LENGTH);
+      if (splitAt < MAX_LENGTH * 0.5) splitAt = MAX_LENGTH; // no good break found
+      chunks.push(remaining.slice(0, splitAt));
+      remaining = remaining.slice(splitAt).trimStart();
+      part++;
+    }
+  }
+
+  for (const chunk of chunks) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: chunk,
+        parse_mode: message.parseMode ?? "HTML",
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Telegram send failed: ${err}`);
+    }
   }
 }
 

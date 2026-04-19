@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendTelegram } from "@/lib/telegram";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const limited = rateLimit(getRateLimitKey(req), 5, 60_000);
+  if (limited) return limited;
+
   try {
     const body = (await req.json()) as Record<string, unknown>;
     const message = body["message"];

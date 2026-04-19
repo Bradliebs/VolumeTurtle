@@ -85,7 +85,10 @@ export function generateSignal(
     regimeAssessment = assessRegime(marketRegime, tickerRegime);
   }
 
-  const volumeRatio = today.volume / avgVolume20;
+  const rawVolumeRatio = today.volume / avgVolume20;
+  // Guard: if avgVolume20 is 0 or ratio is non-finite (Infinity/NaN), default to 1.0
+  // to prevent NaN propagation into compositeScore.ts (sacred file).
+  const volumeRatio = Number.isFinite(rawVolumeRatio) ? rawVolumeRatio : 1.0;
 
   // Average daily dollar volume for liquidity scoring
   const dollarVolWindow = quotes.slice(-(config.atrPeriod + 1), -1);

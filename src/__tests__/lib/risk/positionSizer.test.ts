@@ -75,6 +75,15 @@ describe("calculatePositionSize", () => {
     expect(result).toBeNull();
   });
 
+  it("returns null when entry equals stop (zero risk distance guard)", () => {
+    // When suggestedEntry === suggestedStop, riskPerShare would be 0 → infinite shares.
+    // The guard catches this before any division occurs.
+    const signal = makeSignal({ suggestedEntry: 100 }) as unknown as VolumeSignal & { suggestedStop: number };
+    signal.suggestedStop = 100;
+    const result = calculatePositionSize(signal as unknown as VolumeSignal, 10000);
+    expect(result).toBeNull();
+  });
+
   it("returns null when equity curve is PAUSE", () => {
     const signal = makeSignal();
     const pauseState: EquityCurveState = {

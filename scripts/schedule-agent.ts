@@ -35,12 +35,12 @@ const TASKS = [
     tr: `cmd /c cd /d "${INSTALL_DIR}" && npx tsx src/agent/runner-friday.ts >> "${LOG_DIR}\\agent-friday.log" 2>&1`,
     schedule: `/sc weekly /d FRI /st 21:30`,
   },
-];
-
-function run(cmd: string): void {
-  try {
-    execSync(cmd, { stdio: "inherit" });
-  } catch {
+    {
+      name: "VolumeTurtle_Cleanup",
+      description: "Daily DB cleanup — stale RetryQueue + expired PendingOrders at 06:00",
+      tr: `cmd /c curl -s -X POST http://localhost:3000/api/internal/cleanup -H "Authorization: Bearer %DASHBOARD_TOKEN%" >> "${LOG_DIR}\\cleanup.log" 2>&1`,
+      schedule: `/sc daily /st 06:00`,
+    },
     // schtasks returns non-zero on some queries when task doesn't exist
   }
 }

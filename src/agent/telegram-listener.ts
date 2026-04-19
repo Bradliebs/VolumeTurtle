@@ -71,6 +71,11 @@ async function processCommand(text: string, _baseUrl: string): Promise<string> {
         where: { id: 1 },
         data: { autoExecutionEnabled: false },
       } as unknown);
+      await db.agentHaltFlag.upsert({
+        where: { id: 1 },
+        create: { id: 1, halted: true, reason: "PAUSED via Telegram", setAt: new Date(), setBy: "USER" },
+        update: { halted: true, reason: "PAUSED via Telegram", setAt: new Date(), setBy: "USER" },
+      } as unknown);
       return `⏸ Auto-execution PAUSED\nAgent will ratchet stops but not enter new positions.\n\nSend UNPAUSE to restore.`;
     }
 
@@ -78,6 +83,11 @@ async function processCommand(text: string, _baseUrl: string): Promise<string> {
       await db.appSettings.update({
         where: { id: 1 },
         data: { autoExecutionEnabled: true },
+      } as unknown);
+      await db.agentHaltFlag.upsert({
+        where: { id: 1 },
+        create: { id: 1, halted: false, reason: null, setAt: new Date(), setBy: "USER" },
+        update: { halted: false, reason: null, setAt: new Date(), setBy: "USER" },
       } as unknown);
       return `▶️ Auto-execution RESUMED\nAgent will enter new positions from the next cycle.`;
     }

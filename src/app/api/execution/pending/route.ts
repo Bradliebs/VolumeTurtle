@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import { executePendingSchema, validateBody } from "@/lib/validation";
 import {
   cancelPendingOrder,
   processPendingOrder,
@@ -71,8 +72,11 @@ export async function POST(req: Request) {
   const limited = rateLimit(getRateLimitKey(req), 3, 60_000);
   if (limited) return limited;
 
-  const body = await req.json();
-  const { orderId, action } = body as { orderId?: number; action?: string };
+  const parsed = await validateBody(req, executePendingSchema);
+  if (parsed.error) {
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+  }
+  const { orderId, action } = parsed.data;
 
   // Emergency disable all
   if (action === "emergency_disable") {
@@ -95,7 +99,7 @@ export async function POST(req: Request) {
   }
 
   if (order.status !== "pending") {
-    return NextResponse.json({ error: `Cannot execute — status is ${order.status}` }, { status: 400 });
+    return NextResponse.json({ error: `Cannot execute — status is ${order.status}` }, { status: 409 });
   }
 
   // Process immediately (runs pre-flight + execution)

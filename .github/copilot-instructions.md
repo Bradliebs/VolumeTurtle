@@ -30,6 +30,12 @@ src/
 │   ├── prompt.ts       # System prompts (weekday, Sunday, Friday)
 │   ├── context.ts      # Market state gatherer (positions, signals, risk)
 │   ├── tools.ts        # 13 tool definitions + handlers
+│   │                   #   check_t212_connection, check_equity_curve,
+│   │                   #   ratchet_stops, flag_position_health,
+│   │                   #   check_premarket_risk, verify_ticker,
+│   │                   #   execute_signal, close_position, set_halt,
+│   │                   #   send_telegram_summary, run_universe_snapshot,
+│   │                   #   run_autotune, get_weekly_summary
 │   ├── executor.ts     # Claude agentic loop (tool calling)
 │   ├── logger.ts       # Decision audit logging
 │   ├── runner.ts       # Weekday entry point
@@ -135,6 +141,32 @@ Agent-specific config: `ANTHROPIC_API_KEY`, `AGENT_ENABLED`, `TRADECORE_BASE_URL
 - **Agent requires dev server running**: The agent calls API routes over HTTP (`TRADECORE_BASE_URL`). If the dev server is down, all tool calls return 4xx/5xx errors.
 - **Agent DB rows must be seeded**: `AiSettings` (id=1) and `AgentHaltFlag` (id=1) must exist. `INSTALL.bat` handles this. If missing, agent exits with context error.
 - **Agent entry-point scripts need `import "dotenv/config"`**: Scripts in `src/agent/` run via `npx tsx`, not Next.js — they don't auto-load `.env`.
+- **`verify_ticker` must be called before `execute_signal`** — T212 and Yahoo Finance use different ticker formats. Never assume they match.
+- **`check_premarket_risk` uses the Anthropic API with web search** — it will degrade gracefully if the API is unavailable but always check `riskLevel` before executing.
+- **Agent requires Next.js dev server running on `TRADECORE_BASE_URL`** — Task Scheduler must start the dev server before agent tasks run, or all tool calls will fail with connection errors.
+- **Agent tasks in Task Scheduler run as the current user.** If the machine restarts or the user logs out, tasks will not run. Ensure the machine stays on and logged in during market hours, or configure tasks to run whether user is logged on or not.
+
+## Agent Schedule
+
+| Task | When | Runner |
+|------|------|--------|
+| VolumeTurtle_Agent | Mon–Fri hourly 08:00–21:00 | `runner.ts` |
+| VolumeTurtle_AgentListen | Mon–Fri every 2 min 08:00–21:00 | `telegram-listener.ts` |
+| VolumeTurtle_AgentSnapshot | Sunday 18:00 | `runner-sunday.ts` |
+| VolumeTurtle_AgentAutoTune | Sunday 19:00 | `runner-sunday.ts` |
+| VolumeTurtle_AgentFriday | Friday 21:30 | `runner-friday.ts` |
+
+## Operating Modes
+
+Three modes control how the agent interacts with the existing automation:
+
+| Mode | `AiSettings.enabled` | Description |
+|------|----------------------|-------------|
+| **Original** | `false` | Agent disabled. Existing scheduled tasks (scan, execution, ratchet) run on their own. |
+| **Hybrid** | `true` | Agent runs alongside existing tasks. Both can execute trades and manage stops. |
+| **Agent-only** | `true` + remove `VolumeTurtle_ExecutionScheduler` | Agent has full control. Remove the execution scheduler task from Task Scheduler once the agent is fully trusted. |
+
+Switch via **Settings UI** at `/settings` → **Autonomous Agent** toggle (controls `AiSettings.enabled` in the DB).
 
 ## Task Management
 

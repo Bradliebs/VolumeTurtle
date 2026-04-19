@@ -1,4 +1,6 @@
 import { prisma } from "@/db/client";
+import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
+import { applyDbSettings } from "@/lib/config";
 
 const db = prisma as unknown as {
   trade: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
@@ -77,6 +79,10 @@ export interface AgentContext {
 }
 
 export async function gatherContext(): Promise<AgentContext> {
+  // Load fresh DB settings before gathering context so the agent
+  // always uses current config, not stale env-var defaults.
+  await applyDbSettings();
+
   const now = new Date();
 
   const haltRow = await db.agentHaltFlag.findFirst();
@@ -157,7 +163,9 @@ export async function gatherContext(): Promise<AgentContext> {
   const pending = await db.pendingOrder.findMany({
     where: { status: "pending", cancelDeadline: { gt: now } },
     orderBy: { compositeScore: "desc" },
-    take: 20,
+    // Top 10 by composite score — agent rarely has more than 4 slots.
+    // Keeps context under API token limits while showing all viable candidates.
+    take: 10,
   } as unknown);
 
   const tickerEngineMap = new Map<string, string[]>();
@@ -208,8 +216,15 @@ export async function gatherContext(): Promise<AgentContext> {
   const currentHeatPct =
     openPositions.reduce((sum, p) => sum + p.riskPct, 0) / 100;
   const maxPositions = parseInt(process.env["MAX_POSITIONS"] ?? "4", 10);
-  // Regime is calculated live by regimeFilter — default true, executor re-checks at execution
-  const regimeBullish = true;
+
+  // Fetch live regime from QQQ 200-day MA — fail-safe to bearish (no new entries)
+  let regimeBullish = false;
+  try {
+    const regime = await calculateMarketRegime();
+    regimeBullish = regime.marketRegime === "BULLISH";
+  } catch {
+    // Yahoo down or network error — default to bearish (conservative)
+  }
 
   const riskBudget = {
     maxPositions,

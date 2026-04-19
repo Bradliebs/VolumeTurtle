@@ -5,6 +5,8 @@
 function envFloat(key: string, fallback: number): number {
   const val = process.env[key];
   if (val == null) return fallback;
+  // Strict: reject values with non-numeric characters (except decimal point and leading minus)
+  if (!/^-?\d+(\.\d+)?$/.test(val.trim())) return fallback;
   const parsed = parseFloat(val);
   return isNaN(parsed) ? fallback : parsed;
 }
@@ -129,6 +131,17 @@ if (config.riskPctPerTrade <= 0 || config.riskPctPerTrade > 0.1) {
 if (config.atrPeriod < 5) throw new Error("ATR_PERIOD must be >= 5");
 if (config.trailingStopDays < 1) throw new Error("TRAILING_STOP_DAYS must be >= 1");
 
+// Validate TRADECORE_BASE_URL is a well-formed URL
+try {
+  new URL(config.TRADECORE_BASE_URL);
+} catch {
+  console.error(
+    `[config] TRADECORE_BASE_URL is not a valid URL: "${config.TRADECORE_BASE_URL}". ` +
+    `Agent tool calls will fail. Set a valid URL (e.g. http://localhost:3000) in .env.`,
+  );
+  process.exit(1);
+}
+
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("config");
@@ -171,14 +184,23 @@ export async function applyDbSettings(): Promise<void> {
     };
     const row = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
     if (row) {
+      // Validate composite score weights before applying DB overrides
+      const dbWeightSum = row.scoreWeightRegime + row.scoreWeightBreakout + row.scoreWeightSector + row.scoreWeightLiquidity;
+      if (Math.abs(dbWeightSum - 1.0) > 0.01) {
+        log.error(
+          { dbWeightSum: dbWeightSum.toFixed(3), regime: row.scoreWeightRegime, breakout: row.scoreWeightBreakout, sector: row.scoreWeightSector, liquidity: row.scoreWeightLiquidity },
+          "DB AppSettings weights do not sum to ~1.0 — rejecting weight overrides to prevent corrupt composite scores",
+        );
+      } else {
+        config.SCORE_WEIGHT_REGIME = row.scoreWeightRegime;
+        config.scoreWeightRegime = row.scoreWeightRegime;
+        config.SCORE_WEIGHT_BREAKOUT = row.scoreWeightBreakout;
+        config.SCORE_WEIGHT_SECTOR = row.scoreWeightSector;
+        config.SCORE_WEIGHT_LIQUIDITY = row.scoreWeightLiquidity;
+      }
       config.MOMENTUM_ENABLED = row.momentumEnabled;
       config.BREAKOUT_MIN_CHG = row.breakoutMinChg;
       config.BREAKOUT_MIN_VOL = row.breakoutMinVol;
-      config.SCORE_WEIGHT_REGIME = row.scoreWeightRegime;
-      config.scoreWeightRegime = row.scoreWeightRegime;
-      config.SCORE_WEIGHT_BREAKOUT = row.scoreWeightBreakout;
-      config.SCORE_WEIGHT_SECTOR = row.scoreWeightSector;
-      config.SCORE_WEIGHT_LIQUIDITY = row.scoreWeightLiquidity;
       log.info("Loaded AppSettings from database");
     }
   } catch {

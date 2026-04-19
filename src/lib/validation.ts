@@ -46,6 +46,28 @@ export const dangerActionSchema = z.object({
   confirm: z.literal("CONFIRM", { error: "Type CONFIRM to proceed" }),
 });
 
+export const telegramSettingsSchema = z.object({
+  botToken: z.string().min(1, "botToken is required").optional(),
+  chatId: z.string().min(1, "chatId is required").optional(),
+  enabled: z.boolean().optional(),
+  sendTest: z.boolean().optional(),
+}).refine(
+  (data) => data.sendTest || (data.botToken && data.chatId),
+  { message: "botToken and chatId are required when not sending a test", path: ["botToken"] },
+);
+
+export const executePendingSchema = z.object({
+  orderId: z.number({ error: "orderId must be a number" }).int().positive().optional(),
+  action: z.string().optional(),
+}).refine(
+  (data) => data.orderId != null || data.action != null,
+  { message: "orderId or action is required" },
+);
+
+export const ratchetSchema = z.object({
+  dryRun: z.boolean().optional().default(false),
+});
+
 /**
  * Parse and validate a request body against a Zod schema.
  * Returns { data } on success or { error, status } on failure.

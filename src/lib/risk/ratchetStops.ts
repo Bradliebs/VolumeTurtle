@@ -161,7 +161,8 @@ export async function ratchetAllStops(pushToT212 = false): Promise<RatchetResult
 
       // Runner uses configurable lookback (default 20-day low) instead of 10-day low
       const runnerTrailingStop = calculate20DayLow(candles, runnerLookbackDays);
-      if (runnerTrailingStop <= 0) {
+      if (runnerTrailingStop <= 0 || candles.length < 5) {
+        log.warn({ ticker: trade.ticker, candles: candles.length, calculatedLow: runnerTrailingStop }, "Runner trailing stop is 0 or insufficient candles — skipping ratchet. Never set a stop to 0.");
         result.skipped++;
         result.results.push({
           ticker: trade.ticker,

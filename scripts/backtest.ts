@@ -73,6 +73,10 @@ function parseArgs(): Args {
     console.error("Required: --start <YYYY-MM-DD> --end <YYYY-MM-DD>");
     process.exit(1);
   }
+  if (out.start >= out.end) {
+    console.error(`Backtest end date must be after start date (got start=${out.start}, end=${out.end})`);
+    process.exit(1);
+  }
   return out;
 }
 

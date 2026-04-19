@@ -128,17 +128,34 @@ async function main() {
   console.log(`[nightlyScan] Max positions: ${equityCurveState.maxPositions}`);
   console.log(`[nightlyScan] Reason: ${equityCurveState.reason}`);
 
-  // 2. Fetch EOD quotes for universe
+  // 2. Fetch EOD quotes for universe (with retry on low coverage)
   const universe = getUniverse();
   console.log(`[nightlyScan] Fetching quotes for ${universe.length} tickers…`);
-  const quoteMap = await fetchEODQuotes(universe);
-  const fetchedTickers = Object.keys(quoteMap);
-  console.log(`[nightlyScan] Received data for ${fetchedTickers.length} tickers`);
 
-  // Coverage gate: abort if less than 10% of universe has data
+  let quoteMap: Record<string, DailyQuote[]> = {};
+  let fetchedTickers: string[] = [];
+  const MAX_FETCH_ATTEMPTS = 3;
+  const RETRY_DELAYS_MS = [2000, 4000, 8000];
+
+  for (let attempt = 1; attempt <= MAX_FETCH_ATTEMPTS; attempt++) {
+    quoteMap = await fetchEODQuotes(universe);
+    fetchedTickers = Object.keys(quoteMap);
+    const coveragePct = universe.length > 0 ? (fetchedTickers.length / universe.length) * 100 : 0;
+    console.log(`[nightlyScan] Attempt ${attempt}: received data for ${fetchedTickers.length}/${universe.length} tickers (${coveragePct.toFixed(0)}%)`);
+
+    if (coveragePct >= 80) break;
+
+    if (attempt < MAX_FETCH_ATTEMPTS) {
+      const delay = RETRY_DELAYS_MS[attempt - 1] ?? 8000;
+      console.log(`[nightlyScan] Coverage ${coveragePct.toFixed(0)}% < 80% — retrying in ${delay / 1000}s (attempt ${attempt + 1}/${MAX_FETCH_ATTEMPTS})…`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+
+  // Coverage gate: abort if below 80% after all retries
   const coveragePct = universe.length > 0 ? (fetchedTickers.length / universe.length) * 100 : 0;
-  if (fetchedTickers.length < 50 || coveragePct < 10) {
-    const msg = `Data coverage too low: ${fetchedTickers.length}/${universe.length} tickers (${coveragePct.toFixed(0)}%). Yahoo Finance may be down. Aborting scan.`;
+  if (coveragePct < 80) {
+    const msg = `Data coverage too low after ${MAX_FETCH_ATTEMPTS} attempts: ${fetchedTickers.length}/${universe.length} tickers (${coveragePct.toFixed(0)}%). Yahoo Finance may be down. Aborting scan.`;
     console.error(`[nightlyScan] ABORT: ${msg}`);
     try { await sendTelegram({ text: `<b>\u26a0 SCAN ABORTED</b>\n${msg}` }); } catch { /* best effort */ }
     process.exit(1);

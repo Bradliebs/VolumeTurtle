@@ -23,6 +23,7 @@ const prisma = new PrismaClient({ adapter }) as unknown as PrismaClient;
 const db = prisma as unknown as {
   pendingOrder: {
     findMany: (args: unknown) => Promise<PendingOrderRow[]>;
+    findFirst: (args: unknown) => Promise<PendingOrderRow | null>;
     update: (args: unknown) => Promise<PendingOrderRow>;
     deleteMany: (args: unknown) => Promise<{ count: number }>;
   };
@@ -33,6 +34,7 @@ const db = prisma as unknown as {
       autoExecutionEndHour: number;
     } | null>;
   };
+  $transaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
 };
 
 async function main() {
@@ -77,12 +79,12 @@ async function main() {
   }
 
   // Recover stale "processing" orders (stuck from crashed previous run)
-  // If an order has been "processing" for >5 minutes, mark it as "failed"
+  // If an order has been "processing" for >5 minutes without an update, mark it as "failed"
   const staleThreshold = new Date(now.getTime() - 5 * 60_000);
   const staleOrders = await db.pendingOrder.findMany({
     where: {
       status: "processing" as string,
-      cancelDeadline: { lte: staleThreshold },
+      updatedAt: { lte: staleThreshold },
     },
   });
   for (const stale of staleOrders) {
@@ -114,15 +116,29 @@ async function main() {
 
   for (const order of pendingOrders) {
     try {
-      // Atomically claim the order by setting status='processing'.
-      // If another scheduler instance already claimed it, updateMany returns count=0.
-      const claimed = await (db.pendingOrder as unknown as {
-        updateMany: (args: unknown) => Promise<{ count: number }>;
-      }).updateMany({
-        where: { id: order.id, status: "pending" },
-        data: { status: "processing" },
+      // Re-check autoExecutionEnabled before each order — if toggled off mid-batch,
+      // stop picking up new orders (already-executing orders complete normally).
+      const freshSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+      if (!freshSettings?.autoExecutionEnabled) {
+        console.log("[executionScheduler] Auto-execution disabled mid-batch — stopping");
+        break;
+      }
+
+      // Atomically claim the order inside a transaction: read-check-update.
+      // Prevents two scheduler instances from both claiming the same order.
+      const claimed = await db.$transaction(async (tx) => {
+        const txDb = tx as typeof db;
+        const fresh = await txDb.pendingOrder.findFirst({
+          where: { id: order.id, status: "pending" },
+        } as unknown);
+        if (!fresh) return false;
+        await txDb.pendingOrder.update({
+          where: { id: order.id },
+          data: { status: "processing" },
+        } as unknown);
+        return true;
       });
-      if (claimed.count === 0) {
+      if (!claimed) {
         console.log(`  [SKIP] ${order.ticker} (order #${order.id}) — already claimed by another instance`);
         continue;
       }

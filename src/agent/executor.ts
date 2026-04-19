@@ -7,7 +7,7 @@ import { config } from "@/lib/config";
 const MAX_ITERATIONS = 12;
 
 // Defaults matching AiSettings seed — will be overridden if a DB read is wired later
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_TOKENS = 2048;
 
 export interface ExecutorResult {
@@ -37,23 +37,70 @@ export async function runAgentCycle(
   while (iterations < MAX_ITERATIONS) {
     iterations++;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": config.ANTHROPIC_API_KEY,
-      },
-      body: JSON.stringify({
-        model: DEFAULT_MODEL,
-        max_tokens: DEFAULT_MAX_TOKENS,
-        system: systemPrompt ?? buildSystemPrompt(),
-        tools: TOOL_DEFINITIONS,
-        messages,
-      }),
+    const requestBody = JSON.stringify({
+      model: DEFAULT_MODEL,
+      max_tokens: DEFAULT_MAX_TOKENS,
+      system: systemPrompt ?? buildSystemPrompt(),
+      tools: TOOL_DEFINITIONS,
+      messages,
     });
 
-    if (!response.ok) {
+    // Token estimate warning — rough heuristic: 1 token ≈ 4 chars
+    if (iterations === 1) {
+      const estTokens = Math.ceil(requestBody.length / 4);
+      if (estTokens > 6000) {
+        console.warn(`[AgentExecutor] High token estimate: ~${estTokens} tokens (${requestBody.length} chars). Risk of rate-limit hit.`);
+      }
+    }
+
+    const fetchClaude = async (): Promise<Response> => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30_000);
+      try {
+        return await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "anthropic-version": "2023-06-01",
+            "x-api-key": config.ANTHROPIC_API_KEY,
+          },
+          body: requestBody,
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    let response: Response;
+    try {
+      response = await fetchClaude();
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error("Claude API timed out after 30 seconds");
+      }
+      throw err;
+    }
+
+    // Retry once on transient errors (429 rate limit or 5xx server error)
+    if (response.status === 429 || response.status >= 500) {
+      // Rate limit is per minute — wait 60s for the window to reset
+      const waitSec = response.status === 429 ? 60 : 10;
+      console.warn(`[AgentExecutor] Claude API returned ${response.status} — retrying in ${waitSec}s…`);
+      await new Promise((r) => setTimeout(r, waitSec * 1000));
+      try {
+        response = await fetchClaude();
+      } catch (retryErr) {
+        if (retryErr instanceof Error && retryErr.name === "AbortError") {
+          throw new Error("Claude API timed out after 30 seconds (retry attempt)");
+        }
+        throw retryErr;
+      }
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Claude API error ${response.status} after retry: ${errText}`);
+      }
+    } else if (!response.ok) {
       const errText = await response.text();
       throw new Error(`Claude API error ${response.status}: ${errText}`);
     }
@@ -111,9 +158,14 @@ export async function runAgentCycle(
         telegramSent = true;
       }
 
+      if (!toolCall.id) {
+        console.warn(`[AgentExecutor] Tool call '${toolCall.name}' has no ID — skipping tool result to avoid breaking Claude's agentic loop`);
+        continue;
+      }
+
       toolResultContent.push({
         type: "tool_result",
-        tool_use_id: toolCall.id ?? "",
+        tool_use_id: toolCall.id,
         content: result.success
           ? JSON.stringify(result.data ?? { ok: true })
           : JSON.stringify({ error: result.error }),
@@ -177,7 +229,7 @@ function buildContextMessage(ctx: AgentContext): string {
     for (const p of ctx.openPositions) {
       const pnlR = p.pnlR != null ? `${p.pnlR >= 0 ? "+" : ""}${p.pnlR.toFixed(2)}R` : "—";
       lines.push(
-        `  [${p.id}] ${p.ticker} | Entry: ${p.entryPrice} | Stop: ${p.currentStop} (${p.stopDistanceFromEntryPct}% from entry) | Risk: ${p.riskPct}% | ${p.daysOpen}d open | Stagnant: ${p.daysStagnant}d | P&L: ${pnlR} | Grade: ${p.compositeGrade ?? "?"}`
+        `  [${p.id}] ${p.ticker} | Entry: ${p.entryPrice} | Stop: ${p.currentStop} | Risk: ${p.riskPct}% | ${p.daysOpen}d | P&L: ${pnlR} | Grade: ${p.compositeGrade ?? "?"}`
       );
     }
   }
@@ -187,9 +239,9 @@ function buildContextMessage(ctx: AgentContext): string {
     lines.push("  None");
   } else {
     for (const s of ctx.pendingSignals) {
-      const tag = s.convergence ? " 🔥CONVERGENCE" : "";
+      const tag = s.convergence ? " \ud83d\udd25CONV" : "";
       lines.push(
-        `  [${s.id}] ${s.ticker} | Grade: ${s.grade} | Score: ${s.compositeScore.toFixed(2)} | Entry: ${s.entryPrice} | Stop: ${s.stopPrice} | Stop dist: ${s.stopDistancePct}% | £ risk: ${s.dollarRisk} | 1R: ${s.oneRTarget} | 2R: ${s.twoRTarget} | Sector: ${s.sector ?? "?"} | Engine: ${s.engine}${tag}`
+        `  [${s.id}] ${s.ticker} | ${s.grade} ${s.compositeScore.toFixed(2)} | Entry: ${s.entryPrice} Stop: ${s.stopPrice} (${s.stopDistancePct}%) | \u00a3${s.dollarRisk} risk | ${s.sector ?? "?"}${tag}`
       );
     }
   }

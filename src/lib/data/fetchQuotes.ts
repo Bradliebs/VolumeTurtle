@@ -108,12 +108,29 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
   since.setDate(since.getDate() - LOOKBACK_DAYS);
 
   // Phase 1: Batch-check which tickers exist in the DB cache
-  // (one query instead of N sequential lookups)
+  // AND fetch their latest cached dates in a single query (avoids N+1)
   const cachedTickerRows = await prisma.ticker.findMany({
     where: { symbol: { in: tickers } },
     select: { id: true, symbol: true },
   });
   const cachedTickerMap = new Map(cachedTickerRows.map((t) => [t.symbol, t.id]));
+
+  // Batch-fetch latest cached date per ticker in one query
+  const latestDatesRaw = cachedTickerRows.length > 0
+    ? await prisma.dailyQuote.groupBy({
+        by: ["tickerId"],
+        where: { tickerId: { in: cachedTickerRows.map((t) => t.id) } },
+        _max: { date: true },
+      })
+    : [];
+  const latestDateByTickerId = new Map(
+    latestDatesRaw.map((r: { tickerId: number; _max: { date: Date | null } }) => [r.tickerId, r._max.date]),
+  );
+  // Map symbol -> latest cached date
+  const latestDateBySymbol = new Map<string, Date | null>();
+  for (const row of cachedTickerRows) {
+    latestDateBySymbol.set(row.symbol, latestDateByTickerId.get(row.id) ?? null);
+  }
 
   for (const ticker of tickers) {
     if (!cachedTickerMap.has(ticker)) {
@@ -123,7 +140,7 @@ export async function fetchEODQuotes(tickers: string[]): Promise<QuoteMap> {
     }
 
     try {
-      const latestCached = await getLatestCachedDate(ticker);
+      const latestCached = latestDateBySymbol.get(ticker) ?? null;
       const now = new Date();
       const today = now.toISOString().slice(0, 10);
       const dayOfWeek = now.getUTCDay(); // 0=Sun, 6=Sat

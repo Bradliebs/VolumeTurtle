@@ -64,6 +64,14 @@ export function calculatePositionSize(
 
   const dollarRisk = accountBalance * effectiveRiskPct;
 
+  // Guard: entry must not equal stop — division by zero produces infinite shares
+  if (signal.suggestedEntry === signal.suggestedStop) {
+    console.warn(
+      `[PositionSizer] ${signal.ticker}: entry === stop (${signal.suggestedEntry}) — zero risk distance, skipping`,
+    );
+    return null;
+  }
+
   // Guard: ATR must be a positive finite number. ATR=0 would cause division by
   // zero below (infinite shares); NaN/negative would produce nonsense sizing.
   // This can occur with stale/empty quote series or data-validator misses.

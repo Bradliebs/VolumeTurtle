@@ -8,6 +8,7 @@ import { loadT212Settings, getCachedT212Positions } from "@/lib/t212/client";
 import { calculateRMultiple, buildStopHistoryData, tradeToOpenPosition, enforceMonotonicStop } from "@/lib/trades/utils";
 import { canAutoCloseTrade } from "@/lib/trades/status";
 import type { ExitReason } from "@/lib/trades/types";
+import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
 import { createLogger } from "@/lib/logger";
 
 const log = createLogger("api/positions/:id/sync");
@@ -16,6 +17,9 @@ export async function POST(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const limited = rateLimit(getRateLimitKey(_request), 10, 60_000);
+  if (limited) return limited;
+
   try {
     const { id } = await params;
 

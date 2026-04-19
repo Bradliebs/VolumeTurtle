@@ -542,4 +542,107 @@ describe("preFlightChecks", () => {
     expect(result.adjustedOrder.suggestedShares).toBeLessThan(10);
     expect(result.adjustedOrder.dollarRisk).toBeLessThan(100);
   });
+
+  // ── Check 9: MINIMUM ORDER SIZE ──
+
+  it("Check 9: fails when order value below T212 minimum", async () => {
+    // Tiny order: 0.01 shares × $1 = $0.01 → ~£0.008 < £1
+    const order = makeOrder({ suggestedShares: 0.01, suggestedEntry: 1 });
+    const result = await preFlightChecks(order, makeLiveQuote({ price: 1 }));
+    expect(result.failures.some((f) => f.includes("ORDER_TOO_SMALL"))).toBe(true);
+  });
+
+  it("Check 9: passes when order value is adequate", async () => {
+    const order = makeOrder({ suggestedShares: 10, suggestedEntry: 150 });
+    const result = await preFlightChecks(order, makeLiveQuote());
+    expect(result.failures.filter((f) => f.includes("ORDER_TOO_SMALL")).length).toBe(0);
+  });
+
+  // ── Check 10: T212 CONNECTION ──
+
+  it("Check 10: fails when T212 not connected", async () => {
+    mockDb.t212Connection.findFirst.mockResolvedValue({ environment: "live", connected: false });
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("T212_NOT_CONNECTED"))).toBe(true);
+  });
+
+  it("Check 10: fails when T212 in demo mode", async () => {
+    mockDb.t212Connection.findFirst.mockResolvedValue({ environment: "demo", connected: true });
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("T212_DEMO_MODE"))).toBe(true);
+  });
+
+  it("Check 10: passes when T212 connected in live mode", async () => {
+    mockDb.t212Connection.findFirst.mockResolvedValue({ environment: "live", connected: true });
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.filter((f) => f.includes("T212_NOT_CONNECTED") || f.includes("T212_DEMO_MODE")).length).toBe(0);
+  });
+
+  // ── Check 13: PORTFOLIO HEAT CAP ──
+
+  it("Check 13: blocks when heat exceeds cap", async () => {
+    // Set HEAT_CAP_PCT to 5%
+    process.env["HEAT_CAP_PCT"] = "0.05";
+    mockDb.accountSnapshot.findFirst.mockResolvedValue({ balance: 5000 });
+    // Existing open trades with heavy risk: entryPrice=100, hardStop=80, shares=20 → risk=400 per trade
+    mockDb.trade.findMany.mockResolvedValue([
+      { ticker: "AAPL", entryPrice: 100, hardStop: 80, shares: 20 },
+    ]);
+    // New order: entry=150, stop=140, shares=10 → risk=100
+    // Total risk GBP: (400+100)/1.27 = ~394 GBP, which is 394/5000 = 7.9% > 5%
+    const order = makeOrder({ suggestedEntry: 150, suggestedStop: 140, suggestedShares: 10 });
+    const result = await preFlightChecks(order, makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("HEAT_CAP_EXCEEDED"))).toBe(true);
+    delete process.env["HEAT_CAP_PCT"];
+  });
+
+  it("Check 13: passes when heat is within cap", async () => {
+    process.env["HEAT_CAP_PCT"] = "0.20";
+    mockDb.accountSnapshot.findFirst.mockResolvedValue({ balance: 50000 });
+    mockDb.trade.findMany.mockResolvedValue([]);
+    const order = makeOrder({ suggestedEntry: 150, suggestedStop: 140, suggestedShares: 2 });
+    const result = await preFlightChecks(order, makeLiveQuote());
+    expect(result.failures.filter((f) => f.includes("HEAT_CAP")).length).toBe(0);
+    delete process.env["HEAT_CAP_PCT"];
+  });
+
+  it("Check 13: fails safe when balance fetch returns null", async () => {
+    process.env["HEAT_CAP_PCT"] = "0.05";
+    mockDb.accountSnapshot.findFirst.mockResolvedValue(null);
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("HEAT_CAP_FAILED"))).toBe(true);
+    delete process.env["HEAT_CAP_PCT"];
+  });
+
+  it("Check 13: fails safe when balance fetch throws", async () => {
+    process.env["HEAT_CAP_PCT"] = "0.05";
+    mockDb.accountSnapshot.findFirst.mockRejectedValue(new Error("DB connection failed"));
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("HEAT_CAP_FAILED"))).toBe(true);
+    delete process.env["HEAT_CAP_PCT"];
+  });
+
+  // ── Check 5: Grade A CAUTION regime sizing ──
+
+  it("Check 5: Grade A in CAUTION regime gets 50% size reduction", async () => {
+    (assessRegime as jest.Mock).mockReturnValue({
+      overallSignal: "CAUTION",
+      score: 2,
+    });
+    const order = makeOrder({ signalGrade: "A", suggestedShares: 10, suggestedEntry: 150, suggestedStop: 140, dollarRisk: 100 });
+    const result = await preFlightChecks(order, makeLiveQuote());
+    // Grade A should pass (not fail) but with adjustment
+    expect(result.failures.filter((f) => f.includes("REGIME_CAUTION")).length).toBe(0);
+    expect(result.adjustments.some((a) => a.includes("REGIME_CAUTION"))).toBe(true);
+    // Shares should be halved
+    expect(result.adjustedOrder.suggestedShares).toBeCloseTo(5, 1);
+  });
+
+  // ── Check 5: Breadth failure blocks order ──
+
+  it("Check 5: breadth calculation failure blocks order", async () => {
+    (calculateBreadth as jest.Mock).mockRejectedValue(new Error("API timeout"));
+    const result = await preFlightChecks(makeOrder(), makeLiveQuote());
+    expect(result.failures.some((f) => f.includes("BREADTH_UNAVAILABLE"))).toBe(true);
+  });
 });

@@ -2,8 +2,14 @@ import { prisma } from "@/db/client";
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { randomUUID } from "crypto";
+import { DEFAULT_MODEL } from "./executor";
 
 const DASHBOARD_TOKEN = process.env["DASHBOARD_TOKEN"] ?? "";
+
+if (!DASHBOARD_TOKEN) {
+  console.error("[agent/tools] DASHBOARD_TOKEN is not set — all internal API calls will fail with 401. Set it in .env.");
+}
 
 function agentHeaders(): Record<string, string> {
   return {
@@ -533,6 +539,14 @@ interface PremarketRiskItem {
   summary: string;
 }
 
+// Daily cache for pre-market risk results — avoids repeated API calls per ticker.
+// Key: "TICKER:YYYY-MM-DD", value: the risk result for that ticker on that date.
+const preMarketRiskCache = new Map<string, PremarketRiskItem>();
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function handleCheckPremarketRisk(
   input: Record<string, unknown>
 ): Promise<ToolResult> {
@@ -543,7 +557,6 @@ async function handleCheckPremarketRisk(
 
   const apiKey = process.env["ANTHROPIC_API_KEY"] ?? "";
   if (!apiKey) {
-    // No API key — return LOW risk for all (graceful degradation)
     return {
       success: true,
       data: tickers.map((t) => ({
@@ -557,112 +570,126 @@ async function handleCheckPremarketRisk(
     };
   }
 
-  try {
-    const today = new Date().toISOString().split("T")[0];
-    const tickerList = tickers.join(", ");
+  const today = new Date().toISOString().split("T")[0]!;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "x-api-key": apiKey,
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1024,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
-        messages: [
-          {
-            role: "user",
-            content: `Today is ${today}. For each of these tickers, search for upcoming earnings dates, FDA decisions, or major binary events within the next 7 days: ${tickerList}
-
-Return ONLY a JSON array with this exact format, no other text:
-[{"ticker":"AAPL","hasNearTermCatalyst":true,"catalystType":"earnings","catalystDate":"2026-04-22","riskLevel":"HIGH","summary":"Earnings report in 4 days"},{"ticker":"HBR.L","hasNearTermCatalyst":false,"catalystType":null,"catalystDate":null,"riskLevel":"LOW","summary":"No near-term catalysts found"}]
-
-Risk levels:
-- HIGH: earnings within 5 days, FDA decision pending, major legal ruling
-- MEDIUM: earnings within 7-14 days, sector event, conference presentation
-- LOW: nothing notable found
-
-Return the raw JSON array only.`,
-          },
-        ],
-      }),
-    });
-
-    if (!response.ok) {
-      // API error — return LOW for all (don't block trading on search failures)
-      return {
-        success: true,
-        data: tickers.map((t) => ({
-          ticker: t,
-          hasNearTermCatalyst: false,
-          catalystType: null,
-          catalystDate: null,
-          riskLevel: "LOW" as const,
-          summary: "Pre-market risk check failed — API error",
-        })),
-      };
+  // Check cache first — return cached results for tickers already looked up today
+  const cachedResults: PremarketRiskItem[] = [];
+  const uncachedTickers: string[] = [];
+  for (const t of tickers) {
+    const cacheKey = `${t}:${today}`;
+    const cached = preMarketRiskCache.get(cacheKey);
+    if (cached) {
+      cachedResults.push(cached);
+    } else {
+      uncachedTickers.push(t);
     }
-
-    const data = (await response.json()) as {
-      content: Array<{ type: string; text?: string }>;
-    };
-
-    // Extract text from response
-    const textBlocks = data.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("");
-
-    // Parse the JSON array from the response
-    const jsonMatch = textBlocks.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      return {
-        success: true,
-        data: tickers.map((t) => ({
-          ticker: t,
-          hasNearTermCatalyst: false,
-          catalystType: null,
-          catalystDate: null,
-          riskLevel: "LOW" as const,
-          summary: "Could not parse risk check response",
-        })),
-      };
-    }
-
-    const parsed = JSON.parse(jsonMatch[0]) as PremarketRiskItem[];
-
-    // Ensure all requested tickers have a result
-    const resultMap = new Map(parsed.map((r) => [r.ticker, r]));
-    const results: PremarketRiskItem[] = tickers.map((t) =>
-      resultMap.get(t) ?? {
-        ticker: t,
-        hasNearTermCatalyst: false,
-        catalystType: null,
-        catalystDate: null,
-        riskLevel: "LOW" as const,
-        summary: "No data returned for this ticker",
-      }
-    );
-
-    return { success: true, data: results };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    // Don't block trading on search failures
-    return {
-      success: true,
-      data: tickers.map((t) => ({
-        ticker: t,
-        hasNearTermCatalyst: false,
-        catalystType: null,
-        catalystDate: null,
-        riskLevel: "LOW" as const,
-        summary: `Risk check error: ${message}`,
-      })),
-    };
   }
+
+  // If all tickers are cached, return immediately — no API call needed
+  if (uncachedTickers.length === 0) {
+    return { success: true, data: cachedResults };
+  }
+
+  // Look up uncached tickers one at a time with 3s delays to avoid rate limits
+  const freshResults: PremarketRiskItem[] = [];
+  for (let i = 0; i < uncachedTickers.length; i++) {
+    const ticker = uncachedTickers[i]!;
+    if (i > 0) await sleep(3000); // 3s delay between API calls
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "anthropic-version": "2023-06-01",
+          "x-api-key": apiKey,
+        },
+        body: JSON.stringify({
+          model: DEFAULT_MODEL,
+          max_tokens: 512,
+          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }],
+          messages: [
+            {
+              role: "user",
+              content: `Today is ${today}. Check if ${ticker} has upcoming earnings, FDA decisions, or major binary events within 7 days. Return ONLY JSON: {"ticker":"${ticker}","hasNearTermCatalyst":true/false,"catalystType":"earnings"|null,"catalystDate":"YYYY-MM-DD"|null,"riskLevel":"HIGH"|"MEDIUM"|"LOW","summary":"brief reason"}`,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        const fallback: PremarketRiskItem = {
+          ticker,
+          hasNearTermCatalyst: false,
+          catalystType: null,
+          catalystDate: null,
+          riskLevel: "LOW",
+          summary: "Pre-market risk check failed — API error",
+        };
+        freshResults.push(fallback);
+        preMarketRiskCache.set(`${ticker}:${today}`, fallback);
+        continue;
+      }
+
+      const data = (await response.json()) as {
+        content: Array<{ type: string; text?: string }>;
+      };
+
+      const textBlocks = data.content
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("");
+
+      const jsonMatch = textBlocks.match(/\{[\s\S]*?\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]) as PremarketRiskItem;
+        parsed.ticker = ticker; // ensure ticker matches request
+        freshResults.push(parsed);
+        preMarketRiskCache.set(`${ticker}:${today}`, parsed);
+      } else {
+        const fallback: PremarketRiskItem = {
+          ticker,
+          hasNearTermCatalyst: false,
+          catalystType: null,
+          catalystDate: null,
+          riskLevel: "LOW",
+          summary: "Could not parse risk check response",
+        };
+        freshResults.push(fallback);
+        preMarketRiskCache.set(`${ticker}:${today}`, fallback);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      const fallback: PremarketRiskItem = {
+        ticker,
+        hasNearTermCatalyst: false,
+        catalystType: null,
+        catalystDate: null,
+        riskLevel: "LOW",
+        summary: `Risk check error: ${message}`,
+      };
+      freshResults.push(fallback);
+      preMarketRiskCache.set(`${ticker}:${today}`, fallback);
+    }
+  }
+
+  // Merge cached + fresh, preserving original ticker order
+  const allResultsMap = new Map<string, PremarketRiskItem>();
+  for (const r of cachedResults) allResultsMap.set(r.ticker, r);
+  for (const r of freshResults) allResultsMap.set(r.ticker, r);
+
+  const results: PremarketRiskItem[] = tickers.map((t) =>
+    allResultsMap.get(t) ?? {
+      ticker: t,
+      hasNearTermCatalyst: false,
+      catalystType: null,
+      catalystDate: null,
+      riskLevel: "LOW" as const,
+      summary: "No data returned for this ticker",
+    }
+  );
+
+  return { success: true, data: results };
 }
 
 async function handleFlagPositionHealth(
@@ -683,9 +710,9 @@ async function handleFlagPositionHealth(
 
     await db2.agentDecisionLog.create({
       data: {
-        cycleId: `health-flag-${Date.now()}`,
+        cycleId: randomUUID(),
         cycleStartedAt: new Date(),
-        contextJson: JSON.stringify({ tradeId, severity }),
+        contextJson: { tradeId, severity },
         reasoning: `Position health flag: [${severity}] ${concern}`,
         actionsJson: JSON.stringify([{ tool: "flag_position_health", tradeId, concern, severity }]),
         outcomeJson: JSON.stringify({ flagged: true }),

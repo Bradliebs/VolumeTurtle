@@ -70,6 +70,7 @@ const db = prisma as unknown as {
     create: (args: { data: Record<string, unknown> }) => Promise<unknown>;
     findFirst: (args: { where: Record<string, unknown> }) => Promise<{ id: number } | null>;
   };
+  $transaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
 };
 
 // ── Row types ──────────────────────────────────────────────────────────────
@@ -178,7 +179,10 @@ export async function preFlightChecks(
   let candles: Candle[] = [];
   try {
     const { fetchHistory } = await import("@/lib/data/yahoo");
-    const bars = await fetchHistory(order.ticker, new Date(Date.now() - 90 * 86400_000));
+    const { data: bars, error: fetchErr } = await fetchHistory(order.ticker, new Date(Date.now() - 90 * 86400_000));
+    if (fetchErr) {
+      log.warn({ ticker: order.ticker, error: fetchErr }, "fetchHistory returned error — regime/validation degraded");
+    }
     candles = bars.map((b) => ({
       date: b.date,
       open: b.open,
@@ -340,8 +344,11 @@ export async function preFlightChecks(
     let breadth = null;
     try {
       breadth = await calculateBreadth(getUniverse());
-    } catch {
-      // Breadth unavailable — continue with 3-layer assessment
+    } catch (breadthErr) {
+      log.warn({ error: breadthErr instanceof Error ? breadthErr.message : String(breadthErr) }, "Breadth calculation failed — treating as DETERIORATING (fail-safe)");
+      failures.push(
+        "BREADTH_UNAVAILABLE — breadth calculation failed. Treating as DETERIORATING — no new entries until breadth data is available.",
+      );
     }
 
     const assessment = assessRegime(regime, tickerRegime, breadth);
@@ -356,7 +363,21 @@ export async function preFlightChecks(
           "REGIME_CAUTION — Grade B signals suspended in CAUTION regime. Grade A only.",
         );
       } else {
-        warnings.push("REGIME_CAUTION — operating at reduced risk");
+        // Grade A in CAUTION: execute at 50% position size (same pattern as equity curve CAUTION)
+        const riskPerShare = order.suggestedEntry - order.suggestedStop;
+        if (riskPerShare > 0) {
+          const originalShares = order.suggestedShares;
+          const scaledShares = parseFloat((originalShares * 0.5).toFixed(4));
+          const scaledRisk = scaledShares * riskPerShare;
+          order.suggestedShares = scaledShares;
+          order.dollarRisk = scaledRisk;
+          adjustments.push(
+            `REGIME_CAUTION — Grade A at 50% size. Shares: ${originalShares} → ${scaledShares}`,
+          );
+          log.info(`[PreFlight] REGIME_CAUTION — Grade A sized at 50%. Shares: ${originalShares} → ${scaledShares}`);
+        } else {
+          warnings.push("REGIME_CAUTION — operating at reduced risk");
+        }
       }
     }
 
@@ -543,11 +564,16 @@ export async function preFlightChecks(
     const heatCapPct = heatCapEnv ? parseFloat(heatCapEnv) : NaN;
 
     if (Number.isFinite(heatCapPct) && heatCapPct > 0 && heatCapPct <= 0.5) {
-      const balance = (await db.accountSnapshot.findFirst({
+      const snapshot = await db.accountSnapshot.findFirst({
         orderBy: { date: "desc" },
-      }))?.balance ?? 0;
+      });
+      const balance = snapshot?.balance ?? 0;
 
-      if (balance > 0) {
+      if (balance <= 0) {
+        failures.push(
+          "HEAT_CAP_FAILED — could not verify account balance. Cannot confirm portfolio heat is within cap.",
+        );
+      } else {
         // Compute existing open risk in GBP (account currency).
         const openTrades = await db.trade.findMany({ where: { status: "OPEN" } });
         const gbpUsdRate = await getGbpUsdRate();
@@ -571,14 +597,14 @@ export async function preFlightChecks(
         } else {
           log.info(`[PreFlight] Check 13 — heat OK: ${(totalRiskPct * 100).toFixed(2)}% / ${(heatCapPct * 100).toFixed(1)}% cap (${openTrades.length} open positions)`);
         }
-      } else {
-        log.info("[PreFlight] Check 13 — no account balance, skipping heat cap");
       }
     } else {
       log.info("[PreFlight] Check 13 — heat cap not configured (set HEAT_CAP_PCT env var to enable)");
     }
   } catch (err) {
-    log.warn({ error: err instanceof Error ? err.message : String(err) }, "Heat cap check failed — continuing");
+    failures.push(
+      `HEAT_CAP_FAILED — heat cap check error: ${err instanceof Error ? err.message : String(err)}. Cannot verify portfolio risk.`,
+    );
   }
 
   return {
@@ -850,53 +876,49 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
 
     await logExecution(order.id, "CONFIRMED", `Executed: ${execResult.actualShares} shares @ $${(execResult.actualPrice ?? 0).toFixed(2)}, T212 order: ${execResult.t212OrderId}`);
 
-    // Re-check position count before creating trade (guards against race with other executions)
-    const currentOpenCount = await db.trade.count({ where: { status: "OPEN" } });
-    const maxPos = config.maxPositions ?? 5;
-    if (currentOpenCount >= maxPos) {
-      log.warn({ ticker: adjustedOrder.ticker, openCount: currentOpenCount, maxPos }, "Position limit reached between pre-flight and execution — trade executed on T212 but not tracked in DB. Manual reconciliation needed.");
-      await logExecution(order.id, "POST_EXEC_WARNING", `Position limit reached (${currentOpenCount}/${maxPos}) — T212 order placed but trade not created in DB`);
-      await sendTelegram({
-        text: `<b>\u26a0 POST-EXEC WARNING</b>\n<code>${adjustedOrder.ticker}</code>\nT212 order filled but position limit reached (${currentOpenCount}/${maxPos}).\nTrade NOT created in DB. Manual reconciliation needed.`,
-      }).catch(() => { /* best effort */ });
-      // Still mark order as executed since T212 has the position
-      return;
-    }
+    // Atomic transaction: re-check position count + create trade in DB.
+    // Prevents race where two concurrent executions both pass the pre-flight
+    // position limit, then both create trades exceeding maxPositions.
+    await db.$transaction(async (tx) => {
+      const txDb = tx as typeof db;
+      const currentOpenCount = await txDb.trade.count({ where: { status: "OPEN" } });
+      const maxPos = config.maxPositions ?? 5;
 
-    // Also re-check auto-execution is still enabled (emergency disable guard)
-    const latestSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
-    if (latestSettings && !latestSettings.autoExecutionEnabled) {
-      log.warn({ ticker: adjustedOrder.ticker }, "Auto-execution disabled between pre-flight and execution — trade executed on T212, creating DB record anyway");
-      await logExecution(order.id, "POST_EXEC_WARNING", "Auto-execution was disabled mid-flight — DB trade created for reconciliation");
-    }
+      if (currentOpenCount >= maxPos) {
+        log.warn({ ticker: adjustedOrder.ticker, openCount: currentOpenCount, maxPos }, "Position limit reached between pre-flight and execution — creating trade for reconciliation but alerting");
+        await logExecution(order.id, "POST_EXEC_WARNING", `Position limit reached (${currentOpenCount}/${maxPos}) — T212 order placed, creating DB trade for reconciliation`);
+        await sendTelegram({
+          text: `<b>\u26a0 POST-EXEC WARNING</b>\n<code>${adjustedOrder.ticker}</code>\nPosition limit reached (${currentOpenCount}/${maxPos}) during race window.\nT212 order filled — DB trade created for reconciliation.`,
+        }).catch(() => { /* best effort */ });
+      }
 
-    // Create Trade in DB (same as manual entry)
-    await db.trade.create({
-      data: {
-        ticker: adjustedOrder.ticker,
-        entryDate: new Date(),
-        entryPrice: execResult.actualPrice ?? adjustedOrder.suggestedEntry,
-        shares: execResult.actualShares ?? adjustedOrder.suggestedShares,
-        hardStop: adjustedOrder.suggestedStop,
-        trailingStop: adjustedOrder.suggestedStop,
-        hardStopPrice: adjustedOrder.suggestedStop,
-        trailingStopPrice: adjustedOrder.suggestedStop,
-        status: "OPEN",
-        volumeRatio: 0,
-        rangePosition: 0,
-        atr20: 0,
-        signalSource: adjustedOrder.signalSource,
-        signalScore: adjustedOrder.compositeScore,
-        signalGrade: adjustedOrder.signalGrade,
-        sector: adjustedOrder.sector || null,
-        isRunner: adjustedOrder.isRunner,
-        importedFromT212: false,
-        manualEntry: false,
-        // Stop push tracking (Layer 1 result)
-        stopPushedAt: execResult.stopPushSuccess ? new Date() : null,
-        stopPushAttempts: 1,
-        stopPushError: execResult.stopPushError ?? null,
-      },
+      // Always create the trade — T212 has the position, DB must track it
+      await txDb.trade.create({
+        data: {
+          ticker: adjustedOrder.ticker,
+          entryDate: new Date(),
+          entryPrice: execResult.actualPrice ?? adjustedOrder.suggestedEntry,
+          shares: execResult.actualShares ?? adjustedOrder.suggestedShares,
+          hardStop: adjustedOrder.suggestedStop,
+          trailingStop: adjustedOrder.suggestedStop,
+          hardStopPrice: adjustedOrder.suggestedStop,
+          trailingStopPrice: adjustedOrder.suggestedStop,
+          status: "OPEN",
+          volumeRatio: 0,
+          rangePosition: 0,
+          atr20: 0,
+          signalSource: adjustedOrder.signalSource,
+          signalScore: adjustedOrder.compositeScore,
+          signalGrade: adjustedOrder.signalGrade,
+          sector: adjustedOrder.sector || null,
+          isRunner: adjustedOrder.isRunner,
+          importedFromT212: false,
+          manualEntry: false,
+          stopPushedAt: execResult.stopPushSuccess ? new Date() : null,
+          stopPushAttempts: 1,
+          stopPushError: execResult.stopPushError ?? null,
+        },
+      });
     });
 
     // Send execution alert

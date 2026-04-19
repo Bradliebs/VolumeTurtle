@@ -169,7 +169,18 @@ export async function t212Fetch(path: string, settings: T212Settings, options?: 
 
   // Retry up to 3 times on 429 (rate limit), respecting reset header
   for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await fetch(`${baseUrl}${path}`, { method, headers, body });
+    let response: Response;
+    try {
+      response = await fetch(`${baseUrl}${path}`, {
+        method, headers, body,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new Error(`T212 API timed out after 15 seconds: ${method} ${path}`);
+      }
+      throw err;
+    }
 
     if (response.status === 429) {
       const resetHeader = response.headers.get("x-ratelimit-reset");
@@ -616,7 +627,16 @@ export async function updateStopOnT212(
     (o) => normalizeTicker(o.ticker) === normalizeTicker(t212Ticker) && isStopOrderType(o.type),
   );
   if (existingStop) {
-    await cancelOrder(settings, existingStop.id);
+    // Rate-limit before cancel — uses same write endpoint as placement
+    await paceEndpoint("stopOrderWrite", settings);
+    try {
+      await cancelOrder(settings, existingStop.id);
+    } catch (cancelErr) {
+      // Cancel failed — do NOT attempt placement (would create duplicate stop)
+      const msg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+      log.error({ yahooTicker, orderId: existingStop.id, error: msg }, "Stop cancel failed — aborting placement to prevent duplicate stops");
+      throw new Error(`Stop cancel failed for ${yahooTicker} (order ${existingStop.id}): ${msg}. Placement aborted — add to retry queue.`);
+    }
     cancelledOrderId = existingStop.id;
     // T212 rate limit: wait after cancel before placing new order
     await sleep(2500);
@@ -624,6 +644,13 @@ export async function updateStopOnT212(
 
   // Place new stop order (negative quantity = sell/stop-loss)
   const placed = await placeStopOrder(settings, t212Ticker, quantity, stopPrice);
+
+  // Verify the placement response contains a valid order ID
+  if (!placed || !placed.id) {
+    log.error({ yahooTicker, stopPrice, response: placed }, "Stop placement returned invalid response — no order ID");
+    throw new Error(`Stop placement for ${yahooTicker} returned invalid response (no order ID). Position may have no stop — add to retry queue.`);
+  }
+
   return { cancelled: cancelledOrderId, placed };
 }
 

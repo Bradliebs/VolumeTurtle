@@ -165,8 +165,7 @@ export async function GET(req: Request) {
       tradeWhere.signalSource = sourceFilter;
     }
 
-    const [allTrades, snapshots, latestSnapshot, gbpUsdRate, gbpEurRate] =
-      await Promise.all([
+    const results = await Promise.allSettled([
         db.trade.findMany({
           where: tradeWhere,
           orderBy: { entryDate: "desc" },
@@ -176,6 +175,21 @@ export async function GET(req: Request) {
         withTimeout(getGbpUsdRate(), 8_000, 1.27),
         withTimeout(getGbpEurRate(), 8_000, 1.17),
       ]);
+
+    // Extract values, using fallbacks for failed queries
+    const allTrades = results[0].status === "fulfilled" ? results[0].value : [];
+    const snapshots = results[1].status === "fulfilled" ? results[1].value : [];
+    const latestSnapshot = results[2].status === "fulfilled" ? results[2].value : null;
+    const gbpUsdRate = results[3].status === "fulfilled" ? results[3].value : 1.27;
+    const gbpEurRate = results[4].status === "fulfilled" ? results[4].value : 1.17;
+
+    // Log any query failures
+    for (let i = 0; i < results.length; i++) {
+      if (results[i]!.status === "rejected") {
+        const labels = ["trades", "snapshots", "latestSnapshot", "gbpUsdRate", "gbpEurRate"];
+        log.warn({ query: labels[i], error: (results[i] as PromiseRejectedResult).reason }, `Journal query '${labels[i]!}' failed — using fallback`);
+      }
+    }
 
     const currentBalance = latestSnapshot?.balance ?? 0;
 

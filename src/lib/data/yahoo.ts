@@ -19,14 +19,21 @@ export interface HistoricalBar {
   volume: number;
 }
 
+export interface FetchHistoryResult {
+  data: HistoricalBar[];
+  error: string | null;
+}
+
 /**
  * Fetch historical daily bars for a ticker.
+ * Returns { data, error } so callers can distinguish "no data available"
+ * (data=[], error=null) from "fetch failed" (data=[], error=message).
  */
 export async function fetchHistory(
   symbol: string,
   period1: Date,
   period2?: Date,
-): Promise<HistoricalBar[]> {
+): Promise<FetchHistoryResult> {
   try {
     const result = await withRetry(
       () => yahooFinance.historical(symbol, {
@@ -44,18 +51,22 @@ export async function fetchHistory(
       },
     );
 
-    return result.map((bar) => ({
-      date: bar.date,
-      open: bar.open,
-      high: bar.high,
-      low: bar.low,
-      close: bar.close,
-      adjClose: bar.adjClose ?? bar.close,
-      volume: bar.volume,
-    }));
+    return {
+      data: result.map((bar) => ({
+        date: bar.date,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+        adjClose: bar.adjClose ?? bar.close,
+        volume: bar.volume,
+      })),
+      error: null,
+    };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     log.error({ symbol, err }, "Failed to fetch history after retries");
-    return [];
+    return { data: [], error: message };
   }
 }
 

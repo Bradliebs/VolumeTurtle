@@ -31,7 +31,7 @@ export async function logCycle(payload: CycleLogPayload): Promise<void> {
       data: {
         cycleId: payload.cycleId,
         cycleStartedAt: payload.cycleStartedAt,
-        contextJson: JSON.stringify(payload.context),
+        contextJson: payload.context as unknown,
         reasoning: payload.reasoning,
         actionsJson: JSON.stringify(payload.actions),
         outcomeJson: JSON.stringify(
