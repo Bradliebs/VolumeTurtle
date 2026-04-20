@@ -125,7 +125,17 @@ const db = prisma as unknown as {
       cruisePollFastIntervalMins?: number;
       cruisePollFastStartUtcHour?: number;
       cruisePollFastEndUtcHour?: number;
+      timeStopEnabled?: boolean;
+      timeStopDays?: number;
+      timeStopMinR?: number;
     } | null>;
+  };
+  stopHistory: {
+    findFirst: (args: unknown) => Promise<{ stopLevel: number } | null>;
+  };
+  timeStopFlag: {
+    findFirst: (args: unknown) => Promise<{ id: number } | null>;
+    create: (args: { data: Record<string, unknown> }) => Promise<{ id: number }>;
   };
 };
 
@@ -322,7 +332,7 @@ export async function drainRetryQueueOnStartup(): Promise<void> {
   await processRetryQueue();
 }
 
-async function recordRatchetEvent(
+async function _recordRatchetEvent(
   item: RetryItem,
   t212Updated: boolean,
   t212Response: string | null,
@@ -691,6 +701,14 @@ export async function runSinglePoll(): Promise<PollResult> {
       });
     }
 
+    // Time-stop flagging — advisory only, never auto-closes.
+    // Runs after stop ratcheting so currentStop reflects the latest value.
+    try {
+      await checkTimeStops(openTrades);
+    } catch (err) {
+      log.warn({ err: String(err) }, "[CRUISE-CONTROL] Time-stop check failed (non-fatal)");
+    }
+
     // Start retry timer if needed (check DB for pending retries)
     if (t212Unavailable) {
       startRetryTimer();
@@ -997,4 +1015,94 @@ if (!gShutdown.__ccShutdownRegistered) {
   const shutdown = async () => { await stopCruiseControl(); };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+}
+
+// ── Time-Stop Flagging ──────────────────────────────────────────────────────
+
+/**
+ * Time-stop flagging — advisory only. Never auto-closes positions.
+ *
+ * For each open trade, computes:
+ *   daysHeld   = days since entryDate
+ *   rMultiple  = (currentPrice - entryPrice) / (entryPrice - initialStop)
+ *
+ * If daysHeld >= timeStopDays AND rMultiple < timeStopMinR, creates a
+ * TimeStopFlag row and sends a Telegram warning. Skips if an undismissed
+ * flag already exists for the trade (no duplicate alerts).
+ *
+ * Reads thresholds from AppSettings (defaults: 25 days, 0.5R, enabled=true).
+ */
+async function checkTimeStops(openTrades: OpenPosition[]): Promise<void> {
+  const settings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
+  const enabled = settings?.timeStopEnabled ?? true;
+  if (!enabled) return;
+
+  const minDays = settings?.timeStopDays ?? 25;
+  const minR = settings?.timeStopMinR ?? 0.5;
+  const now = Date.now();
+
+  for (const trade of openTrades) {
+    try {
+      const daysHeld = Math.floor((now - trade.entryDate.getTime()) / 86_400_000);
+      if (daysHeld < minDays) continue;
+
+      // Initial stop = first StopHistory row, fallback to hardStop
+      const firstStop = await db.stopHistory.findFirst({
+        where: { tradeId: trade.id },
+        orderBy: { date: "asc" },
+        select: { stopLevel: true },
+      } as unknown);
+      const initialStop = firstStop?.stopLevel ?? trade.hardStop;
+      const riskPerShare = trade.entryPrice - initialStop;
+      if (riskPerShare <= 0) continue; // can't compute R-multiple safely
+
+      // Current price = last cached daily close
+      const since = new Date(now - 7 * 86_400_000);
+      const quotes = await getCachedQuotes(trade.ticker, since);
+      const lastClose = quotes.length > 0 ? quotes[quotes.length - 1]!.close : null;
+      if (lastClose == null || !Number.isFinite(lastClose)) continue;
+
+      const rMultiple = (lastClose - trade.entryPrice) / riskPerShare;
+      if (rMultiple >= minR) continue;
+
+      // Skip if an undismissed flag already exists for this trade
+      const existing = await db.timeStopFlag.findFirst({
+        where: { tradeId: trade.id, dismissed: false },
+        select: { id: true },
+      } as unknown);
+      if (existing) continue;
+
+      const currentStop = trade.trailingStopPrice ?? trade.trailingStop ?? trade.hardStop;
+
+      await db.timeStopFlag.create({
+        data: {
+          tradeId: trade.id,
+          ticker: trade.ticker,
+          daysHeld,
+          rMultiple: Math.round(rMultiple * 100) / 100,
+          entryPrice: trade.entryPrice,
+          currentStop,
+        },
+      });
+
+      await sendAlert(
+        "warning",
+        `⏱ TIME-STOP FLAG: ${trade.ticker} — ${daysHeld}d held, ${rMultiple.toFixed(2)}R. Position not demonstrating momentum. Review for exit.`,
+        {
+          tradeId: trade.id,
+          ticker: trade.ticker,
+          daysHeld,
+          rMultiple,
+          entryPrice: trade.entryPrice,
+          currentStop,
+          initialStop,
+        },
+      );
+    } catch (err) {
+      log.warn(
+        { err: String(err), ticker: trade.ticker, tradeId: trade.id },
+        "[CRUISE-CONTROL] Time-stop check failed for one trade (continuing)",
+      );
+    }
+  }
 }

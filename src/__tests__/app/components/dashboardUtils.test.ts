@@ -75,7 +75,7 @@ describe("calculateStopAlignment", () => {
     const syncData: Record<string, SyncResult> = {
       t1: { tradeId: "t1", ticker: "AAPL", t212: { currentPrice: 105, quantity: 10, averagePrice: 100, ppl: 50, stopLoss: 92, confirmed: true } },
     };
-    const instructions: Instruction[] = [{ type: "UPDATE_STOP", message: "Update stop", urgent: false, ticker: "AAPL" } as Instruction];
+    const instructions: Instruction[] = [{ type: "UPDATE_STOP", message: "Update stop", urgent: false, ticker: "AAPL" } as unknown as Instruction];
     expect(calculateStopAlignment(trades, syncData, undefined, instructions, [])).toBe("needs_update");
   });
 

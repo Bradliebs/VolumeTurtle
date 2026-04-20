@@ -10,8 +10,9 @@ jest.mock("@/lib/logger", () => ({
   createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }),
 }));
 
+const mockSendTelegram = jest.fn().mockResolvedValue(undefined);
 jest.mock("@/lib/telegram", () => ({
-  sendTelegram: jest.fn().mockResolvedValue(undefined),
+  sendTelegram: (...args: unknown[]) => mockSendTelegram(...args),
 }));
 
 const mockGetInstruments = jest.fn();
@@ -32,7 +33,7 @@ jest.mock("@/lib/t212/client", () => ({
 
 import { pushStopToT212 } from "@/lib/t212/pushStop";
 
-const SETTINGS = { environment: "demo", apiKey: "k", apiSecret: "s", accountType: "isa" as const };
+const SETTINGS = { environment: "demo" as const, apiKey: "k", apiSecret: "s", accountType: "isa" as const };
 const INSTRUMENTS = [
   { ticker: "AAPL_US_EQ", shortName: "AAPL", currencyCode: "USD" },
   { ticker: "PMOl_EQ", shortName: "HBR", currencyCode: "GBX" },
@@ -137,4 +138,62 @@ describe("pushStopToT212", () => {
     expect(result.cancelledOrderId).toBeNull();
     expect(mockPlaceStopOrder).toHaveBeenCalledWith(SETTINGS, "AAPL_US_EQ", 10, 150);
   });
+
+  it("restore path: cancel succeeds, place fails, old stop is restored — no CRITICAL alert sent", async () => {
+    // When restoration succeeds, the position IS protected — no CRITICAL alert.
+    mockGetPendingOrders.mockResolvedValue([
+      { id: 444, ticker: "AAPL_US_EQ", type: "STOP", stopPrice: 142 },
+    ]);
+    mockPlaceStopOrder
+      .mockRejectedValueOnce(new Error("Rate limit"))
+      .mockResolvedValueOnce({ id: 555, ticker: "AAPL_US_EQ", type: "STOP" });
+
+    const result = await pushStopToT212("AAPL", 10, 160, SETTINGS);
+
+    // Cancel happened
+    expect(mockCancelOrder).toHaveBeenCalledWith(SETTINGS, 444);
+    // Two place attempts — new stop (fails) then restoration (succeeds)
+    expect(mockPlaceStopOrder).toHaveBeenCalledTimes(2);
+    expect(mockPlaceStopOrder).toHaveBeenNthCalledWith(1, SETTINGS, "AAPL_US_EQ", 10, 160);
+    expect(mockPlaceStopOrder).toHaveBeenNthCalledWith(2, SETTINGS, "AAPL_US_EQ", 10, 142);
+    // Result reflects restoration
+    expect(result.success).toBe(false);
+    expect(result.restored).toBe(true);
+    expect(result.error).toContain("old stop restored");
+    expect(result.error).toContain("142");
+    // Critically: NO Telegram alert because position is protected by restored stop
+    const criticalAlerts = mockSendTelegram.mock.calls.filter((c) => {
+      const arg = c[0] as { text?: string };
+      return arg?.text?.includes("CRITICAL");
+    });
+    expect(criticalAlerts).toHaveLength(0);
+  }, 15000);
+
+  it("both place and restore fail — sends CRITICAL Telegram alert with manual-set instruction", async () => {
+    mockGetPendingOrders.mockResolvedValue([
+      { id: 666, ticker: "AAPL_US_EQ", type: "STOP", stopPrice: 145 },
+    ]);
+    mockPlaceStopOrder
+      .mockRejectedValueOnce(new Error("Rate limit"))
+      .mockRejectedValueOnce(new Error("Still rate limited"));
+
+    const result = await pushStopToT212("AAPL", 10, 160, SETTINGS);
+
+    // Result indicates no stop active
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("NO STOP ACTIVE");
+    expect(result.restored).toBeUndefined();
+
+    // CRITICAL Telegram alert MUST be sent
+    expect(mockSendTelegram).toHaveBeenCalled();
+    const criticalCall = mockSendTelegram.mock.calls.find((c) => {
+      const arg = c[0] as { text?: string };
+      return arg?.text?.includes("CRITICAL") && arg?.text?.includes("NO STOP");
+    });
+    expect(criticalCall).toBeDefined();
+    const alertText = (criticalCall?.[0] as { text: string }).text;
+    expect(alertText).toContain("AAPL");
+    expect(alertText).toContain("160"); // manual-set price
+    expect(alertText.toUpperCase()).toContain("SET STOP MANUALLY");
+  }, 15000);
 });

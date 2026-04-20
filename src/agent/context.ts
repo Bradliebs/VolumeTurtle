@@ -1,9 +1,13 @@
 import { prisma } from "@/db/client";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { applyDbSettings } from "@/lib/config";
+import { getCachedT212Positions, loadT212Settings } from "@/lib/t212/client";
 
 const db = prisma as unknown as {
-  trade: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
+  trade: {
+    findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+    update: (args: unknown) => Promise<Record<string, unknown>>;
+  };
   pendingOrder: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
   accountSnapshot: { findFirst: (args: unknown) => Promise<Record<string, unknown> | null> };
   appSettings: { findFirst: () => Promise<Record<string, unknown> | null> };
@@ -11,7 +15,96 @@ const db = prisma as unknown as {
   agentDecisionLog: { findFirst: (args: unknown) => Promise<Record<string, unknown> | null> };
   cruiseControlRatchetEvent: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
   stopHistory: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
+  timeStopFlag: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
 };
+
+// Ghost-position miss counter — keyed by Trade.id (cuid string). Survives
+// across cycles within the process. Reset to 0 when the position reappears in
+// T212. After 2 consecutive cycles missing from T212, the trade is auto-closed
+// in the DB with exitReason "GHOST_POSITION — T212 reconciliation".
+//
+// Mirrors the cruise-control-engine ghost tracker pattern but operates on the
+// agent's hourly cycle (max ~2 hours to resolve vs cruise control's 3 polls).
+const ghostMissCount = new Map<string, number>();
+
+/**
+ * Cross-check open DB trades against live T212 positions and auto-close
+ * any trade missing from T212 for 2+ consecutive agent cycles.
+ *
+ * Returns the set of trade IDs that were closed this cycle so the caller
+ * can exclude them from the returned context.
+ */
+async function reconcileGhostPositions(
+  openTrades: Array<Record<string, unknown>>
+): Promise<Set<string>> {
+  const closedThisCycle = new Set<string>();
+
+  const settings = loadT212Settings();
+  if (!settings) {
+    // T212 not configured — skip reconciliation, do not penalise.
+    return closedThisCycle;
+  }
+
+  let t212Tickers: Set<string>;
+  try {
+    const { positions } = await getCachedT212Positions(settings);
+    t212Tickers = new Set(positions.map((p) => p.ticker.toUpperCase()));
+  } catch {
+    // T212 unreachable — skip reconciliation this cycle. Do NOT increment
+    // miss counts on connection failures (would falsely close real positions).
+    return closedThisCycle;
+  }
+
+  // Prune tracker entries for trades that are no longer open.
+  const openTradeIds = new Set(openTrades.map((t) => t["id"] as string));
+  for (const tradeId of ghostMissCount.keys()) {
+    if (!openTradeIds.has(tradeId)) ghostMissCount.delete(tradeId);
+  }
+
+  for (const trade of openTrades) {
+    const tradeId = trade["id"] as string;
+    const ticker = (trade["ticker"] as string).toUpperCase();
+    const presentInT212 = t212Tickers.has(ticker);
+
+    if (presentInT212) {
+      ghostMissCount.delete(tradeId);
+      continue;
+    }
+
+    const newCount = (ghostMissCount.get(tradeId) ?? 0) + 1;
+    ghostMissCount.set(tradeId, newCount);
+
+    if (newCount >= 2) {
+      // Confirmed ghost — auto-close in DB. Mirrors the close-route convention:
+      // exitPrice = current trailing stop, rMultiple computed accordingly.
+      const entryPrice = trade["entryPrice"] as number;
+      const hardStop = trade["hardStop"] as number;
+      const trailingStop = trade["trailingStop"] as number;
+      const exitPrice = trailingStop;
+      const riskPerShare = entryPrice - hardStop;
+      const rMultiple = riskPerShare !== 0 ? (exitPrice - entryPrice) / riskPerShare : 0;
+
+      try {
+        await db.trade.update({
+          where: { id: tradeId },
+          data: {
+            status: "CLOSED",
+            exitDate: new Date(),
+            exitPrice,
+            exitReason: "GHOST_POSITION — T212 reconciliation",
+            rMultiple,
+          },
+        } as unknown);
+        ghostMissCount.delete(tradeId);
+        closedThisCycle.add(tradeId);
+      } catch {
+        // Leave miss count in place; will retry next cycle.
+      }
+    }
+  }
+
+  return closedThisCycle;
+}
 
 export interface AgentContext {
   timestamp: string;
@@ -76,6 +169,16 @@ export interface AgentContext {
     lastCycleAt: string | null;
     ratchetsThisCycle: number;
   };
+  timeStopFlags: Array<{
+    id: number;
+    tradeId: string;
+    ticker: string;
+    daysHeld: number;
+    rMultiple: number;
+    entryPrice: number;
+    currentStop: number;
+    flaggedAt: string;
+  }>;
 }
 
 export async function gatherContext(): Promise<AgentContext> {
@@ -86,7 +189,7 @@ export async function gatherContext(): Promise<AgentContext> {
   const now = new Date();
 
   const haltRow = await db.agentHaltFlag.findFirst();
-  const halted = haltRow?.halted ?? false;
+  const halted: boolean = Boolean(haltRow?.halted);
 
   const snapshot = await db.accountSnapshot.findFirst({
     orderBy: { date: "desc" },
@@ -97,9 +200,16 @@ export async function gatherContext(): Promise<AgentContext> {
     orderBy: { entryDate: "asc" },
   } as unknown);
 
+  // Ghost reconciliation: cross-check DB trades against live T212 positions.
+  // Trades missing from T212 for 2+ consecutive cycles are auto-closed and
+  // excluded from the agent's view this cycle. Cleared trades are silently
+  // dropped — no Telegram noise for routine reconciliation.
+  const ghostClosedIds = await reconcileGhostPositions(openTrades);
+  const liveOpenTrades = openTrades.filter((t) => !ghostClosedIds.has(t["id"] as string));
+
   const equity = (snapshot?.balance as number) ?? 10000;
 
-  const openPositions = await Promise.all(openTrades.map(async (t) => {
+  const openPositions = await Promise.all(liveOpenTrades.map(async (t) => {
     const tradeId = t.id as string;
     const entryPrice = t.entryPrice as number;
     const trailingStop = t.trailingStop as number;
@@ -247,6 +357,11 @@ export async function gatherContext(): Promise<AgentContext> {
     orderBy: { createdAt: "desc" },
   } as unknown);
 
+  const activeTimeStopFlags = await db.timeStopFlag.findMany({
+    where: { dismissed: false },
+    orderBy: { flaggedAt: "desc" },
+  } as unknown);
+
   return {
     timestamp: now.toISOString(),
     haltFlag: { halted, reason: (haltRow?.reason as string) ?? null },
@@ -265,5 +380,15 @@ export async function gatherContext(): Promise<AgentContext> {
       lastCycleAt: lastCycleLog ? (lastCycleLog.createdAt as Date).toISOString() : null,
       ratchetsThisCycle: recentRatchets.length,
     },
+    timeStopFlags: activeTimeStopFlags.map((f) => ({
+      id: f["id"] as number,
+      tradeId: f["tradeId"] as string,
+      ticker: f["ticker"] as string,
+      daysHeld: f["daysHeld"] as number,
+      rMultiple: f["rMultiple"] as number,
+      entryPrice: f["entryPrice"] as number,
+      currentStop: f["currentStop"] as number,
+      flaggedAt: (f["flaggedAt"] as Date).toISOString(),
+    })),
   };
 }

@@ -76,7 +76,7 @@ export async function POST(req: Request) {
   if (parsed.error) {
     return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
-  const { orderId, action } = parsed.data;
+  const { orderId, action } = parsed.data ?? {};
 
   // Emergency disable all
   if (action === "emergency_disable") {

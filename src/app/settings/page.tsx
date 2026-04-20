@@ -84,6 +84,24 @@ export default function SettingsPage() {
   const [momSaving, setMomSaving] = useState(false);
   const [momStatus, setMomStatus] = useState<string | null>(null);
 
+  // Time-stop flagging state
+  interface TimeStopFlagItem {
+    id: number;
+    tradeId: string;
+    ticker: string;
+    daysHeld: number;
+    rMultiple: number;
+    entryPrice: number;
+    currentStop: number;
+    flaggedAt: string;
+  }
+  const [tsEnabled, setTsEnabled] = useState(true);
+  const [tsDays, setTsDays] = useState("25");
+  const [tsMinR, setTsMinR] = useState("0.5");
+  const [tsFlags, setTsFlags] = useState<TimeStopFlagItem[]>([]);
+  const [tsSaving, setTsSaving] = useState(false);
+  const [tsStatus, setTsStatus] = useState<string | null>(null);
+
   // Alerts state
   interface AlertItem { id: number; type: string; ticker: string; message: string; severity: string; createdAt: string; }
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -154,6 +172,7 @@ export default function SettingsPage() {
     fetchAutoExecSettings();
     fetchUnprotected();
     fetchAgentSettings();
+    fetchTimeStopSettings();
   }, []);
 
   async function fetchAgentSettings() {
@@ -439,6 +458,68 @@ export default function SettingsPage() {
       }
     } catch { setMomStatus("✗ Network error"); }
     setMomSaving(false);
+  }
+
+  // ── Time-Stop Flagging ──
+  async function fetchTimeStopSettings() {
+    try {
+      const res = await fetch("/api/settings/time-stop");
+      if (res.ok) {
+        const d = await res.json();
+        setTsEnabled(d.timeStopEnabled);
+        setTsDays(String(d.timeStopDays));
+        setTsMinR(String(d.timeStopMinR));
+        setTsFlags(d.activeFlags ?? []);
+      }
+    } catch { /* silent */ }
+  }
+
+  async function saveTimeStopSettings() {
+    setTsSaving(true);
+    setTsStatus(null);
+    const days = parseInt(tsDays, 10);
+    const minR = parseFloat(tsMinR);
+    if (!Number.isFinite(days) || days < 1 || days > 365) {
+      setTsStatus("✗ Days must be 1–365");
+      setTsSaving(false);
+      return;
+    }
+    if (!Number.isFinite(minR)) {
+      setTsStatus("✗ Min R must be a number");
+      setTsSaving(false);
+      return;
+    }
+    try {
+      const res = await fetch("/api/settings/time-stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timeStopEnabled: tsEnabled,
+          timeStopDays: days,
+          timeStopMinR: minR,
+        }),
+      });
+      if (res.ok) {
+        setTsStatus("✓ Saved");
+        setTimeout(() => setTsStatus(null), 3000);
+      } else {
+        const d = await res.json().catch(() => ({ error: "Failed" }));
+        setTsStatus(`✗ ${d.error ?? "Failed"}`);
+      }
+    } catch { setTsStatus("✗ Network error"); }
+    setTsSaving(false);
+  }
+
+  async function dismissTimeStopFlag(id: number) {
+    try {
+      const res = await fetch(`/api/settings/time-stop?id=${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setTsFlags((prev) => prev.filter((f) => f.id !== id));
+      } else {
+        const d = await res.json().catch(() => ({ error: "Failed" }));
+        showError(d.error ?? "Failed to dismiss flag");
+      }
+    } catch { showError("Network error dismissing flag"); }
   }
 
   // ── Alerts ──
@@ -985,6 +1066,74 @@ export default function SettingsPage() {
               {momSaving ? "SAVING…" : "▶ SAVE"}
             </button>
             {momStatus && <span className={momStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{momStatus}</span>}
+          </div>
+        </div>
+      </section>
+
+      {/* TIME-STOP FLAGGING */}
+      <section className="mb-8">
+        <h2 className="text-xs font-semibold text-[var(--dim)] mb-4 tracking-widest border-b border-[var(--border)] pb-2">
+          TIME-STOP FLAGGING
+        </h2>
+        <div className="space-y-4 text-xs" style={mono}>
+          <p className="text-[10px] text-[var(--dim)]">
+            Advisory only — never auto-closes positions. Cruise control flags any open trade
+            held ≥ Days threshold whose R-multiple is below the Min R ceiling, and sends a
+            Telegram warning. Dismiss flags below once reviewed.
+          </p>
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Enabled</span>
+            <button
+              onClick={() => setTsEnabled(!tsEnabled)}
+              className={`w-10 h-5 rounded-full transition-colors relative ${tsEnabled ? "bg-[var(--green)]" : "bg-[#333]"}`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${tsEnabled ? "left-5" : "left-0.5"}`} />
+            </button>
+            <span className="text-[var(--dim)]">{tsEnabled ? "Cruise control flags stale positions" : "Time-stop flagging disabled"}</span>
+          </div>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--dim)]">Days threshold</span>
+              <input type="number" step="1" min="1" max="365" value={tsDays} onChange={(e) => setTsDays(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--green)] outline-none" style={mono} />
+              <span className="text-[var(--dim)]">days</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[var(--dim)]">Min R ceiling</span>
+              <input type="number" step="0.1" value={tsMinR} onChange={(e) => setTsMinR(e.target.value)} className="w-16 px-2 py-1.5 bg-[#0a0a0a] border border-[#333] text-white text-center focus:border-[var(--green)] outline-none" style={mono} />
+              <span className="text-[var(--dim)]">R</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button onClick={saveTimeStopSettings} disabled={tsSaving} className="px-4 py-2 border border-[var(--green)] text-[var(--green)] hover:bg-[var(--green)] hover:text-black transition-colors uppercase tracking-wider text-[10px] font-semibold disabled:opacity-40">
+              {tsSaving ? "SAVING…" : "▶ SAVE"}
+            </button>
+            {tsStatus && <span className={tsStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{tsStatus}</span>}
+          </div>
+
+          <div className="pt-2 border-t border-[var(--border)]">
+            <p className="text-[var(--dim)] mb-2">Active flags ({tsFlags.length})</p>
+            {tsFlags.length === 0 ? (
+              <p className="text-[var(--dim)] text-[10px]">No active time-stop flags</p>
+            ) : (
+              <div className="space-y-1">
+                {tsFlags.map((f) => (
+                  <div key={f.id} className="flex items-center justify-between gap-3 px-3 py-2 border border-[#333] bg-[#0a0a0a]">
+                    <div className="flex items-center gap-4 min-w-0">
+                      <span className="text-white font-semibold w-16 shrink-0">{f.ticker}</span>
+                      <span className="text-[var(--dim)]">{f.daysHeld}d held</span>
+                      <span className={f.rMultiple < 0 ? "text-[var(--red)]" : "text-[var(--dim)]"}>{f.rMultiple.toFixed(2)}R</span>
+                      <span className="text-[var(--dim)] text-[10px]">flagged {new Date(f.flaggedAt).toLocaleDateString()}</span>
+                    </div>
+                    <button
+                      onClick={() => dismissTimeStopFlag(f.id)}
+                      className="px-3 py-1 text-[9px] border border-[var(--dim)] text-[var(--dim)] hover:border-[var(--red)] hover:text-[var(--red)] transition-colors uppercase tracking-wider"
+                    >
+                      DISMISS
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </section>

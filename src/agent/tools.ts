@@ -68,8 +68,8 @@ export const TOOL_DEFINITIONS = [
       type: "object" as const,
       properties: {
         tradeId: {
-          type: "number" as const,
-          description: "The Trade ID to close.",
+          type: "string" as const,
+          description: "The Trade ID (cuid string) to close.",
         },
         reasoning: {
           type: "string" as const,
@@ -186,8 +186,8 @@ export const TOOL_DEFINITIONS = [
       type: "object" as const,
       properties: {
         tradeId: {
-          type: "number" as const,
-          description: "The Trade ID to flag.",
+          type: "string" as const,
+          description: "The Trade ID (cuid string) to flag.",
         },
         concern: {
           type: "string" as const,
@@ -317,6 +317,16 @@ export const TOOL_DEFINITIONS = [
       required: [] as string[],
     },
   },
+  {
+    name: "trigger_opportunity_scan",
+    description:
+      "Triggers an immediate fresh scan of the universe via the /api/scan endpoint. Use this OPPORTUNISTICALLY when a slot has just freed up (slotsAvailable > 0) AND there are no current pending signals — it produces fresh PendingOrders so the next cycle has signals available immediately. Do NOT call when pending signals already exist (avoid hammering the scan engine). Subject to a 2/min rate limit on the underlying endpoint.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [] as string[],
+    },
+  },
 ];
 
 export interface ToolResult {
@@ -376,6 +386,8 @@ export async function handleToolCall(
         return await handleCurateUniverse();
       case "get_last_curation_date":
         return await handleGetLastCurationDate();
+      case "trigger_opportunity_scan":
+        return await handleTriggerOpportunityScan(baseUrl);
       default:
         return { success: false, error: `Unknown tool: ${toolName}` };
     }
@@ -411,8 +423,8 @@ async function handleExecuteSignal(
   if (!order) {
     return { success: false, error: `PendingOrder ${String(input["pendingOrderId"])} not found.` };
   }
-  if (order["status"] !== "PENDING") {
-    return { success: false, error: `Order is not PENDING — skipping.` };
+  if (order["status"] !== "pending") {
+    return { success: false, error: `Order is not pending — skipping.` };
   }
   const res = await fetch(`${baseUrl}/api/execution/execute`, {
     method: "POST",
@@ -433,16 +445,20 @@ async function handleClosePosition(
   input: Record<string, unknown>,
   baseUrl: string
 ): Promise<ToolResult> {
+  const tradeId = input["tradeId"];
+  if (typeof tradeId !== "string" || tradeId.length === 0) {
+    return { success: false, error: "tradeId (string cuid) is required" };
+  }
   const trade = await db.trade.findUnique({
-    where: { id: input["tradeId"] },
+    where: { id: tradeId },
   } as unknown);
   if (!trade) {
-    return { success: false, error: `Trade ${String(input["tradeId"])} not found.` };
+    return { success: false, error: `Trade ${tradeId} not found.` };
   }
   if (trade["status"] !== "OPEN") {
-    return { success: false, error: `Trade ${String(input["tradeId"])} is not OPEN.` };
+    return { success: false, error: `Trade ${tradeId} is not OPEN.` };
   }
-  const res = await fetch(`${baseUrl}/api/trades/${String(input["tradeId"])}/close`, {
+  const res = await fetch(`${baseUrl}/api/trades/${tradeId}/close`, {
     method: "POST",
     headers: agentHeaders(),
     body: JSON.stringify({ agentReasoning: input["reasoning"] }),
@@ -457,12 +473,15 @@ async function handleClosePosition(
 async function handleSetHalt(
   input: Record<string, unknown>
 ): Promise<ToolResult> {
+  const halted = Boolean(input["halted"]);
+  // On RESUME (halted=false), clear the reason so stale halt reasons don't linger.
+  const reason = halted ? (input["reason"] ?? null) : null;
   await db.agentHaltFlag.upsert({
     where: { id: 1 },
-    create: { id: 1, halted: input["halted"], reason: input["reason"], setAt: new Date(), setBy: "AGENT" },
-    update: { halted: input["halted"], reason: input["reason"], setAt: new Date(), setBy: "AGENT" },
+    create: { id: 1, halted, reason, setAt: new Date(), setBy: "AGENT" },
+    update: { halted, reason, setAt: new Date(), setBy: "AGENT" },
   } as unknown);
-  return { success: true, data: { halted: input["halted"], reason: input["reason"] } };
+  return { success: true, data: { halted, reason } };
 }
 
 async function handleSendTelegramSummary(
@@ -2818,4 +2837,37 @@ async function handleGetLastCurationDate(): Promise<ToolResult> {
       daysSinceLastCuration: daysSince,
     },
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// trigger_opportunity_scan — fire an immediate scan when a slot opens up
+// ---------------------------------------------------------------------------
+
+async function handleTriggerOpportunityScan(baseUrl: string): Promise<ToolResult> {
+  // GET /api/scan runs the full universe scan and writes any new PendingOrders.
+  // The endpoint is rate-limited to 2/min — opportunistic use only.
+  try {
+    const res = await fetch(`${baseUrl}/api/scan`, {
+      method: "GET",
+      headers: agentHeaders(),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      return { success: false, error: `Scan API error ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}` };
+    }
+    const data: unknown = await res.json();
+    const summary = (data as { summary?: unknown }).summary ?? null;
+    return {
+      success: true,
+      data: {
+        triggered: true,
+        scanCompletedAt: new Date().toISOString(),
+        summary,
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, error: `Opportunity scan failed: ${message}` };
+  }
 }

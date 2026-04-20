@@ -66,6 +66,7 @@
 
 ## Backlog
 
+- [ ] **Watchdog Telegram alert path not yet manually verified** — to test: stop Docker so dev server can't restart, run `scripts/watchdog.bat`, confirm Telegram alert fires. Low priority — alert code is straightforward, OK path confirmed working.
 - [ ] **Conditional Displacement Rule** — When all position slots are occupied AND an incoming signal is Grade B or better AND an existing position is >15 days old with P&L between -1R and +0.5R, flag it as a displacement candidate so the new signal can take its slot.
   - **Source:** Agent-proposed design (2026-04-19) after spotting tension between full-portfolio state and a fresh Grade B signal with no available slot.
   - **Key insight:** This is a *slot-quality gate*, not a time-stop. The rule deliberately excludes positions running well (e.g. +1R at 20 days does NOT get displaced) — only genuinely dead weight in the dead band qualifies. Preserves right-tail convexity.
@@ -84,6 +85,7 @@
 - [ ] **GBX→GBP normalisation** — `pnlGbp` calculation in trade journal and close route uses raw price units. For `.L` tickers Yahoo prices are in pence, so `pnlGbp` is actually `pnlGbx`. Needs a normalisation pass across all pnl calculations.
 - [ ] **Regime health data resilience** — `check_regime_health` fetches SPY/^FTSE live from Yahoo. If Yahoo is down, regime health fails. Consider seeding these benchmark tickers into the `DailyQuote` universe so the handler can fall back to cached DB data.
 - [ ] **Universe curation N+1 queries** — `curate_universe` runs 3 queries per ticker × 1,429 tickers ≈ 4,300 queries. Currently fast enough locally but should be refactored to batch queries using `groupBy` over `DailyQuote` and `PendingOrder` if it becomes slow. Low priority.
+- [ ] **TimeStopFlag.actedOn tracking** — the `actedOn` field exists on the model but nothing sets it to true. Add a flow where closing a trade that has an undismissed `TimeStopFlag` automatically sets `actedOn = true` on that flag. This lets you measure how often time-stop flags actually lead to exits vs being dismissed — useful for validating the 25d/0.5R thresholds over time.
 - [ ] **Regime health cross-process cache** — current cache is module-level (resets per `tsx` invocation). For true daily caching across hourly cycles, store the result in `AppSettings` or a new `AgentCache` table keyed by date. Low priority — one Yahoo call per cycle is within rate limits.
 - [ ] **Regime history table** — `run_drawdown_forensics` uses a heuristic for `REGIME_FAILURE` cause (currently bearish + 5d window). True detection needs a `RegimeHistory` table logging each regime flip with date. Add when drawdown forensics needs more precision.
 - [ ] **Drawdown forensics open position P&L** — currently uses mark-to-stop. Consider mark-to-last-price for more accurate contribution calc, but requires Yahoo fetch per ticker during CRITICAL alert. Evaluate cost vs accuracy tradeoff.

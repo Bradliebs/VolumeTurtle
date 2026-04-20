@@ -307,7 +307,7 @@ model AppSettings {
   // Auto-execution settings
   autoExecutionEnabled    Boolean @default(false)
   autoExecutionMinGrade   String  @default("B")   // "A" or "B"
-  autoExecutionWindowMins Int     @default(15)     // cancellation window (5–60)
+  autoExecutionWindowMins Int     @default(240)    // cancellation window (5–480 min, default 4 hours)
   autoExecutionMaxPerDay  Int     @default(2)      // max orders per calendar day
   autoExecutionStartHour  Int     @default(14)     // UTC start hour
   autoExecutionEndHour    Int     @default(20)     // UTC end hour
@@ -323,6 +323,10 @@ model AppSettings {
   cruisePollFastIntervalMins  Int @default(30)    // fast interval during high-action window
   cruisePollFastStartUtcHour  Int @default(8)     // fast window start (UTC)
   cruisePollFastEndUtcHour    Int @default(16)    // fast window end (UTC, exclusive)
+  // Time-stop flagging (advisory only — never auto-closes)
+  timeStopEnabled            Boolean @default(true)
+  timeStopDays               Int     @default(25)   // days held threshold
+  timeStopMinR               Float   @default(0.5)  // R-multiple ceiling
   updatedAt             DateTime @updatedAt
 }
 
@@ -642,4 +646,23 @@ model TradeJournal {
 
   @@index([ticker])
   @@index([closedAt])
+}
+
+/// Time-stop flag raised by the cruise-control daemon when an open position
+/// has been held for a long time without demonstrating momentum. Advisory
+/// only — flagging never auto-closes a position.
+model TimeStopFlag {
+  id            Int       @id @default(autoincrement())
+  tradeId       String
+  ticker        String
+  daysHeld      Int
+  rMultiple     Float
+  entryPrice    Float
+  currentStop   Float
+  flaggedAt     DateTime  @default(now())
+  dismissed     Boolean   @default(false)
+  dismissedAt   DateTime?
+  actedOn       Boolean   @default(false)
+
+  @@index([tradeId])
 }

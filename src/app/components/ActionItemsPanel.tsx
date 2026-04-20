@@ -2,7 +2,7 @@
 
 import React from "react";
 import type { ActionItem } from "./types";
-import { mono, fmtPrice } from "./helpers";
+import { mono } from "./helpers";
 
 export interface ActionItemsPanelProps {
   actionItems: ActionItem[];

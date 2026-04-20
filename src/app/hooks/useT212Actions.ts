@@ -124,7 +124,7 @@ export function useT212Actions(
   showError: (msg: string) => void,
   showSuccess: (msg: string) => void,
   data: DashboardData | null,
-  syncData: Record<string, SyncResult>,
+  _syncData: Record<string, SyncResult>,
 ) {
   const [state, dispatch] = useReducer(reducer, initialState);
 

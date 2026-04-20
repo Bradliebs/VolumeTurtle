@@ -3,6 +3,14 @@ import { prisma } from "@/db/client";
 import { createLogger } from "@/lib/logger";
 import { sendTelegram } from "@/lib/telegram";
 import { rateLimit, getRateLimitKey } from "@/lib/rateLimit";
+import {
+  loadT212Settings,
+  getInstruments,
+  yahooToT212Ticker,
+  getPendingOrders,
+  cancelOrder,
+  placeMarketSellOrder,
+} from "@/lib/t212/client";
 
 const log = createLogger("api/trades/:id/close");
 
@@ -13,10 +21,30 @@ const db = prisma as unknown as {
   };
 };
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isStopOrderType(type: string | undefined): boolean {
+  if (!type) return false;
+  return type.toUpperCase().includes("STOP");
+}
+
 /**
  * POST /api/trades/[id]/close
- * Closes an open trade. Used by the autonomous agent.
- * Accepts { agentReasoning?: string }.
+ *
+ * Closes an open trade on T212 AND in the DB. Used by the autonomous agent.
+ *
+ * Flow (real-money safe):
+ *   1. Look up trade + map ticker to T212 instrument
+ *   2. Cancel any existing T212 stop order for this position
+ *   3. Place market SELL order on T212 for full quantity
+ *   4. Wait for confirmation
+ *   5. Only on success → mark DB row CLOSED with the actual T212 fill price
+ *
+ * If T212 sell fails: DB is NOT touched. Returns 500 so the agent can retry/alert.
+ *
+ * Body: { agentReasoning?: string }
  */
 export async function POST(
   request: NextRequest,
@@ -38,19 +66,125 @@ export async function POST(
       return NextResponse.json({ error: "Trade is already closed" }, { status: 400 });
     }
 
+    const ticker = trade["ticker"] as string;
     const entryPrice = trade["entryPrice"] as number;
     const hardStop = trade["hardStop"] as number;
-    const currentStop = trade["currentStop"] as number;
-    const ticker = trade["ticker"] as string;
+    const shares = trade["shares"] as number;
 
-    // Use current stop as exit price (agent-triggered close = stop-level exit)
-    const exitPrice = currentStop;
+    // Same fallback chain as the ratchet engine — used only if T212 doesn't
+    // report a fillPrice in the order response.
+    const trailingStopPrice = trade["trailingStopPrice"] as number | null | undefined;
+    const trailingStop = trade["trailingStop"] as number | null | undefined;
+    const hardStopPrice = trade["hardStopPrice"] as number | null | undefined;
+    const fallbackExitPrice =
+      trailingStopPrice ?? trailingStop ?? hardStopPrice ?? hardStop;
+
+    if (!Number.isFinite(shares) || shares <= 0) {
+      return NextResponse.json(
+        { error: `Trade has invalid share quantity: ${shares}` },
+        { status: 400 },
+      );
+    }
+
+    // ── Step 1: T212 settings + instrument lookup ──
+    const t212Settings = loadT212Settings();
+    if (!t212Settings) {
+      return NextResponse.json(
+        { error: "T212 not configured — cannot close on broker. DB not modified." },
+        { status: 500 },
+      );
+    }
+
+    const instruments = await getInstruments(t212Settings);
+    const t212Ticker = yahooToT212Ticker(ticker, instruments);
+    if (!t212Ticker) {
+      return NextResponse.json(
+        { error: `No T212 instrument found for ${ticker}. DB not modified.` },
+        { status: 500 },
+      );
+    }
+
+    // ── Step 2: Cancel existing T212 stop (if any) ──
+    let cancelledStopId: number | null = null;
+    try {
+      const orders = await getPendingOrders(t212Settings);
+      const existingStop = orders.find(
+        (o) =>
+          o.ticker.toUpperCase() === t212Ticker.toUpperCase() &&
+          isStopOrderType(o.type),
+      );
+      if (existingStop) {
+        await cancelOrder(t212Settings, existingStop.id);
+        cancelledStopId = existingStop.id;
+        await sleep(2500); // T212 rate-limit buffer between cancel and next write
+      }
+    } catch (cancelErr) {
+      const msg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+      log.error({ id, ticker, error: msg }, "Failed to cancel T212 stop before close — aborting");
+      return NextResponse.json(
+        {
+          error: `Failed to cancel T212 stop for ${ticker}: ${msg}. Market sell NOT placed. DB not modified.`,
+        },
+        { status: 500 },
+      );
+    }
+
+    // ── Step 3: Place market sell on T212 ──
+    let sellOrder: Awaited<ReturnType<typeof placeMarketSellOrder>>;
+    try {
+      sellOrder = await placeMarketSellOrder(t212Settings, t212Ticker, shares);
+    } catch (sellErr) {
+      const msg = sellErr instanceof Error ? sellErr.message : String(sellErr);
+      log.error(
+        { id, ticker, t212Ticker, shares, cancelledStopId, error: msg },
+        "T212 market sell failed — DB NOT closed.",
+      );
+
+      // CRITICAL alert: stop was cancelled but sell failed → unprotected position
+      if (cancelledStopId !== null) {
+        try {
+          await sendTelegram({
+            text:
+              `<b>🚨 CRITICAL — CLOSE FAILED, NO STOP</b>\n` +
+              `<code>${ticker}</code>\n` +
+              `Stop cancelled (id ${cancelledStopId}) but market sell failed.\n` +
+              `Position is UNPROTECTED on T212.\n` +
+              `Error: ${msg}\n` +
+              `<b>SET STOP MANUALLY OR CLOSE IMMEDIATELY</b>`,
+            parseMode: "HTML",
+          });
+        } catch {
+          /* best effort */
+        }
+      }
+
+      return NextResponse.json(
+        {
+          error: `T212 market sell failed: ${msg}. DB not modified.`,
+          stopCancelled: cancelledStopId !== null,
+          unprotected: cancelledStopId !== null,
+        },
+        { status: 500 },
+      );
+    }
+
+    // ── Step 4: Wait + extract fill price ──
+    await sleep(2500);
+
+    const sellOrderRec = sellOrder as unknown as Record<string, unknown>;
+    const fillPriceRaw =
+      (sellOrderRec["fillPrice"] as number | undefined) ??
+      (sellOrderRec["filledValue"] as number | undefined);
+    const exitPrice =
+      typeof fillPriceRaw === "number" && Number.isFinite(fillPriceRaw) && fillPriceRaw > 0
+        ? fillPriceRaw
+        : fallbackExitPrice;
+
     const riskPerShare = entryPrice - hardStop;
     const rMultiple =
-      riskPerShare !== 0
-        ? (exitPrice - entryPrice) / riskPerShare
-        : 0;
+      riskPerShare !== 0 ? (exitPrice - entryPrice) / riskPerShare : 0;
 
+    // ── Step 5: Mark DB closed (only after T212 confirmed) ──
     const updated = await db.trade.update({
       where: { id },
       data: {
@@ -63,10 +197,11 @@ export async function POST(
     } as unknown);
 
     try {
-      const pnl = exitPrice - entryPrice;
+      const pnl = (exitPrice - entryPrice) * shares;
       await sendTelegram({
         text:
           `🤖 <b>AGENT CLOSED</b> — ${ticker}\n` +
+          `T212 sell: ${sellOrder.id} (${shares} shares)\n` +
           `Entry: ${entryPrice.toFixed(2)} → Exit: ${exitPrice.toFixed(2)}\n` +
           `P&L: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}\n` +
           `R: ${rMultiple >= 0 ? "+" : ""}${rMultiple.toFixed(2)}R\n` +
@@ -77,7 +212,10 @@ export async function POST(
       /* best effort */
     }
 
-    log.info({ id, ticker, exitPrice, agentReasoning }, "Trade closed by agent");
+    log.info(
+      { id, ticker, t212OrderId: sellOrder.id, exitPrice, shares, agentReasoning },
+      "Trade closed by agent (T212 sell confirmed, DB updated)",
+    );
 
     // Fire-and-forget: ask the agent to write a post-mortem journal entry.
     // We do not await — journal writing calls Anthropic and can take seconds.
@@ -103,7 +241,10 @@ export async function POST(
       ok: true,
       tradeId: id,
       ticker,
+      t212OrderId: sellOrder.id,
+      stopCancelled: cancelledStopId,
       exitPrice,
+      shares,
       rMultiple: Math.round(rMultiple * 100) / 100,
       status: (updated as Record<string, unknown>)["status"],
     });

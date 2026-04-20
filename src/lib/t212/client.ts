@@ -674,6 +674,25 @@ export async function placeMarketOrder(
 }
 
 /**
+ * Place a market SELL order on T212 (close a long position).
+ * POST /api/v0/equity/orders/market with negative quantity.
+ * Same convention as placeStopOrder (negative qty = sell).
+ */
+export async function placeMarketSellOrder(
+  settings: T212Settings,
+  t212Ticker: string,
+  quantity: number,
+): Promise<T212Order> {
+  return t212Fetch("/equity/orders/market", settings, {
+    method: "POST",
+    body: {
+      ticker: t212Ticker,
+      quantity: -Math.abs(quantity),
+    },
+  }) as Promise<T212Order>;
+}
+
+/**
  * Buy a stock on T212 by Yahoo ticker, then set the stop loss.
  * Flow:
  *   1. Map Yahoo ticker → T212 internal ticker

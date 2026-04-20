@@ -37,7 +37,7 @@ export async function GET(req: Request) {
   return NextResponse.json({
     autoExecutionEnabled: row?.autoExecutionEnabled ?? false,
     autoExecutionMinGrade: row?.autoExecutionMinGrade ?? "B",
-    autoExecutionWindowMins: row?.autoExecutionWindowMins ?? 15,
+    autoExecutionWindowMins: row?.autoExecutionWindowMins ?? 240,
     autoExecutionMaxPerDay: row?.autoExecutionMaxPerDay ?? 2,
     autoExecutionStartHour: row?.autoExecutionStartHour ?? 14,
     autoExecutionEndHour: row?.autoExecutionEndHour ?? 20,
@@ -94,8 +94,8 @@ export async function POST(req: NextRequest) {
   if (autoExecutionMinGrade != null && !["A", "B"].includes(autoExecutionMinGrade)) {
     return NextResponse.json({ error: "minGrade must be 'A' or 'B'" }, { status: 400 });
   }
-  if (autoExecutionWindowMins != null && (autoExecutionWindowMins < 5 || autoExecutionWindowMins > 60)) {
-    return NextResponse.json({ error: "Window must be 5–60 minutes" }, { status: 400 });
+  if (autoExecutionWindowMins != null && (autoExecutionWindowMins < 5 || autoExecutionWindowMins > 480)) {
+    return NextResponse.json({ error: "Window must be 5–480 minutes" }, { status: 400 });
   }
   if (autoExecutionMaxPerDay != null && (autoExecutionMaxPerDay < 1 || autoExecutionMaxPerDay > 10)) {
     return NextResponse.json({ error: "Max per day must be 1–10" }, { status: 400 });

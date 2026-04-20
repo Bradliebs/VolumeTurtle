@@ -86,7 +86,7 @@ function ScoreBar({ label, value, max }: { label: string; value: number; max: nu
 function RegimeDisplay({ regime, tickerTrend }: { regime: RegimeInfo | null; tickerTrend: string }) {
   const mr = regime?.marketRegime;
   const vix = regime?.vixValue;
-  const vixLabel = vix != null ? (vix < 20 ? "NORMAL" : vix < 30 ? "ELEVATED" : "PANIC") : null;
+  const _vixLabel = vix != null ? (vix < 20 ? "NORMAL" : vix < 30 ? "ELEVATED" : "PANIC") : null;
   const qqqUp = mr === "BULLISH";
   const vixOk = vix != null ? vix < 25 : null;
   const trendUp = tickerTrend === "UPTREND";

@@ -24,8 +24,6 @@ import {
   placeMarketOrder,
   getInstruments,
   yahooToT212Ticker,
-  type T212Settings,
-  type T212Instrument,
 } from "@/lib/t212/client";
 import { pushStopToT212 } from "@/lib/t212/pushStop";
 import { ensureTickerInCsv } from "@/lib/universe/ensureInCsv";
@@ -795,7 +793,7 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
 
   // All checks passed — use the adjusted copy (never the original)
   const adjustedOrder = result.adjustedOrder;
-  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 12 pre-flight checks passed — proceeding with order placement. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
+  await logExecution(order.id, "PRE_FLIGHT_PASS", `All 13 pre-flight checks passed — proceeding with order placement. Warnings: ${result.warnings.length}. Adjustments: ${result.adjustments.length}`);
   // ── Gap guardrail — check open vs signal close ──
   const gapSettings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
   const gapDownThreshold = gapSettings?.gapDownThreshold ?? 0.03;
@@ -960,7 +958,9 @@ export async function createPendingOrder(
   input: CreatePendingOrderInput,
 ): Promise<PendingOrderRow> {
   const settings = await db.appSettings.findFirst({ orderBy: { id: "asc" } });
-  const windowMins = settings?.autoExecutionWindowMins ?? 15;
+  // Default 240 min (4 hours) — gives the executor enough time to process
+  // orders even if there are temporary delays (T212 outage, slow scheduler).
+  const windowMins = settings?.autoExecutionWindowMins ?? 240;
   const endHour = settings?.autoExecutionEndHour ?? 17;
 
   // Default: executes `windowMins` from now (simple countdown UX).

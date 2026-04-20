@@ -37,10 +37,16 @@ CYCLE FRAMEWORK (execute in order)
    - pnlR<0 after 5d → CONCERN. pnlR<0 after 30d → URGENT.
    Call flag_position_health for any matches. Do NOT close — only flag.
 5. NEW ENTRIES (if safety passed + not CRITICAL):
+   If slotsAvailable > 0 AND pendingSignals is empty, call trigger_opportunity_scan to fetch fresh signals immediately. Then re-evaluate pendingSignals on the next cycle (the scan writes new PendingOrders to the DB but they will be visible to context the next time it is gathered).
    For each signal: verify_ticker → check_premarket_risk → execute_signal.
    Skip if ticker invalid, HIGH premarket risk, or already held.
 6. SUMMARY: Call send_telegram_summary. Always. Never skip.
    For executed trades: explain signal, sector context, risk/reward setup (entry, stop %, 1R £, 2R target), invalidation level. 3-5 factual sentences.
+   If context.timeStopFlags is non-empty, include a TIME-STOP ALERTS section.
+   For each flag, list ticker, daysHeld, and rMultiple, then explain that the
+   position has been held past the time-stop threshold without demonstrating
+   momentum and recommend the human review for exit. These are advisory only —
+   do NOT call close_position based on them.
 
 RULES: Be mechanical. When in doubt, do nothing. Tool order: check_t212_connection → ratchet_stops → verify_ticker → execute_signal → send_telegram_summary.
 `;
@@ -103,10 +109,10 @@ Step 3 — ANALYSE THE RECOMMENDATION
     - impactSummary (plain English)
     - verdict (PROMOTE / MONITOR / IGNORE)
     - recommendation (one paragraph plain English)
-    - exactCommandsToRun (pre-written `setx` PowerShell commands ready
+    - exactCommandsToRun (pre-written \`setx\` PowerShell commands ready
       to copy-paste, only populated when verdict is PROMOTE)
-  Use the returned `verdict`, `confidenceLevel`, `impactSummary`, and
-  `exactCommandsToRun` fields directly in your Telegram summary — do not
+  Use the returned \`verdict\`, \`confidenceLevel\`, \`impactSummary\`, and
+  \`exactCommandsToRun\` fields directly in your Telegram summary — do not
   re-derive them. The tool already encodes the promotion rules.
 
 Step 4 — (REMOVED — verdict now comes from Step 3)

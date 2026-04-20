@@ -51,7 +51,7 @@ export async function sendTelegram(message: TelegramMessage): Promise<void> {
     chunks.push(text);
   } else {
     let remaining = text;
-    let part = 1;
+    let _part = 1;
     while (remaining.length > 0) {
       if (remaining.length <= MAX_LENGTH) {
         chunks.push(remaining);
@@ -62,7 +62,7 @@ export async function sendTelegram(message: TelegramMessage): Promise<void> {
       if (splitAt < MAX_LENGTH * 0.5) splitAt = MAX_LENGTH; // no good break found
       chunks.push(remaining.slice(0, splitAt));
       remaining = remaining.slice(splitAt).trimStart();
-      part++;
+      _part++;
     }
   }
 

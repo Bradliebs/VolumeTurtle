@@ -247,7 +247,7 @@ export function runBacktest(
           hardStop: signal.hardStop,
           atr20: signal.atr20,
           signalGrade: signal.compositeScore?.grade ?? null,
-          signalScore: signal.compositeScore?.score ?? null,
+          signalScore: signal.compositeScore?.total ?? null,
           volumeRatio: signal.volumeRatio,
           barsHeld: 0,
         });
@@ -255,12 +255,12 @@ export function runBacktest(
     }
 
     // 3) Mark-to-market all open positions for equity curve.
-    let openValue = 0;
+    let _openValue = 0;
     let unrealised = 0;
     for (const pos of open) {
       const q = indexed.get(pos.ticker)?.get(date);
       if (!q) continue;
-      openValue += pos.shares * q.close;
+      _openValue += pos.shares * q.close;
       unrealised += (q.close - pos.entryPrice) * pos.shares;
     }
     const mtmEquity = equity + unrealised;

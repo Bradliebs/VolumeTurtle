@@ -65,7 +65,7 @@ export function calculatePositionSize(
   const dollarRisk = accountBalance * effectiveRiskPct;
 
   // Guard: entry must not equal stop — division by zero produces infinite shares
-  if (signal.suggestedEntry === signal.suggestedStop) {
+  if (signal.suggestedEntry === signal.hardStop) {
     console.warn(
       `[PositionSizer] ${signal.ticker}: entry === stop (${signal.suggestedEntry}) — zero risk distance, skipping`,
     );

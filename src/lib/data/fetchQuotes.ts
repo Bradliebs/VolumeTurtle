@@ -1,6 +1,6 @@
 import YahooFinance from "yahoo-finance2";
 import { withRetry } from "@/lib/retry";
-import { getCachedQuotes, cacheQuotes, getLatestCachedDate } from "@/lib/data/quoteCache";
+import { getCachedQuotes, cacheQuotes } from "@/lib/data/quoteCache";
 import { prisma } from "@/db/client";
 import { createLogger } from "@/lib/logger";
 import { config } from "@/lib/config";

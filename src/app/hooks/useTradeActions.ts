@@ -72,7 +72,7 @@ function reducer(state: TradeActionsState, action: Action): TradeActionsState {
 export function useTradeActions(
   refresh: () => void,
   showError: (msg: string) => void,
-  showSuccess: (msg: string) => void,
+  _showSuccess: (msg: string) => void,
 ) {
   const [state, dispatch] = useReducer(reducer, initialState);
 

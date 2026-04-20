@@ -9,7 +9,6 @@ import {
   loadT212Settings,
   getCachedT212Positions,
   updateStopOnT212 as t212UpdateStop,
-  type T212Settings,
   type T212Position,
 } from "@/lib/t212/client";
 import { fetchQuote } from "@/lib/data/yahoo";

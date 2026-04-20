@@ -48,7 +48,7 @@ export function RunnerHistoryTable({ closedTrades }: RunnerHistoryTableProps) {
                 ? Math.floor((new Date(t.exitDate).getTime() - new Date(t.entryDate).getTime()) / (1000 * 60 * 60 * 24))
                 : 0;
               const isWin = (t.runnerExitProfit ?? 0) > 0;
-              const c = tickerCurrency(t.ticker);
+              const _c = tickerCurrency(t.ticker);
               return (
                 <tr key={t.id} className="border-b border-[var(--border)] hover:bg-[#1a1a1a]">
                   <td className="px-3 py-2 font-semibold text-[#00e5ff]">{t.ticker}</td>

@@ -1,4 +1,4 @@
-import type { Trade, TradeWithHistory, SyncResult, DashboardData, Instruction, ActionItem } from "./types";
+import type { Trade, TradeWithHistory, SyncResult, Instruction, ActionItem } from "./types";
 import { tickerCurrency } from "./helpers";
 
 // ── Stop alignment ──────────────────────────────────────────────────────────

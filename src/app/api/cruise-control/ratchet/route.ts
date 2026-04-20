@@ -13,7 +13,7 @@ export async function POST(req: Request) {
     if (parsed.error) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
     }
-    const { dryRun } = parsed.data;
+    const { dryRun } = parsed.data ?? { dryRun: false };
 
     if (dryRun) {
       // runSinglePoll doesn't support dryRun natively — return current state only

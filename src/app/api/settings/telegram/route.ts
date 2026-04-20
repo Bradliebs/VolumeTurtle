@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
   if (parsed.error) {
     return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
-  const { botToken, chatId, enabled, sendTest } = parsed.data;
+  const { botToken, chatId, enabled, sendTest } = parsed.data ?? {};
 
   if (sendTest) {
     try {

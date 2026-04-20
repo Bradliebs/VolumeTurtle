@@ -34,6 +34,7 @@ function makeRegimeAssessment(overrides: Partial<{
     overallSignal: (overrides.overallSignal ?? "STRONG") as RegimeAssessment["overallSignal"],
     warnings: [],
     score: overrides.score ?? 3,
+    rawScore: overrides.score ?? 3,
     breadth: null,
   };
 }

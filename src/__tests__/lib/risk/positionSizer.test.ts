@@ -76,11 +76,11 @@ describe("calculatePositionSize", () => {
   });
 
   it("returns null when entry equals stop (zero risk distance guard)", () => {
-    // When suggestedEntry === suggestedStop, riskPerShare would be 0 → infinite shares.
+    // When suggestedEntry === hardStop, riskPerShare would be 0 → infinite shares.
     // The guard catches this before any division occurs.
-    const signal = makeSignal({ suggestedEntry: 100 }) as unknown as VolumeSignal & { suggestedStop: number };
-    signal.suggestedStop = 100;
-    const result = calculatePositionSize(signal as unknown as VolumeSignal, 10000);
+    const signal = makeSignal({ suggestedEntry: 100 });
+    signal.hardStop = 100;
+    const result = calculatePositionSize(signal, 10000);
     expect(result).toBeNull();
   });
 
@@ -99,6 +99,8 @@ describe("calculatePositionSize", () => {
       riskPctPerTrade: 0,
       reason: "Paused",
       triggeredAt: null,
+      earlyRecoveryActive: false,
+      consecutiveUpDays: 0,
     };
     expect(calculatePositionSize(signal, 10000, pauseState)).toBeNull();
   });
@@ -119,6 +121,8 @@ describe("calculatePositionSize", () => {
       riskPctPerTrade: 1.0, // 1% instead of 2%
       reason: "Reduced risk",
       triggeredAt: null,
+      earlyRecoveryActive: false,
+      consecutiveUpDays: 0,
     };
     const result = calculatePositionSize(signal, 10000, cautionState);
     expect(result).not.toBeNull();
@@ -197,6 +201,8 @@ describe("calculatePositionSize", () => {
       riskPctPerTrade: 1.0,
       reason: "Reduced risk",
       triggeredAt: null,
+      earlyRecoveryActive: false,
+      consecutiveUpDays: 0,
     };
     const result = calculatePositionSize(signal, 10000, cautionState, "ELEVATED");
     expect(result).not.toBeNull();

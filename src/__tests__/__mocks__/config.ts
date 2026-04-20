@@ -39,4 +39,7 @@ export const config: VolumeTurtleConfig = {
   vixNormalSizeMult: 1.0,
   vixElevatedSizeMult: 0.75,
   vixPanicSizeMult: 0.0,
+  ANTHROPIC_API_KEY: "",
+  AGENT_ENABLED: false,
+  TRADECORE_BASE_URL: "http://localhost:3000",
 };

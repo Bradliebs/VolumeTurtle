@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     }
 
     const {
-      ticker, shares, suggestedEntry, hardStop, riskPerShare,
+      ticker, shares, suggestedEntry, hardStop, riskPerShare: _riskPerShare,
       volumeRatio, rangePosition, atr20, signalSource, signalScore, signalGrade,
       close, high, low, volume, avgVolume20, atr14,
     } = parsed.data!;
