@@ -4,6 +4,8 @@ import { applyDbSettings } from "@/lib/config";
 import { getCachedT212Positions, loadT212Settings } from "@/lib/t212/client";
 import { sendTelegram } from "@/lib/telegram";
 import { readFailureCount } from "./failureTracker";
+import * as fs from "fs";
+import * as path from "path";
 
 const db = prisma as unknown as {
   trade: {
@@ -20,14 +22,30 @@ const db = prisma as unknown as {
   timeStopFlag: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
 };
 
-// Ghost-position miss counter — keyed by Trade.id (cuid string). Survives
-// across cycles within the process. Reset to 0 when the position reappears in
-// T212. After 2 consecutive cycles missing from T212, the trade is auto-closed
-// in the DB with exitReason "GHOST_POSITION — T212 reconciliation".
-//
-// Mirrors the cruise-control-engine ghost tracker pattern but operates on the
-// agent's hourly cycle (max ~2 hours to resolve vs cruise control's 3 polls).
-const ghostMissCount = new Map<string, number>();
+// Ghost-position miss counter — persisted to disk so it survives across
+// one-shot `npm run agent` invocations (each spawns a fresh Node process).
+// Keyed by Trade.id (cuid string). Reset to 0 when the position reappears
+// in T212. After 2 consecutive cycles missing from T212, the trade is
+// auto-closed in the DB with exitReason "GHOST_POSITION — T212 reconciliation".
+const GHOST_TRACKER_PATH = path.join(process.cwd(), "data", "ghost-tracker.json");
+
+function loadGhostTracker(): Map<string, number> {
+  try {
+    if (fs.existsSync(GHOST_TRACKER_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(GHOST_TRACKER_PATH, "utf-8")) as Record<string, number>;
+      return new Map(Object.entries(raw));
+    }
+  } catch { /* corrupt file — start fresh */ }
+  return new Map();
+}
+
+function saveGhostTracker(tracker: Map<string, number>): void {
+  try {
+    const dir = path.dirname(GHOST_TRACKER_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(GHOST_TRACKER_PATH, JSON.stringify(Object.fromEntries(tracker), null, 2));
+  } catch { /* best effort — next cycle will start fresh */ }
+}
 
 /**
  * Cross-check open DB trades against live T212 positions and auto-close
@@ -43,7 +61,6 @@ async function reconcileGhostPositions(
 
   const settings = loadT212Settings();
   if (!settings) {
-    // T212 not configured — skip reconciliation, do not penalise.
     return closedThisCycle;
   }
 
@@ -56,6 +73,8 @@ async function reconcileGhostPositions(
     // miss counts on connection failures (would falsely close real positions).
     return closedThisCycle;
   }
+
+  const ghostMissCount = loadGhostTracker();
 
   // Prune tracker entries for trades that are no longer open.
   const openTradeIds = new Set(openTrades.map((t) => t["id"] as string));
@@ -105,6 +124,7 @@ async function reconcileGhostPositions(
     }
   }
 
+  saveGhostTracker(ghostMissCount);
   return closedThisCycle;
 }
 

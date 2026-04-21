@@ -674,6 +674,24 @@ export async function placeMarketOrder(
 }
 
 /**
+ * Fetch the current status of a single T212 order by ID.
+ * Used to confirm a market order has reached FILLED status before
+ * the executor writes the position to the DB.
+ * Returns null if the order cannot be retrieved (404, network error, etc.).
+ */
+export async function getOrderStatus(
+  settings: T212Settings,
+  orderId: number,
+): Promise<T212Order | null> {
+  try {
+    const result = await t212Fetch(`/equity/orders/${orderId}`, settings);
+    return result as T212Order;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Place a market SELL order on T212 (close a long position).
  * POST /api/v0/equity/orders/market with negative quantity.
  * Same convention as placeStopOrder (negative qty = sell).

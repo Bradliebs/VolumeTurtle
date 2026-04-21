@@ -22,6 +22,7 @@ import {
   loadT212Settings,
   getAccountCash,
   placeMarketOrder,
+  getOrderStatus,
   getInstruments,
   yahooToT212Ticker,
   isT212Pence,
@@ -637,24 +638,52 @@ export async function executeOrder(
   log.info({ ticker: order.ticker, t212Ticker, shares: order.suggestedShares }, "Placing market order");
 
   try {
-    // Place market buy order
+    // Place market buy order. If T212 returns no order ID, abort before any
+    // DB row is written — prevents ghost positions on rejected/lost orders.
     const marketOrder = await placeMarketOrder(t212Settings, t212Ticker, order.suggestedShares);
+    if (!marketOrder?.id) {
+      log.error({ ticker: order.ticker }, "T212 placeMarketOrder returned no order ID — aborting, no trade row will be created");
+      return { success: false, error: "T212 returned no order ID — order not confirmed" };
+    }
 
     const orderId = String(marketOrder.id);
-    const filledQty = marketOrder.filledQuantity || order.suggestedShares;
-    const fillPriceRaw = (marketOrder as unknown as Record<string, unknown>)["fillPrice"] as number | undefined;
+    await logExecution(order.id, "SUBMITTED", `Market order placed: ${orderId}`);
+
+    // ── FILL CONFIRMATION POLL ─────────────────────────────────────────
+    // Wait 5s, then poll T212 once for order status. Only proceed to stop
+    // push + DB trade creation if the order is FILLED. If not FILLED, log a
+    // warning and abort — no Trade row is created (prevents ghost positions).
+    await sleep(5000);
+
+    const confirmed = await getOrderStatus(t212Settings, marketOrder.id);
+    const confirmedStatus = (confirmed?.status ?? "").toUpperCase();
+    if (confirmedStatus !== "FILLED") {
+      const reason = confirmed === null
+        ? "T212 order status fetch failed (null response) after 5s — fill not confirmed"
+        : `T212 order status is '${confirmed.status}' after 5s — fill not confirmed`;
+      log.warn({ ticker: order.ticker, orderId, status: confirmed?.status ?? null }, reason);
+      await logExecution(order.id, "FILL_NOT_CONFIRMED", `${reason}. No Trade row will be created. T212 order id=${orderId} may still fill later — manual reconciliation required.`);
+      try {
+        await sendTelegram({
+          text: `<b>⚠ FILL NOT CONFIRMED</b>\n<code>${order.ticker}</code> — T212 order ${orderId} not FILLED after 5s (status: ${confirmed?.status ?? "unknown"}).\nNo DB Trade row created. Verify on T212 manually.`,
+        });
+      } catch { /* best effort */ }
+      return { success: false, t212OrderId: orderId, error: reason };
+    }
+
+    // Use confirmed fill data from the status poll (more authoritative than
+    // the initial POST response, which may pre-date actual fill).
+    const filledQty = confirmed.filledQuantity || marketOrder.filledQuantity || order.suggestedShares;
+    const fillPriceRaw = ((confirmed as unknown as Record<string, unknown>)["fillPrice"]
+      ?? (marketOrder as unknown as Record<string, unknown>)["fillPrice"]) as number | undefined;
     // T212 returns GBX (pence) for .L tickers — normalise to GBP (pounds)
     const fillPrice = fillPriceRaw != null && isT212Pence(t212Ticker, instruments)
       ? fillPriceRaw / 100
       : fillPriceRaw;
 
-    // Log order submission
-    await logExecution(order.id, "SUBMITTED", `Market order placed: ${orderId}, qty=${filledQty}`);
+    await logExecution(order.id, "FILL_CONFIRMED", `T212 confirmed FILLED: qty=${filledQty}${fillPrice != null ? `, fillPrice=${fillPrice}` : ""}`);
 
-    // Wait for fill + rate limit buffer before placing stop
-    await sleep(2500);
-
-    // Push stop loss to T212 immediately after fill (Layer 1)
+    // Push stop loss to T212 immediately after confirmed fill (Layer 1)
     const stopResult = await pushStopToT212(
       order.ticker,
       filledQty,

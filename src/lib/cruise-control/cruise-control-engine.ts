@@ -108,6 +108,7 @@ const db = prisma as unknown as {
   };
   trade: {
     findMany: (args: unknown) => Promise<OpenPosition[]>;
+    findFirst: (args: unknown) => Promise<OpenPosition | null>;
     update: (args: { where: { id: string }; data: Record<string, unknown> }) => Promise<unknown>;
   };
   retryQueue: {
@@ -194,7 +195,8 @@ async function updateState(data: Record<string, unknown>): Promise<void> {
 
 /**
  * Tracks consecutive ghost detections per ticker.
- * First detection = warning. ≥2 consecutive = critical alert + auto-close.
+ * 1st detection = ghost candidate (force-refresh check + warning).
+ * 2nd consecutive detection = critical alert + auto-close.
  * Cleared when a ticker is no longer ghost.
  * Uses globalThis to survive HMR in development.
  */
@@ -311,6 +313,52 @@ async function processRetryQueue(): Promise<void> {
       await db.retryQueue.delete({ where: { id: row.id } });
       log.info({ ticker: row.ticker, stopPrice: row.stopPrice }, "[CRUISE-CONTROL] Retry succeeded — removed from queue");
     } else {
+      // ── Ghost detection: T212 400 "selling more equities than owned" ──
+      // If T212 says the position doesn't exist, stop retrying and close
+      // the DB trade immediately — this is a confirmed ghost position.
+      const errLower = (result.error ?? "").toLowerCase();
+      const isGhostError = errLower.includes("selling-equity-not-owned")
+        || errLower.includes("selling more equities than owned")
+        || errLower.includes("api-errors/selling-equity-not-owned");
+
+      if (isGhostError) {
+        log.warn({ ticker: row.ticker, error: result.error }, "[CRUISE-CONTROL] Ghost detected via stop push 400 — T212 reports 0 shares owned");
+
+        // Cancel all retries for this ticker
+        await db.retryQueue.update({
+          where: { id: row.id },
+          data: {
+            attempts: 99,
+            lastError: `GHOST_DETECTED: ${result.error}`,
+            nextRetryAt: new Date("2099-01-01"),
+          },
+        });
+
+        // Close the DB trade
+        const ghostTrade = await db.trade.findFirst({
+          where: { ticker: row.ticker, status: "OPEN" },
+        });
+        if (ghostTrade) {
+          await db.trade.update({
+            where: { id: ghostTrade.id },
+            data: {
+              status: "CLOSED",
+              exitDate: new Date(),
+              exitReason: "GHOST_POSITION — detected via stop push 400",
+            },
+          });
+          log.warn({ ticker: row.ticker, tradeId: ghostTrade.id }, "[CRUISE-CONTROL] Ghost trade auto-closed in DB via stop push error");
+        }
+
+        // Alert
+        await sendAlert("critical", `⚠️ GHOST DETECTED via stop push: ${row.ticker} — T212 reports 0 shares owned. Closing DB record.`, {
+          ticker: row.ticker,
+          tradeId: ghostTrade?.id ?? null,
+          error: result.error,
+        });
+        continue;
+      }
+
       // Update attempts and push next retry forward
       // Exponential backoff on retry interval
       const backoffMs = Math.min(10 * 60 * 1000 * Math.pow(2, newAttempts), 60 * 60 * 1000);
@@ -480,35 +528,31 @@ export async function runSinglePoll(): Promise<PollResult> {
         ghostTracker.set(ghostTicker, newCount);
 
         if (newCount === 1) {
-          // First detection — warn only, could be transient cache staleness
-          await sendAlert("warning", `Possible ghost position: ${ghostTicker} is in DB but not in T212 — monitoring`, {
-            ticker: ghostTicker,
-            consecutiveDetections: newCount,
-          });
-        } else if (newCount === 2) {
-          // Second detection — force a fresh T212 fetch (bypass 1-min cache).
-          // If ticker reappears in fresh data, clear tracker (was cache staleness).
-          // If still missing, leave tracker at 2 and wait for 3rd poll to confirm.
+          // First detection \u2014 immediately flag as ghost candidate. Force a
+          // fresh T212 fetch (bypass 1-min cache) to rule out cache staleness.
+          // If still missing, alert and wait for the next poll to auto-close.
+          let stillGhost = true;
           try {
             const fresh = await getOpenPositionsFromT212({ forceRefresh: true });
-            const stillGhost = !fresh.some((p) => p.ticker.toUpperCase() === ghostTicker);
+            stillGhost = !fresh.some((p) => p.ticker.toUpperCase() === ghostTicker);
             if (!stillGhost) {
               ghostTracker.delete(ghostTicker);
-              log.info({ ticker: ghostTicker }, "[CRUISE-CONTROL] Ghost cleared by force-refresh — was cache staleness");
-              await sendAlert("info", `Ghost ${ghostTicker} cleared — fresh T212 fetch confirms position exists`, {
+              log.info({ ticker: ghostTicker }, "[CRUISE-CONTROL] Ghost cleared on first detection by force-refresh \u2014 was cache staleness");
+              await sendAlert("info", `Ghost ${ghostTicker} cleared on first detection \u2014 fresh T212 fetch confirms position exists`, {
                 ticker: ghostTicker,
-              });
-            } else {
-              await sendAlert("warning", `Ghost confirmed by fresh fetch: ${ghostTicker} — will auto-close on next poll if still missing`, {
-                ticker: ghostTicker,
-                consecutiveDetections: newCount,
               });
             }
           } catch (refreshErr) {
-            log.error({ ticker: ghostTicker, err: String(refreshErr) }, "[CRUISE-CONTROL] Force-refresh failed during ghost confirmation");
+            log.error({ ticker: ghostTicker, err: String(refreshErr) }, "[CRUISE-CONTROL] Force-refresh failed during ghost candidate check");
           }
-        } else if (newCount >= 3) {
-          // Third confirmed detection across 3 polls (~3 hours) — auto-close in DB
+          if (stillGhost) {
+            await sendAlert("warning", `Ghost candidate flagged: ${ghostTicker} is in DB but missing from T212 (confirmed by fresh fetch) \u2014 will auto-close on next poll if still missing`, {
+              ticker: ghostTicker,
+              consecutiveDetections: newCount,
+            });
+          }
+        } else if (newCount >= 2) {
+          // Second consecutive detection (~1 hour later) \u2014 auto-close in DB.
           const ghostTrade = openTrades.find(
             (t) => t.ticker.toUpperCase() === ghostTicker,
           );
@@ -521,14 +565,14 @@ export async function runSinglePoll(): Promise<PollResult> {
                 exitReason: "T212_STOP",
               },
             });
-            await sendAlert("critical", `Ghost confirmed & auto-closed (3 polls): ${ghostTicker} — position stopped out on T212 but DB was stale`, {
+            await sendAlert("critical", `Ghost confirmed & auto-closed (2 polls): ${ghostTicker} \u2014 position stopped out on T212 but DB was stale`, {
               ticker: ghostTicker,
               tradeId: ghostTrade.id,
               consecutiveDetections: newCount,
             });
             log.warn(
               { ticker: ghostTicker, tradeId: ghostTrade.id, consecutiveDetections: newCount },
-              "[CRUISE-CONTROL] Ghost position auto-closed in DB after 3 confirmed polls",
+              "[CRUISE-CONTROL] Ghost position auto-closed in DB after 2 confirmed polls",
             );
           }
           ghostTracker.delete(ghostTicker);
@@ -605,6 +649,20 @@ export async function runSinglePoll(): Promise<PollResult> {
               systemStop: currentStop,
             });
           } else {
+            const syncErrLower = (syncResult.error ?? "").toLowerCase();
+            const isSyncGhost = syncErrLower.includes("selling-equity-not-owned")
+              || syncErrLower.includes("selling more equities than owned");
+            if (isSyncGhost) {
+              log.warn({ ticker: trade.ticker, error: syncResult.error }, "[CRUISE-CONTROL] Ghost detected via stop sync 400");
+              await db.trade.update({
+                where: { id: trade.id },
+                data: { status: "CLOSED", exitDate: new Date(), exitReason: "GHOST_POSITION — detected via stop push 400" },
+              });
+              await sendAlert("critical", `⚠️ GHOST DETECTED via stop push: ${trade.ticker} — T212 reports 0 shares owned. Closing DB record.`, {
+                ticker: trade.ticker, tradeId: trade.id, error: syncResult.error,
+              });
+              continue;
+            }
             log.warn({ ticker: trade.ticker, err: syncResult.error }, "[CRUISE-CONTROL] Failed to sync T212 stop");
           }
         }
@@ -632,6 +690,22 @@ export async function runSinglePoll(): Promise<PollResult> {
       const t212Result = await updateStopOnT212(trade.ticker, trade.shares, currentStop, newStop);
 
       if (!t212Result.success) {
+        // Check for ghost position before enqueuing retries
+        const ratchetErrLower = (t212Result.error ?? "").toLowerCase();
+        const isRatchetGhost = ratchetErrLower.includes("selling-equity-not-owned")
+          || ratchetErrLower.includes("selling more equities than owned");
+        if (isRatchetGhost) {
+          log.warn({ ticker: trade.ticker, error: t212Result.error }, "[CRUISE-CONTROL] Ghost detected via ratchet push 400");
+          await db.trade.update({
+            where: { id: trade.id },
+            data: { status: "CLOSED", exitDate: new Date(), exitReason: "GHOST_POSITION — detected via stop push 400" },
+          });
+          await sendAlert("critical", `⚠️ GHOST DETECTED via stop push: ${trade.ticker} — T212 reports 0 shares owned. Closing DB record.`, {
+            ticker: trade.ticker, tradeId: trade.id, error: t212Result.error,
+          });
+          continue;
+        }
+
         // T212 push failed — do NOT update DB (keep stops in sync)
         t212Unavailable = true;
         await enqueueRetry({
