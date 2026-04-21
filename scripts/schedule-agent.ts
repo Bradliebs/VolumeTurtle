@@ -7,15 +7,15 @@ const LOG_DIR = path.join(process.env["USERPROFILE"] ?? "C:\\Users\\Default", "V
 const TASKS = [
   {
     name: "VolumeTurtle_Agent",
-    description: "Agent cycle — hourly 08:00–21:00 weekdays",
+    description: "Agent cycle — hourly 08:00–23:00 weekdays",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && npx tsx src/agent/runner.ts >> "${LOG_DIR}\\agent.log" 2>&1`,
-    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 08:00 /ri 60 /du 13:00`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 08:00 /ri 60 /du 15:00`,
   },
   {
     name: "VolumeTurtle_AgentListen",
-    description: "Telegram listener — every 2 min 08:00–21:00 weekdays",
+    description: "Telegram listener — every 2 min 08:00–23:00 weekdays",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && npx tsx src/agent/telegram-listener.ts >> "${LOG_DIR}\\agent-listen.log" 2>&1`,
-    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 08:00 /ri 2 /du 13:00`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 08:00 /ri 2 /du 15:00`,
   },
   {
     name: "VolumeTurtle_AgentSnapshot",
@@ -49,15 +49,15 @@ const TASKS = [
   },
   {
     name: "VolumeTurtle_Watchdog",
-    description: "Dev server watchdog — every 5 min 07:55–21:05 weekdays, restarts if down",
+    description: "Dev server watchdog — every 5 min 07:55–23:05 weekdays, restarts if down",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && scripts\\watchdog.bat`,
-    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:55 /ri 5 /du 13:15`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:55 /ri 5 /du 15:15`,
   },
   {
     name: "VolumeTurtle_WatchdogIndependent",
-    description: "Independent watchdog — every 10 min 07:45–21:15 weekdays, runs outside dev server",
+    description: "Independent watchdog — every 10 min 07:45–23:15 weekdays, runs outside dev server",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && npm run watchdog:independent >> "${LOG_DIR}\\watchdog-independent.log" 2>&1`,
-    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:45 /ri 10 /du 13:30`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:45 /ri 10 /du 15:30`,
   },
 ];
 

@@ -20,8 +20,10 @@ export interface ExecutorResult {
 export async function runAgentCycle(
   context: AgentContext,
   baseUrl: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  model?: string
 ): Promise<ExecutorResult> {
+  const activeModel = model ?? DEFAULT_MODEL;
   const actions: CycleAction[] = [];
   let reasoning = "";
   let telegramSent = false;
@@ -38,7 +40,7 @@ export async function runAgentCycle(
     iterations++;
 
     const requestBody = JSON.stringify({
-      model: DEFAULT_MODEL,
+      model: activeModel,
       max_tokens: DEFAULT_MAX_TOKENS,
       system: systemPrompt ?? buildSystemPrompt(),
       tools: TOOL_DEFINITIONS,

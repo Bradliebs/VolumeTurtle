@@ -62,6 +62,18 @@ export async function PATCH(req: NextRequest) {
       } as unknown);
     }
 
+    // Update model selection
+    const ALLOWED_MODELS = [
+      "claude-sonnet-4-20250514",
+      "claude-haiku-4-5-20251001",
+    ];
+    if (typeof body["model"] === "string" && ALLOWED_MODELS.includes(body["model"])) {
+      await db.aiSettings.update({
+        where: { id: 1 },
+        data: { model: body["model"] },
+      } as unknown);
+    }
+
     // Toggle halt flag
     if (typeof body["halted"] === "boolean") {
       const reason = typeof body["reason"] === "string" ? body["reason"] : null;

@@ -2,7 +2,7 @@ import "dotenv/config";
 import { randomUUID } from "crypto";
 import { createHash } from "crypto";
 import { gatherContext } from "./context";
-import { runAgentCycle } from "./executor";
+import { runAgentCycle, DEFAULT_MODEL } from "./executor";
 import { logCycle } from "./logger";
 import { clearFailureCount, incrementFailureCount } from "./failureTracker";
 import { computeShadowVerdict, detectDivergences } from "./shadowEngine";
@@ -57,6 +57,9 @@ async function main(): Promise<void> {
 
   process.env["ANTHROPIC_API_KEY"] = apiKey;
 
+  const activeModel = (aiSettings?.["model"] as string | undefined) ?? DEFAULT_MODEL;
+  console.log(`[Agent] Model: ${activeModel}`);
+
   // ── 2. Gather context ──────────────────────────────────────────
   console.log("[Agent] Gathering context...");
   let context;
@@ -82,7 +85,7 @@ async function main(): Promise<void> {
   console.log("[Agent] Running Claude cycle...");
   let result;
   try {
-    result = await runAgentCycle(context, BASE_URL);
+    result = await runAgentCycle(context, BASE_URL, undefined, activeModel);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     const failureCount = incrementFailureCount();

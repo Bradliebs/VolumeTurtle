@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { randomUUID } from "crypto";
 import { gatherContext } from "./context";
-import { runAgentCycle } from "./executor";
+import { runAgentCycle, DEFAULT_MODEL } from "./executor";
 import { logCycle } from "./logger";
 import { buildSundaySystemPrompt } from "./prompt";
 import { prisma } from "@/db/client";
@@ -53,6 +53,9 @@ async function main(): Promise<void> {
 
   process.env["ANTHROPIC_API_KEY"] = apiKey;
 
+  const activeModel = (aiSettings?.["model"] as string | undefined) ?? DEFAULT_MODEL;
+  console.log(`[AgentSunday] Model: ${activeModel}`);
+
   // ── 2. Gather context (for reference in the cycle) ─────────────
   console.log("[AgentSunday] Gathering context...");
   let context;
@@ -71,7 +74,7 @@ async function main(): Promise<void> {
   console.log("[AgentSunday] Running Sunday maintenance cycle...");
   let result;
   try {
-    result = await runAgentCycle(context, BASE_URL, buildSundaySystemPrompt());
+    result = await runAgentCycle(context, BASE_URL, buildSundaySystemPrompt(), activeModel);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[AgentSunday] Claude error:", message);

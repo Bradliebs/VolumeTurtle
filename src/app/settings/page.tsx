@@ -119,6 +119,7 @@ export default function SettingsPage() {
 
   // Agent state
   const [agentEnabled, setAgentEnabled] = useState(false);
+  const [agentModel, setAgentModel] = useState("claude-sonnet-4-20250514");
   const [agentHalted, setAgentHalted] = useState(false);
   const [agentHaltReason, setAgentHaltReason] = useState<string | null>(null);
   const [agentExecutionPaused, setAgentExecutionPaused] = useState(false);
@@ -225,6 +226,7 @@ export default function SettingsPage() {
       if (res.ok) {
         const d = await res.json();
         setAgentEnabled(d.enabled);
+        setAgentModel(d.model ?? "claude-sonnet-4-20250514");
         setAgentHalted(d.halted);
         setAgentHaltReason(d.haltReason);
         setAgentExecutionPaused(Boolean(d.executionPaused));
@@ -1505,6 +1507,24 @@ export default function SettingsPage() {
             {agentStatus && (
               <span className={agentStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{agentStatus}</span>
             )}
+          </div>
+
+          {/* Model selector */}
+          <div className="flex items-center gap-4">
+            <span className="text-[var(--dim)] w-28 shrink-0">Model</span>
+            <select
+              value={agentModel}
+              onChange={(e) => {
+                const next = e.target.value;
+                setAgentModel(next);
+                saveAgentSetting({ model: next });
+              }}
+              disabled={agentSaving}
+              className="bg-[#1a1a1a] border border-[#333] text-[#ccc] text-xs px-2 py-1.5 rounded focus:border-[#a78bfa] focus:outline-none disabled:opacity-40"
+            >
+              <option value="claude-sonnet-4-20250514">Sonnet 4 — best reasoning ($3/$15)</option>
+              <option value="claude-haiku-4-5-20251001">Haiku 4.5 — 3× cheaper ($1/$5)</option>
+            </select>
           </div>
 
           {/* Halt controls */}
