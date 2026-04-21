@@ -132,6 +132,7 @@ export interface DashboardData {
   equityCurve: EquityCurveData | null;
   sparklineSnapshots: SnapshotForSparkline[];
   lastBackupAt: string | null;
+  lastAgentCycle: { at: string; durationMs: number; toolCount: number } | null;
   t212Portfolio: T212PortfolioPosition[] | null;
   t212Prices: Record<string, { currentPrice: number; ppl: number; stopLoss: number | null }>;
   gbpUsdRate?: number;

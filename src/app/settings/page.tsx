@@ -121,12 +121,19 @@ export default function SettingsPage() {
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [agentHalted, setAgentHalted] = useState(false);
   const [agentHaltReason, setAgentHaltReason] = useState<string | null>(null);
+  const [agentExecutionPaused, setAgentExecutionPaused] = useState(false);
   const [agentLastCycleAt, setAgentLastCycleAt] = useState<string | null>(null);
   const [agentLastDurationMs, setAgentLastDurationMs] = useState<number | null>(null);
   const [agentLastToolCalls, setAgentLastToolCalls] = useState<number | null>(null);
   const [agentLastTelegramSent, setAgentLastTelegramSent] = useState<boolean | null>(null);
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
+
+  // Legacy auto-executor task scheduler state
+  const [execTaskEnabled, setExecTaskEnabled] = useState<boolean | null>(null);
+  const [execTaskExists, setExecTaskExists] = useState<boolean>(true);
+  const [execTaskSaving, setExecTaskSaving] = useState(false);
+  const [execTaskStatus, setExecTaskStatus] = useState<string | null>(null);
 
   // Auto-execution state
   const [autoExecEnabled, setAutoExecEnabled] = useState(false);
@@ -173,7 +180,44 @@ export default function SettingsPage() {
     fetchUnprotected();
     fetchAgentSettings();
     fetchTimeStopSettings();
+    fetchExecTaskState();
   }, []);
+
+  async function fetchExecTaskState() {
+    try {
+      const res = await fetch("/api/settings/executor-mode");
+      if (res.ok) {
+        const d = await res.json();
+        setExecTaskEnabled(Boolean(d.enabled));
+        setExecTaskExists(Boolean(d.exists));
+      }
+    } catch { /* silent */ }
+  }
+
+  async function toggleExecTask(next: boolean) {
+    setExecTaskSaving(true);
+    setExecTaskStatus(null);
+    try {
+      const res = await fetch("/api/settings/executor-mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const d = await res.json();
+      if (res.ok) {
+        setExecTaskEnabled(Boolean(d.enabled));
+        setExecTaskExists(Boolean(d.exists));
+        setExecTaskStatus(`✓ ${d.enabled ? "ENABLED" : "DISABLED"}`);
+      } else {
+        setExecTaskStatus(`✗ ${d.error ?? "Failed"}`);
+      }
+    } catch (err) {
+      setExecTaskStatus(`✗ ${err instanceof Error ? err.message : "Error"}`);
+    } finally {
+      setExecTaskSaving(false);
+      setTimeout(() => setExecTaskStatus(null), 4000);
+    }
+  }
 
   async function fetchAgentSettings() {
     try {
@@ -183,6 +227,7 @@ export default function SettingsPage() {
         setAgentEnabled(d.enabled);
         setAgentHalted(d.halted);
         setAgentHaltReason(d.haltReason);
+        setAgentExecutionPaused(Boolean(d.executionPaused));
         setAgentLastCycleAt(d.lastCycleAt);
         setAgentLastDurationMs(d.lastCycleDurationMs);
         setAgentLastToolCalls(d.lastCycleToolCalls);
@@ -1496,6 +1541,28 @@ export default function SettingsPage() {
             )}
           </div>
 
+          {/* Execution Paused toggle — independent of HALT, stops still ratchet */}
+          <div className="flex items-center gap-4">
+            <div className="w-28 shrink-0">
+              <div className="text-[var(--dim)]">Execution Paused</div>
+              <div className="text-[10px] text-[#555] mt-0.5">Stops ratchet, no new trades or closes</div>
+            </div>
+            <button
+              onClick={() => {
+                const next = !agentExecutionPaused;
+                setAgentExecutionPaused(next);
+                saveAgentSetting({ executionPaused: next });
+              }}
+              disabled={agentSaving}
+              className={`w-10 h-5 rounded-full transition-colors relative ${agentExecutionPaused ? "bg-[var(--amber)]" : "bg-[#333]"}`}
+            >
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${agentExecutionPaused ? "left-5" : "left-0.5"}`} />
+            </button>
+            <span className={agentExecutionPaused ? "text-[var(--amber)] font-semibold" : "text-[#555]"}>
+              {agentExecutionPaused ? "⏸ EXECUTION PAUSED" : "▶ Execution active"}
+            </span>
+          </div>
+
           {/* Last cycle info */}
           <div className="flex items-center gap-4 mt-2">
             <span className="text-[var(--dim)] w-28 shrink-0">Last cycle</span>
@@ -1506,6 +1573,38 @@ export default function SettingsPage() {
             ) : (
               <span className="text-[#555]">Never</span>
             )}
+          </div>
+
+          {/* Legacy Auto-Executor task scheduler toggle */}
+          <div className="pt-3 mt-3 border-t border-[#a78bfa]/15">
+            <div className="flex items-center gap-4">
+              <div className="w-28 shrink-0">
+                <div className="text-[var(--dim)]">Legacy Auto-Executor</div>
+                <div className="text-[10px] text-[#555] mt-0.5">Disable when running in agent-only mode</div>
+              </div>
+              <button
+                onClick={() => {
+                  if (execTaskEnabled == null || !execTaskExists) return;
+                  toggleExecTask(!execTaskEnabled);
+                }}
+                disabled={execTaskSaving || execTaskEnabled == null || !execTaskExists}
+                className={`w-10 h-5 rounded-full transition-colors relative ${execTaskEnabled ? "bg-[var(--green)]" : "bg-[#333]"} disabled:opacity-40`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${execTaskEnabled ? "left-5" : "left-0.5"}`} />
+              </button>
+              {execTaskEnabled == null ? (
+                <span className="text-[#555]">…</span>
+              ) : !execTaskExists ? (
+                <span className="text-[var(--amber)]">Auto-Executor: TASK NOT FOUND</span>
+              ) : execTaskEnabled ? (
+                <span className="text-[var(--green)] font-semibold">Auto-Executor: ACTIVE</span>
+              ) : (
+                <span className="text-[var(--red)] font-semibold">Auto-Executor: DISABLED</span>
+              )}
+              {execTaskStatus && (
+                <span className={execTaskStatus.startsWith("✓") ? "text-[var(--green)]" : "text-[var(--red)]"}>{execTaskStatus}</span>
+              )}
+            </div>
           </div>
         </div>
       </section>

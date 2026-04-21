@@ -92,6 +92,24 @@ async function processCommand(text: string, _baseUrl: string): Promise<string> {
       return `▶️ Auto-execution RESUMED\nAgent will enter new positions from the next cycle.`;
     }
 
+    case "PAUSE-EXECUTION": {
+      await db.agentHaltFlag.upsert({
+        where: { id: 1 },
+        create: { id: 1, halted: false, executionPaused: true, reason: null, setAt: new Date(), setBy: "USER" },
+        update: { executionPaused: true, setAt: new Date(), setBy: "USER" },
+      } as unknown);
+      return `⏸ EXECUTION PAUSED\nStops will continue to ratchet. No new trades or closes.\n\nSend RESUME-EXECUTION to restore.`;
+    }
+
+    case "RESUME-EXECUTION": {
+      await db.agentHaltFlag.upsert({
+        where: { id: 1 },
+        create: { id: 1, halted: false, executionPaused: false, reason: null, setAt: new Date(), setBy: "USER" },
+        update: { executionPaused: false, setAt: new Date(), setBy: "USER" },
+      } as unknown);
+      return `▶️ EXECUTION RESUMED\nAgent will enter and close positions from the next cycle.`;
+    }
+
     case "STATUS": {
       const ctx = await gatherContext();
       const lines = [
@@ -116,7 +134,7 @@ async function processCommand(text: string, _baseUrl: string): Promise<string> {
     }
 
     default:
-      return `❓ Unknown command: ${cmd}\n\nAvailable: HALT, RESUME, PAUSE, UNPAUSE, STATUS`;
+      return `❓ Unknown command: ${cmd}\n\nAvailable: HALT, RESUME, PAUSE, UNPAUSE, PAUSE-EXECUTION, RESUME-EXECUTION, STATUS`;
   }
 }
 

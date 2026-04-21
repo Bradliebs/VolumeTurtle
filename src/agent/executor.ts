@@ -143,7 +143,8 @@ export async function runAgentCycle(
       const result = await handleToolCall(
         toolCall.name ?? "",
         toolCall.input ?? {},
-        baseUrl
+        baseUrl,
+        context.cycleId
       );
       const durationMs = Date.now() - toolStart;
 
@@ -200,6 +201,12 @@ function buildContextMessage(ctx: AgentContext): string {
     lines.push("Do not execute any orders. Ratchet stops only.");
   }
 
+  if (ctx.consecutiveFailures >= 2) {
+    lines.push(
+      `\n⚠️ CONSECUTIVE FAILURES: ${ctx.consecutiveFailures} cycles in a row have failed. Mention this in your Telegram summary so the user knows the system is degraded.`
+    );
+  }
+
   if (ctx.account) {
     lines.push(`\nACCOUNT`);
     lines.push(`  Equity: £${ctx.account.equity.toFixed(2)}`);
@@ -239,9 +246,9 @@ function buildContextMessage(ctx: AgentContext): string {
     lines.push("  None");
   } else {
     for (const s of ctx.pendingSignals) {
-      const tag = s.convergence ? " \ud83d\udd25CONV" : "";
+      const tag = s.convergence ? " | CONV" : "";
       lines.push(
-        `  [${s.id}] ${s.ticker} | ${s.grade} ${s.compositeScore.toFixed(2)} | Entry: ${s.entryPrice} Stop: ${s.stopPrice} (${s.stopDistancePct}%) | \u00a3${s.dollarRisk} risk | ${s.sector ?? "?"}${tag}`
+        `  [${s.id}] ${s.ticker} | ${s.grade} | ${s.compositeScore.toFixed(2)} | ${s.entryPrice} | ${s.stopPrice} | ${s.engine}${tag}`
       );
     }
   }

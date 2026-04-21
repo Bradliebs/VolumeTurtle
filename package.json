@@ -40,6 +40,8 @@
     "walkforward:quick": "npx tsx scripts/walkForward.ts --quick",
     "snapshot:universe": "npx tsx scripts/snapshotUniverse.ts",
     "backfill:quotes": "npx tsx scripts/backfillQuotes.ts",
+    "divergence": "npx tsx scripts/divergenceTracker.ts",
+    "watchdog:independent": "npx tsx scripts/watchdogIndependent.ts",
     "agent": "npx tsx src/agent/runner.ts",
     "agent:sunday": "npx tsx src/agent/runner-sunday.ts",
     "agent:friday": "npx tsx src/agent/runner-friday.ts",

@@ -198,6 +198,9 @@ model Trade {
   stopPushedAt      DateTime? // when stop was last successfully pushed to T212
   stopPushAttempts  Int       @default(0) // total push attempts (Layer 1 + Layer 2)
   stopPushError     String?   // last push error message (null = success)
+  // Agent cycle tagging — set when a trade is created by an agent execute_signal call.
+  // Used by the API-layer hard execution cap to count executions per cycle.
+  cycleId       String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -603,13 +606,34 @@ model AiSettings {
   updatedAt       DateTime @updatedAt
 }
 
+/// Weekly backtest-vs-live divergence report.
+/// Compares actual closed-trade P&L against the simulated P&L from the most
+/// recent BacktestRun for the same tickers and date range. Used to detect
+/// when live execution drifts away from what the strategy was designed to do.
+model DivergenceReport {
+  id                   Int      @id @default(autoincrement())
+  weekEnding           DateTime // Sunday of the week being analysed
+  totalSignals         Int      // signals the backtest engine generated
+  executedSignals      Int      // signals actually traded live
+  simulatedPnlGbp      Float    // what backtest says P&L should be
+  actualPnlGbp         Float    // what actually happened in Trade table
+  divergencePct        Float    // (actual - simulated) / abs(simulated) * 100
+  rollingDivergence4w  Float    // rolling 4-week average divergence
+  alertTriggered       Boolean  @default(false)
+  details              Json     // per-ticker breakdown
+  createdAt            DateTime @default(now())
+
+  @@index([weekEnding])
+}
+
 model AgentHaltFlag {
-  id        Int       @id @default(1)
-  halted    Boolean   @default(false)
-  reason    String?
-  setAt     DateTime?
-  setBy     String?
-  updatedAt DateTime  @updatedAt
+  id              Int       @id @default(1)
+  halted          Boolean   @default(false)
+  executionPaused Boolean   @default(false)
+  reason          String?
+  setAt           DateTime?
+  setBy           String?
+  updatedAt       DateTime  @updatedAt
 }
 
 model AgentDecisionLog {

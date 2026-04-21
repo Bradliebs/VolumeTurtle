@@ -1,8 +1,13 @@
 import "dotenv/config";
 import { randomUUID } from "crypto";
+import { createHash } from "crypto";
 import { gatherContext } from "./context";
 import { runAgentCycle } from "./executor";
 import { logCycle } from "./logger";
+import { clearFailureCount, incrementFailureCount } from "./failureTracker";
+import { computeShadowVerdict, detectDivergences } from "./shadowEngine";
+import type { ShadowReport } from "./shadowEngine";
+import { buildSystemPrompt } from "./prompt";
 import { prisma } from "@/db/client";
 import { config } from "@/lib/config";
 
@@ -56,7 +61,7 @@ async function main(): Promise<void> {
   console.log("[Agent] Gathering context...");
   let context;
   try {
-    context = await gatherContext();
+    context = await gatherContext(cycleId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[Agent] Context error:", message);
@@ -80,8 +85,9 @@ async function main(): Promise<void> {
     result = await runAgentCycle(context, BASE_URL);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error("[Agent] Claude error:", message);
-    await sendTelegramSafe(`🔴 Agent Claude error: ${message}`);
+    const failureCount = incrementFailureCount();
+    console.error(`[Agent] Claude error (consecutive failures: ${failureCount}):`, message);
+    await sendTelegramSafe(`🔴 Agent Claude error (#${failureCount}): ${message}`);
     await logCycle({
       cycleId,
       cycleStartedAt,
@@ -95,7 +101,39 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // ── 5. Log the decision ────────────────────────────────────────
+  // Cycle succeeded — reset the failure counter and remove the file.
+  clearFailureCount();
+
+  // ── 5. Shadow engine — deterministic divergence check ──────────
+  const promptText = buildSystemPrompt();
+  const promptVersion = `v${createHash("sha256").update(promptText).digest("hex").slice(0, 8)}`;
+  let shadowReport: ShadowReport | null = null;
+  try {
+    const verdict = computeShadowVerdict(context);
+    const divergences = detectDivergences(verdict, result.actions);
+    shadowReport = {
+      verdict,
+      divergences,
+      aligned: divergences.length === 0,
+      promptVersion,
+    };
+
+    if (divergences.length > 0) {
+      const lines = divergences.map(
+        (d) => `  ${d.type}: ${d.ticker} — ${d.detail}`
+      );
+      console.warn(`[Agent] Shadow divergences (${divergences.length}):\n${lines.join("\n")}`);
+      await sendTelegramSafe(
+        `📐 SHADOW DIVERGENCE (${divergences.length}):\n${lines.join("\n")}\n\nPrompt: ${promptVersion}`
+      );
+    } else {
+      console.log(`[Agent] Shadow aligned — no divergences. Prompt: ${promptVersion}`);
+    }
+  } catch (err) {
+    console.warn("[Agent] Shadow engine error (non-fatal):", err instanceof Error ? err.message : err);
+  }
+
+  // ── 6. Log the decision ────────────────────────────────────────
   await logCycle({
     cycleId,
     cycleStartedAt,
@@ -105,6 +143,8 @@ async function main(): Promise<void> {
     telegramSent: result.telegramSent,
     totalDurationMs: Date.now() - runStart,
     errorMessage: result.error,
+    shadowReport,
+    promptVersion,
   });
 
   const duration = ((Date.now() - runStart) / 1000).toFixed(1);

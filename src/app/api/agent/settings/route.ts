@@ -34,6 +34,7 @@ export async function GET(req: NextRequest) {
     model: (aiSettings?.["model"] as string) ?? "claude-sonnet-4-20250514",
     halted: (haltFlag?.["halted"] as boolean) ?? false,
     haltReason: (haltFlag?.["reason"] as string) ?? null,
+    executionPaused: (haltFlag?.["executionPaused"] as boolean) ?? false,
     lastCycleAt: lastCycle ? (lastCycle["createdAt"] as Date).toISOString() : null,
     lastCycleDurationMs: (lastCycle?.["durationMs"] as number) ?? null,
     lastCycleTelegramSent: (lastCycle?.["telegramSent"] as boolean) ?? null,
@@ -76,6 +77,26 @@ export async function PATCH(req: NextRequest) {
         update: {
           halted: body["halted"],
           reason: body["halted"] ? (reason ?? "Manual halt from settings UI") : null,
+          setAt: new Date(),
+          setBy: "SETTINGS_UI",
+        },
+      } as unknown);
+    }
+
+    // Toggle executionPaused flag (independent of halt — stops still ratchet)
+    if (typeof body["executionPaused"] === "boolean") {
+      await db.agentHaltFlag.upsert({
+        where: { id: 1 },
+        create: {
+          id: 1,
+          halted: false,
+          executionPaused: body["executionPaused"],
+          reason: null,
+          setAt: new Date(),
+          setBy: "SETTINGS_UI",
+        },
+        update: {
+          executionPaused: body["executionPaused"],
           setAt: new Date(),
           setBy: "SETTINGS_UI",
         },

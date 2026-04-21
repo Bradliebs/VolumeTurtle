@@ -408,7 +408,7 @@ function t212ToYahooTicker(t212Ticker: string, instruments: T212Instrument[]): s
 /**
  * Check if a T212 instrument is quoted in pence (GBX).
  */
-function isT212Pence(t212Ticker: string, instruments: T212Instrument[]): boolean {
+export function isT212Pence(t212Ticker: string, instruments: T212Instrument[]): boolean {
   const inst = instruments.find((i) => i.ticker === t212Ticker);
   return inst?.currencyCode === "GBX";
 }

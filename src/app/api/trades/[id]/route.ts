@@ -75,6 +75,16 @@ export async function PATCH(
       },
     });
 
+    // Mark any undismissed TimeStopFlag as actedOn
+    try {
+      await prisma.timeStopFlag.updateMany({
+        where: { tradeId: id, dismissed: false, actedOn: false },
+        data: { actedOn: true },
+      });
+    } catch {
+      /* non-fatal */
+    }
+
     return NextResponse.json(updated);
   } catch (err) {
     log.error({ err }, "Failed to update trade");

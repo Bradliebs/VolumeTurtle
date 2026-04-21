@@ -36,6 +36,12 @@ const TASKS = [
     schedule: `/sc weekly /d FRI /st 21:30`,
   },
   {
+    name: "VolumeTurtle_DivergenceTracker",
+    description: "Weekly backtest-vs-live divergence — Sunday 20:00 (after auto-tune)",
+    tr: `cmd /c cd /d "${INSTALL_DIR}" && npm run divergence >> "${LOG_DIR}\\divergence.log" 2>&1`,
+    schedule: `/sc weekly /d SUN /st 20:00`,
+  },
+  {
     name: "VolumeTurtle_Cleanup",
     description: "Daily DB cleanup — stale RetryQueue + expired PendingOrders at 06:00",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && scripts\\cleanup.bat`,
@@ -46,6 +52,12 @@ const TASKS = [
     description: "Dev server watchdog — every 5 min 07:55–21:05 weekdays, restarts if down",
     tr: `cmd /c cd /d "${INSTALL_DIR}" && scripts\\watchdog.bat`,
     schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:55 /ri 5 /du 13:15`,
+  },
+  {
+    name: "VolumeTurtle_WatchdogIndependent",
+    description: "Independent watchdog — every 10 min 07:45–21:15 weekdays, runs outside dev server",
+    tr: `cmd /c cd /d "${INSTALL_DIR}" && npm run watchdog:independent >> "${LOG_DIR}\\watchdog-independent.log" 2>&1`,
+    schedule: `/sc weekly /d MON,TUE,WED,THU,FRI /st 07:45 /ri 10 /du 13:30`,
   },
 ];
 

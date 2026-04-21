@@ -10,6 +10,7 @@ import {
   getPendingOrders,
   cancelOrder,
   placeMarketSellOrder,
+  isT212Pence,
 } from "@/lib/t212/client";
 
 const log = createLogger("api/trades/:id/close");
@@ -18,6 +19,9 @@ const db = prisma as unknown as {
   trade: {
     findUnique: (args: unknown) => Promise<Record<string, unknown> | null>;
     update: (args: unknown) => Promise<Record<string, unknown>>;
+  };
+  timeStopFlag: {
+    updateMany: (args: unknown) => Promise<{ count: number }>;
   };
 };
 
@@ -175,9 +179,14 @@ export async function POST(
     const fillPriceRaw =
       (sellOrderRec["fillPrice"] as number | undefined) ??
       (sellOrderRec["filledValue"] as number | undefined);
+    // T212 returns GBX (pence) for .L tickers — normalise to GBP (pounds)
+    const fillPriceNormalised =
+      typeof fillPriceRaw === "number" && Number.isFinite(fillPriceRaw) && fillPriceRaw > 0 && isT212Pence(t212Ticker, instruments)
+        ? fillPriceRaw / 100
+        : fillPriceRaw;
     const exitPrice =
-      typeof fillPriceRaw === "number" && Number.isFinite(fillPriceRaw) && fillPriceRaw > 0
-        ? fillPriceRaw
+      typeof fillPriceNormalised === "number" && Number.isFinite(fillPriceNormalised) && fillPriceNormalised > 0
+        ? fillPriceNormalised
         : fallbackExitPrice;
 
     const riskPerShare = entryPrice - hardStop;
@@ -216,6 +225,20 @@ export async function POST(
       { id, ticker, t212OrderId: sellOrder.id, exitPrice, shares, agentReasoning },
       "Trade closed by agent (T212 sell confirmed, DB updated)",
     );
+
+    // Mark any undismissed TimeStopFlag as actedOn — tracks whether
+    // time-stop flags actually led to exits vs being ignored.
+    try {
+      const flagResult = await db.timeStopFlag.updateMany({
+        where: { tradeId: id, dismissed: false, actedOn: false },
+        data: { actedOn: true },
+      } as unknown);
+      if (flagResult.count > 0) {
+        log.info({ tradeId: id, flagsActedOn: flagResult.count }, "TimeStopFlag(s) marked actedOn");
+      }
+    } catch {
+      /* non-fatal — best effort */
+    }
 
     // Fire-and-forget: ask the agent to write a post-mortem journal entry.
     // We do not await — journal writing calls Anthropic and can take seconds.

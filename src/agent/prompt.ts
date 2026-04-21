@@ -38,8 +38,9 @@ CYCLE FRAMEWORK (execute in order)
    Call flag_position_health for any matches. Do NOT close — only flag.
 5. NEW ENTRIES (if safety passed + not CRITICAL):
    If slotsAvailable > 0 AND pendingSignals is empty, call trigger_opportunity_scan to fetch fresh signals immediately. Then re-evaluate pendingSignals on the next cycle (the scan writes new PendingOrders to the DB but they will be visible to context the next time it is gathered).
-   For each signal: verify_ticker → check_premarket_risk → execute_signal.
+   For each signal: verify_ticker → check_premarket_risk (pass hasPendingSignals=true so the catalyst check always runs even outside the morning window) → execute_signal.
    Skip if ticker invalid, HIGH premarket risk, or already held.
+   EXECUTION CAP: execute up to 2 signals per cycle if BOTH are convergence signals (VolumeTurtle + HBME agreement) AND heat budget allows both AND slots are available for both. For non-convergence signals, still execute maximum 1 per cycle. The conservative default is 1 — only take 2 when the double-convergence edge is clearly present and risk allows.
 6. SUMMARY: Call send_telegram_summary. Always. Never skip.
    For executed trades: explain signal, sector context, risk/reward setup (entry, stop %, 1R £, 2R target), invalidation level. 3-5 factual sentences.
    If context.timeStopFlags is non-empty, include a TIME-STOP ALERTS section.
@@ -220,7 +221,32 @@ Step 2 — ANALYSE THE WEEK
      - List each: ticker, days open, current stop level, sector
      - Flag any approaching key levels or with health concerns
 
-  E) LOOK AHEAD
+  E) DRIFT REPORT
+     The driftReport field on get_weekly_summary contains three lists:
+       - dbVsT212Mismatches: open trades whose DB stop differs from T212 stop by >1%
+       - untouchedStops: open trades with no StopHistory change in last 5 days
+       - unknownT212Positions: T212 positions with no matching OPEN trade in DB
+     If ALL three lists are empty (and t212Available is true), include a single line:
+       "✓ DB↔T212 fully reconciled — no drift detected"
+     Otherwise list each non-empty category with its rows. For mismatches show
+     ticker, DB stop, T212 stop, and difference %. For untouched stops show
+     ticker and daysSinceLastChange. For unknown positions show ticker and value.
+     If t212Available is false, write one line: "⚠ DRIFT CHECK SKIPPED — T212 unreachable" and the t212Error reason.
+
+  F) DIVERGENCE
+     The divergence field on get_weekly_summary contains the most recent
+     DivergenceReport with { weekEnding, divergencePct, rollingDivergence4w,
+     alertTriggered }. This compares actual live P&L against the strategy's
+     simulated P&L for the same tickers.
+     If divergence is null, write one line:
+       "ℹ DIVERGENCE: no report yet (runs Sunday 20:00 after auto-tune)"
+     Otherwise show:
+       "Week: <divergencePct>%   Rolling 4w: <rollingDivergence4w>%"
+     If alertTriggered is true, prefix with "⚠️ ALERT — " and add a one-line
+     interpretation: positive = live outperforming backtest; negative = live
+     underperforming, review execution quality.
+
+  G) LOOK AHEAD
      - Which sectors had momentum this week?
      - Any positions that might need attention Monday?
      - Is the system performing in line with the backtest?
@@ -245,6 +271,15 @@ Step 3 — SEND SUMMARY
 
     🤖 AGENT ACTIVITY
     [cycles, ratchets, skipped signals]
+
+    🔁 DRIFT REPORT
+    [either "✓ DB↔T212 fully reconciled — no drift detected"
+     or the non-empty mismatch / untouched / unknown lists]
+
+    📐 DIVERGENCE
+    [either "ℹ DIVERGENCE: no report yet"
+     or "Week: X%   Rolling 4w: Y%"
+     prefix with "⚠️ ALERT — " when alertTriggered is true]
 
     ⚠ FLAGS & WARNINGS
     [health flags, equity warnings]

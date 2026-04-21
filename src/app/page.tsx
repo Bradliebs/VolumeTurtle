@@ -279,6 +279,7 @@ export default function Home() {
           <Link href="/watchlist" className="text-[var(--dim)] hover:text-white transition-colors">WATCHLIST</Link>
           <Link href="/execution" className="text-[var(--amber)] hover:text-white transition-colors">PENDING</Link>
           <Link href="/backtest" className="text-[var(--dim)] hover:text-white transition-colors">BACKTEST</Link>
+          <Link href="/agent/decisions" className="text-[var(--dim)] hover:text-white transition-colors">AGENT</Link>
           <Link href="/settings" className="text-[var(--dim)] hover:text-white transition-colors">SETTINGS</Link>
         </nav>
         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--green)]">
@@ -388,6 +389,28 @@ export default function Home() {
           ) : (
             <span className="text-[var(--red)]" style={mono}>Never ✗</span>
           )}
+        </span>
+        <span className="text-[var(--border)]">|</span>
+        <span className="text-sm text-[var(--dim)]">
+          Agent:{" "}
+          {(() => {
+            const cycle = data?.lastAgentCycle;
+            if (!cycle) {
+              return <span className="text-[#555]" style={mono}>Never</span>;
+            }
+            const ageMs = Date.now() - new Date(cycle.at).getTime();
+            const now = new Date();
+            const day = now.getDay(); // 0 Sun … 6 Sat
+            const hour = now.getHours();
+            const inMarketHours = day >= 1 && day <= 5 && hour >= 8 && hour < 21;
+            const stale = inMarketHours && ageMs > 90 * 60_000;
+            const durSec = (cycle.durationMs / 1000).toFixed(1);
+            return (
+              <span className={stale ? "text-[var(--red)]" : "text-white"} style={mono}>
+                {fmtTime(cycle.at)} ({durSec}s · {cycle.toolCount} tools){stale ? " ⚠ STALE" : ""}
+              </span>
+            );
+          })()}
         </span>
         {data?.scheduledScans && (
           <>

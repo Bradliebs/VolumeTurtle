@@ -24,6 +24,7 @@ import {
   placeMarketOrder,
   getInstruments,
   yahooToT212Ticker,
+  isT212Pence,
 } from "@/lib/t212/client";
 import { pushStopToT212 } from "@/lib/t212/pushStop";
 import { ensureTickerInCsv } from "@/lib/universe/ensureInCsv";
@@ -641,7 +642,11 @@ export async function executeOrder(
 
     const orderId = String(marketOrder.id);
     const filledQty = marketOrder.filledQuantity || order.suggestedShares;
-    const fillPrice = (marketOrder as unknown as Record<string, unknown>)["fillPrice"] as number | undefined;
+    const fillPriceRaw = (marketOrder as unknown as Record<string, unknown>)["fillPrice"] as number | undefined;
+    // T212 returns GBX (pence) for .L tickers — normalise to GBP (pounds)
+    const fillPrice = fillPriceRaw != null && isT212Pence(t212Ticker, instruments)
+      ? fillPriceRaw / 100
+      : fillPriceRaw;
 
     // Log order submission
     await logExecution(order.id, "SUBMITTED", `Market order placed: ${orderId}, qty=${filledQty}`);
@@ -714,7 +719,7 @@ export async function executeOrder(
 // PROCESS A SINGLE PENDING ORDER — Full lifecycle
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function processPendingOrder(order: PendingOrderRow): Promise<void> {
+export async function processPendingOrder(order: PendingOrderRow, cycleId: string | null = null): Promise<void> {
   log.info({ orderId: order.id, ticker: order.ticker }, "Processing pending order");
 
   // Safety: expire stale orders (cancelDeadline + 5 min)
@@ -915,6 +920,7 @@ export async function processPendingOrder(order: PendingOrderRow): Promise<void>
           stopPushedAt: execResult.stopPushSuccess ? new Date() : null,
           stopPushAttempts: 1,
           stopPushError: execResult.stopPushError ?? null,
+          cycleId,
         },
       });
     });

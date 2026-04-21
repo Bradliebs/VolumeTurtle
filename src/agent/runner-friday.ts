@@ -57,7 +57,7 @@ async function main(): Promise<void> {
   console.log("[AgentFriday] Gathering context...");
   let context;
   try {
-    context = await gatherContext();
+    context = await gatherContext(cycleId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[AgentFriday] Context error:", message);

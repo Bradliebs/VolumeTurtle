@@ -2,6 +2,8 @@ import { prisma } from "@/db/client";
 import { calculateMarketRegime } from "@/lib/signals/regimeFilter";
 import { applyDbSettings } from "@/lib/config";
 import { getCachedT212Positions, loadT212Settings } from "@/lib/t212/client";
+import { sendTelegram } from "@/lib/telegram";
+import { readFailureCount } from "./failureTracker";
 
 const db = prisma as unknown as {
   trade: {
@@ -179,12 +181,28 @@ export interface AgentContext {
     currentStop: number;
     flaggedAt: string;
   }>;
+  consecutiveFailures: number;
+  cycleId: string | null;
 }
 
-export async function gatherContext(): Promise<AgentContext> {
+export async function gatherContext(cycleId: string | null = null): Promise<AgentContext> {
   // Load fresh DB settings before gathering context so the agent
   // always uses current config, not stale env-var defaults.
   await applyDbSettings();
+
+  // Check consecutive Claude API failures from the persisted counter.
+  // If we've failed 2+ times in a row, alert the user via Telegram and
+  // surface the count to Claude so it can mention it in the summary.
+  const consecutiveFailures = readFailureCount();
+  if (consecutiveFailures >= 2) {
+    try {
+      await sendTelegram({
+        text: `⚠️ Agent has failed ${consecutiveFailures} consecutive cycles — check logs`,
+      });
+    } catch {
+      // non-fatal
+    }
+  }
 
   const now = new Date();
 
@@ -273,9 +291,8 @@ export async function gatherContext(): Promise<AgentContext> {
   const pending = await db.pendingOrder.findMany({
     where: { status: "pending", cancelDeadline: { gt: now } },
     orderBy: { compositeScore: "desc" },
-    // Top 10 by composite score — agent rarely has more than 4 slots.
-    // Keeps context under API token limits while showing all viable candidates.
-    take: 10,
+    // Top 5 only — agent needs to pick 1 slot, not evaluate 100 options.
+    take: 5,
   } as unknown);
 
   const tickerEngineMap = new Map<string, string[]>();
@@ -390,5 +407,7 @@ export async function gatherContext(): Promise<AgentContext> {
       currentStop: f["currentStop"] as number,
       flaggedAt: (f["flaggedAt"] as Date).toISOString(),
     })),
+    consecutiveFailures,
+    cycleId,
   };
 }

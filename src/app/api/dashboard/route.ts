@@ -85,7 +85,36 @@ export async function GET(req: Request) {
       prisma.settings.findUnique({ where: { key: "last_backup_at" } }),
     ]);
 
-  // Get total counts for pagination
+  // Fetch the most recent agent cycle for the dashboard heartbeat indicator.
+  // Done outside the Promise.all because it uses the typed-cast pattern.
+  // Allowed to fail silently — the heartbeat just won't render.
+  let lastAgentCycle: { at: string; durationMs: number; toolCount: number } | null = null;
+  try {
+    const log = await (prisma as unknown as {
+      agentDecisionLog: {
+        findFirst: (args: unknown) => Promise<{
+          createdAt: Date;
+          durationMs: number;
+          actionsJson: string;
+        } | null>;
+      };
+    }).agentDecisionLog.findFirst({ orderBy: { createdAt: "desc" } });
+    if (log) {
+      let toolCount = 0;
+      try {
+        const parsed = JSON.parse(log.actionsJson) as unknown[];
+        toolCount = Array.isArray(parsed) ? parsed.length : 0;
+      } catch { /* keep 0 */ }
+      lastAgentCycle = {
+        at: log.createdAt.toISOString(),
+        durationMs: log.durationMs,
+        toolCount,
+      };
+    }
+  } catch {
+    // non-fatal — heartbeat just won't render
+  }
+
   const [rawTotalClosedTrades, totalSignals] = await Promise.all([
     prisma.trade.count({ where: { status: "CLOSED" } }),
     prisma.scanResult.count({ where: { scanDate: { gte: thirtyDaysAgo }, signalFired: true } }),
@@ -655,6 +684,7 @@ export async function GET(req: Request) {
     instructions,
     scheduledScans,
     lastBackupAt: lastBackupSetting?.value ?? null,
+    lastAgentCycle,
     t212Prices,
     regime: regime
       ? {

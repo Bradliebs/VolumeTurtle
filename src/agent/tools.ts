@@ -20,7 +20,10 @@ function agentHeaders(): Record<string, string> {
 }
 
 const db = prisma as unknown as {
-  agentHaltFlag: { upsert: (args: unknown) => Promise<unknown> };
+  agentHaltFlag: {
+    upsert: (args: unknown) => Promise<unknown>;
+    findFirst: () => Promise<Record<string, unknown> | null>;
+  };
   pendingOrder: { findUnique: (args: unknown) => Promise<Record<string, unknown> | null> };
   trade: { findUnique: (args: unknown) => Promise<Record<string, unknown> | null> };
 };
@@ -165,7 +168,7 @@ export const TOOL_DEFINITIONS = [
   {
     name: "check_premarket_risk",
     description:
-      "Checks for upcoming binary events (earnings, FDA decisions, major news) for a list of tickers. Call this for any ticker before executing a signal, and for all open positions at the start of each cycle. Returns a risk assessment per ticker.",
+      "Checks for upcoming binary events (earnings, FDA decisions, major news) for a list of tickers. Call this for any ticker before executing a signal, and for all open positions at the start of each cycle. Returns a risk assessment per ticker. Pass hasPendingSignals=true when evaluating signals you intend to execute — this forces a fresh web search even outside the morning gate.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -173,6 +176,10 @@ export const TOOL_DEFINITIONS = [
           type: "array" as const,
           items: { type: "string" as const },
           description: "List of Yahoo Finance ticker symbols to check.",
+        },
+        hasPendingSignals: {
+          type: "boolean" as const,
+          description: "Set true when there are pending signals being evaluated this cycle — forces the gate to run web searches regardless of time.",
         },
       },
       required: ["tickers"],
@@ -338,14 +345,15 @@ export interface ToolResult {
 export async function handleToolCall(
   toolName: string,
   toolInput: Record<string, unknown>,
-  baseUrl: string
+  baseUrl: string,
+  cycleId: string | null = null
 ): Promise<ToolResult> {
   try {
     switch (toolName) {
       case "ratchet_stops":
         return await handleRatchetStops(toolInput, baseUrl);
       case "execute_signal":
-        return await handleExecuteSignal(toolInput, baseUrl);
+        return await handleExecuteSignal(toolInput, baseUrl, cycleId);
       case "close_position":
         return await handleClosePosition(toolInput, baseUrl);
       case "set_halt":
@@ -415,8 +423,13 @@ async function handleRatchetStops(
 
 async function handleExecuteSignal(
   input: Record<string, unknown>,
-  baseUrl: string
+  baseUrl: string,
+  cycleId: string | null = null
 ): Promise<ToolResult> {
+  const halt = await db.agentHaltFlag.findFirst();
+  if (halt?.["executionPaused"]) {
+    return { success: false, error: "Execution paused — ratchets only" };
+  }
   const order = await db.pendingOrder.findUnique({
     where: { id: input["pendingOrderId"] },
   } as unknown);
@@ -432,10 +445,12 @@ async function handleExecuteSignal(
     body: JSON.stringify({
       pendingOrderId: input["pendingOrderId"],
       agentReasoning: input["reasoning"],
+      cycleId,
     }),
   });
   if (!res.ok) {
-    return { success: false, error: `Execution API error ${res.status}` };
+    const errBody = await res.text().catch(() => "");
+    return { success: false, error: `Execution API error ${res.status}: ${errBody.slice(0, 300)}` };
   }
   const data: unknown = await res.json();
   return { success: true, data };
@@ -445,6 +460,10 @@ async function handleClosePosition(
   input: Record<string, unknown>,
   baseUrl: string
 ): Promise<ToolResult> {
+  const halt = await db.agentHaltFlag.findFirst();
+  if (halt?.["executionPaused"]) {
+    return { success: false, error: "Execution paused — ratchets only" };
+  }
   const tradeId = input["tradeId"];
   if (typeof tradeId !== "string" || tradeId.length === 0) {
     return { success: false, error: "tradeId (string cuid) is required" };
@@ -722,6 +741,33 @@ async function handleCheckPremarketRisk(
     return { success: true, data: cachedResults };
   }
 
+  // Time gate: only run web searches between 05:00 and 11:00 UTC (pre-market window).
+  // Outside that window, return cached hits and LOW-risk defaults for uncached tickers
+  // to avoid burning API tokens on intraday cycles.
+  // EXCEPTION: if hasPendingSignals=true, the agent is actively evaluating signals
+  // for execution — always run the web search so we never enter a position without
+  // checking for binary events, regardless of clock time.
+  const utcHour = new Date().getUTCHours();
+  const inMorningWindow = utcHour >= 5 && utcHour < 11;
+  const hasPendingSignals = Boolean(input["hasPendingSignals"]);
+  if (!inMorningWindow && !hasPendingSignals) {
+    const defaults: PremarketRiskItem[] = uncachedTickers.map((t) => ({
+      ticker: t,
+      hasNearTermCatalyst: false,
+      catalystType: null,
+      catalystDate: null,
+      riskLevel: "LOW" as const,
+      summary: "Outside pre-market window (05:00–11:00 UTC) and no pending signals — defaulted to LOW",
+    }));
+    const merged = new Map<string, PremarketRiskItem>();
+    for (const r of cachedResults) merged.set(r.ticker, r);
+    for (const r of defaults) merged.set(r.ticker, r);
+    return {
+      success: true,
+      data: tickers.map((t) => merged.get(t)!),
+    };
+  }
+
   // Look up uncached tickers one at a time with 3s delays to avoid rate limits
   const freshResults: PremarketRiskItem[] = [];
   for (let i = 0; i < uncachedTickers.length; i++) {
@@ -951,6 +997,12 @@ async function handleGetWeeklySummary(): Promise<ToolResult> {
       agentDecisionLog: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
       stopHistory: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
       executionLog: { findMany: (args: unknown) => Promise<Array<Record<string, unknown>>> };
+      divergenceReport: { findFirst: (args: unknown) => Promise<{
+        weekEnding: Date;
+        divergencePct: number;
+        rollingDivergence4w: number;
+        alertTriggered: boolean;
+      } | null> };
     };
 
     const now = new Date();
@@ -1047,6 +1099,22 @@ async function handleGetWeeklySummary(): Promise<ToolResult> {
         at: (c.createdAt as Date).toISOString(),
       }));
 
+    // DRIFT RECONCILIATION — compare DB open trades to T212 reality.
+    const driftReport = await buildDriftReport(tradesOpen, now);
+
+    // DIVERGENCE — most recent backtest-vs-live report (written weekly Sunday 20:00).
+    const latestDivergence = await dbWeek.divergenceReport.findFirst({
+      orderBy: { weekEnding: "desc" },
+    } as unknown);
+    const divergence = latestDivergence
+      ? {
+          weekEnding: latestDivergence.weekEnding.toISOString().slice(0, 10),
+          divergencePct: latestDivergence.divergencePct,
+          rollingDivergence4w: latestDivergence.rollingDivergence4w,
+          alertTriggered: latestDivergence.alertTriggered,
+        }
+      : null;
+
     return {
       success: true,
       data: {
@@ -1083,12 +1151,126 @@ async function handleGetWeeklySummary(): Promise<ToolResult> {
           skippedSignals,
           healthFlags,
         },
+        driftReport,
+        divergence,
       },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, error: `Weekly summary query failed: ${message}` };
   }
+}
+
+interface DriftReport {
+  dbVsT212Mismatches: Array<{
+    ticker: string;
+    dbStop: number;
+    t212Stop: number;
+    differencePct: number;
+  }>;
+  untouchedStops: Array<{
+    ticker: string;
+    lastStopChangeDate: string | null;
+    daysSinceLastChange: number | null;
+  }>;
+  unknownT212Positions: Array<{
+    ticker: string;
+    value: number;
+  }>;
+  t212Available: boolean;
+  t212Error?: string;
+}
+
+async function buildDriftReport(
+  openTrades: Array<Record<string, unknown>>,
+  now: Date
+): Promise<DriftReport> {
+  const report: DriftReport = {
+    dbVsT212Mismatches: [],
+    untouchedStops: [],
+    unknownT212Positions: [],
+    t212Available: false,
+  };
+
+  // 1) untouchedStops — open trades with no StopHistory entry in last 5 days.
+  //    This is DB-only so it always runs even if T212 is unreachable.
+  const fiveDaysAgo = new Date(now.getTime() - 5 * 86400000);
+  const dbStops = prisma as unknown as {
+    stopHistory: {
+      findFirst: (args: unknown) => Promise<{ date: Date } | null>;
+    };
+  };
+  for (const t of openTrades) {
+    const tradeId = t["id"] as string;
+    const ticker = t["ticker"] as string;
+    const lastChange = await dbStops.stopHistory.findFirst({
+      where: { tradeId, changed: true },
+      orderBy: { date: "desc" },
+    } as unknown);
+    if (!lastChange || lastChange.date < fiveDaysAgo) {
+      const daysSince = lastChange
+        ? Math.floor((now.getTime() - lastChange.date.getTime()) / 86400000)
+        : null;
+      report.untouchedStops.push({
+        ticker,
+        lastStopChangeDate: lastChange ? lastChange.date.toISOString() : null,
+        daysSinceLastChange: daysSince,
+      });
+    }
+  }
+
+  // 2 & 3) DB↔T212 stop mismatches and unknown T212 positions.
+  //    Skip gracefully if T212 not configured / unreachable.
+  try {
+    const { loadT212Settings, getCachedT212Positions } = await import("@/lib/t212/client");
+    const settings = loadT212Settings();
+    if (!settings) {
+      report.t212Error = "T212 not configured";
+      return report;
+    }
+    const { positions } = await getCachedT212Positions(settings);
+    report.t212Available = true;
+
+    const t212ByTicker = new Map<string, { stopLoss: number | null | undefined; quantity: number; currentPrice: number }>();
+    for (const p of positions) {
+      t212ByTicker.set(p.ticker, {
+        stopLoss: p.stopLoss,
+        quantity: p.quantity,
+        currentPrice: p.currentPrice,
+      });
+    }
+
+    const dbTickers = new Set<string>();
+    for (const t of openTrades) {
+      const ticker = t["ticker"] as string;
+      dbTickers.add(ticker);
+
+      const dbStop = Math.max(t["hardStop"] as number, t["trailingStop"] as number);
+      const t212Pos = t212ByTicker.get(ticker);
+      if (!t212Pos || t212Pos.stopLoss == null || t212Pos.stopLoss <= 0) continue;
+      if (dbStop <= 0) continue;
+
+      const diffPct = Math.abs((t212Pos.stopLoss - dbStop) / dbStop) * 100;
+      if (diffPct > 1) {
+        report.dbVsT212Mismatches.push({
+          ticker,
+          dbStop: Math.round(dbStop * 10000) / 10000,
+          t212Stop: Math.round(t212Pos.stopLoss * 10000) / 10000,
+          differencePct: Math.round(diffPct * 100) / 100,
+        });
+      }
+    }
+
+    for (const p of positions) {
+      if (dbTickers.has(p.ticker)) continue;
+      const value = Math.round(p.quantity * p.currentPrice * 100) / 100;
+      report.unknownT212Positions.push({ ticker: p.ticker, value });
+    }
+  } catch (err) {
+    report.t212Error = err instanceof Error ? err.message : "T212 fetch failed";
+  }
+
+  return report;
 }
 
 interface JournalLessons {
@@ -1382,10 +1564,47 @@ interface RegimeHealthResult {
   summary: string;
   asOf: string;
   cached: boolean;
+  degraded: boolean;
 }
 
-// Daily cache: key = YYYY-MM-DD. Survives within the process lifetime.
+// Daily cache: key = YYYY-MM-DD. In-memory for within-process, DB-backed
+// (Settings table) for cross-process persistence across hourly tsx invocations.
 const regimeHealthCache = new Map<string, RegimeHealthResult>();
+const REGIME_CACHE_KEY = "regime_health_cache";
+
+const dbSettings = prisma as unknown as {
+  settings: {
+    findUnique: (args: unknown) => Promise<{ value: string; updatedAt: Date } | null>;
+    upsert: (args: unknown) => Promise<unknown>;
+  };
+};
+
+async function readRegimeFromDb(today: string): Promise<RegimeHealthResult | null> {
+  try {
+    const row = await dbSettings.settings.findUnique({
+      where: { key: REGIME_CACHE_KEY },
+    } as unknown);
+    if (!row) return null;
+    const parsed = JSON.parse(row.value) as RegimeHealthResult;
+    // Only valid if cached for today
+    if (parsed.asOf !== today) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function writeRegimeToDb(result: RegimeHealthResult): Promise<void> {
+  try {
+    await dbSettings.settings.upsert({
+      where: { key: REGIME_CACHE_KEY },
+      create: { key: REGIME_CACHE_KEY, value: JSON.stringify(result) },
+      update: { value: JSON.stringify(result) },
+    } as unknown);
+  } catch {
+    // non-fatal — in-memory cache still works
+  }
+}
 
 interface YahooBar {
   date: Date;
@@ -1433,8 +1652,10 @@ function sma(closes: number[], period: number): number | null {
 async function handleCheckRegimeHealth(): Promise<ToolResult> {
   const today = new Date().toISOString().split("T")[0]!;
 
-  const cached = regimeHealthCache.get(today);
+  // Check in-memory cache first, then DB
+  const cached = regimeHealthCache.get(today) ?? await readRegimeFromDb(today);
   if (cached) {
+    regimeHealthCache.set(today, cached); // warm in-memory for same-process reuse
     return { success: true, data: { ...cached, cached: true } };
   }
 
@@ -1445,6 +1666,9 @@ async function handleCheckRegimeHealth(): Promise<ToolResult> {
     fetchYahooCloses("SPY", 45),
     fetchYahooCloses("^FTSE", 45),
   ]);
+
+  // If Yahoo is completely down, flag degraded rather than silently returning NONE.
+  const yahooDown = spyCloses.length === 0 && ftseCloses.length === 0;
 
   const spy20dTrend = pctChange(spyCloses, 20);
   const spy5dTrend = pctChange(spyCloses, 5);
@@ -1536,7 +1760,8 @@ async function handleCheckRegimeHealth(): Promise<ToolResult> {
   const deteriorationScore = Math.max(0, Math.min(100, Math.round(score)));
 
   let warningLevel: "NONE" | "WATCH" | "WARNING" | "CRITICAL";
-  if (deteriorationScore < 25) warningLevel = "NONE";
+  if (yahooDown) warningLevel = "WATCH"; // degraded — assume mild caution
+  else if (deteriorationScore < 25) warningLevel = "NONE";
   else if (deteriorationScore < 50) warningLevel = "WATCH";
   else if (deteriorationScore < 75) warningLevel = "WARNING";
   else warningLevel = "CRITICAL";
@@ -1546,6 +1771,7 @@ async function handleCheckRegimeHealth(): Promise<ToolResult> {
   const spyLast = spyCloses.length > 0 ? spyCloses[spyCloses.length - 1]! : null;
 
   const summaryParts: string[] = [];
+  if (yahooDown) summaryParts.push("⚠ Yahoo data unavailable — regime health DEGRADED, defaulting to WATCH.");
   summaryParts.push(`Regime health: ${warningLevel} (${deteriorationScore}/100).`);
   if (regimeCurrentlyBullish === true) summaryParts.push("Official regime still BULLISH.");
   else if (regimeCurrentlyBullish === false) summaryParts.push("Official regime BEARISH.");
@@ -1571,9 +1797,11 @@ async function handleCheckRegimeHealth(): Promise<ToolResult> {
     summary: summaryParts.join(" "),
     asOf: today,
     cached: false,
+    degraded: yahooDown,
   };
 
   regimeHealthCache.set(today, result);
+  await writeRegimeToDb(result);
   return { success: true, data: result };
 }
 
@@ -1608,8 +1836,14 @@ async function handleRunDrawdownForensics(): Promise<ToolResult> {
     trade: {
       findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
     };
-    agentDecisionLog: {
-      findMany: (args: unknown) => Promise<Array<Record<string, unknown>>>;
+    executionLog: {
+      count: (args: unknown) => Promise<number>;
+    };
+    ticker: {
+      findFirst: (args: unknown) => Promise<{ id: number } | null>;
+    };
+    dailyQuote: {
+      findFirst: (args: unknown) => Promise<{ close: number } | null>;
     };
   };
 
@@ -1695,17 +1929,42 @@ async function handleRunDrawdownForensics(): Promise<ToolResult> {
 
   // 3. Compute each trade's £ contribution to the drawdown.
   // For closed trades: realised P&L = (exit - entry) * shares.
-  // For open trades: mark-to-current-stop as a conservative proxy
-  //   (matches the close-route's exit-at-stop convention).
+  // For open trades: mark-to-last-price from cached DailyQuote if available,
+  //   falling back to trailing stop if no quote exists.
   const contributing: ContributingTrade[] = [];
   for (const t of trades) {
     const entry = t["entryPrice"] as number;
     const shares = t["shares"] as number;
     const status = t["status"] as string;
-    const exitPrice = (t["exitPrice"] as number | null) ??
-      (t["trailingStopPrice"] as number | null) ??
-      (t["trailingStop"] as number | null) ??
-      entry;
+    const ticker = t["ticker"] as string;
+
+    let exitPrice: number;
+    if (status === "OPEN") {
+      // Try to get the latest cached close from DailyQuote (no Yahoo API call)
+      let lastClose: number | null = null;
+      try {
+        const tickerRow = await dbF.ticker.findFirst({
+          where: { symbol: ticker },
+          select: { id: true },
+        } as unknown);
+        if (tickerRow) {
+          const lastQuote = await dbF.dailyQuote.findFirst({
+            where: { tickerId: tickerRow.id },
+            orderBy: { date: "desc" },
+            select: { close: true },
+          } as unknown);
+          if (lastQuote) lastClose = lastQuote.close;
+        }
+      } catch {
+        // fall back to stop-based mark
+      }
+      exitPrice = lastClose ??
+        (t["trailingStopPrice"] as number | null) ??
+        (t["trailingStop"] as number | null) ??
+        entry;
+    } else {
+      exitPrice = (t["exitPrice"] as number | null) ?? entry;
+    }
     const pnlGbp = Math.round((exitPrice - entry) * shares * 100) / 100;
 
     // Only count negative contributions toward the drawdown (winners offset).
@@ -1731,15 +1990,14 @@ async function handleRunDrawdownForensics(): Promise<ToolResult> {
   // Sort losers first by pctOfDrawdown
   contributing.sort((a, b) => b.pctOfDrawdown - a.pctOfDrawdown);
 
-  // 4. Skipped signals during the drawdown window
-  const cycles = await dbF.agentDecisionLog.findMany({
-    where: { createdAt: { gte: windowStart } },
-    orderBy: { createdAt: "asc" },
+  // 4. Skipped signals during the drawdown window — count from ExecutionLog
+  //    which has structured event types (PRE_FLIGHT_FAIL, EXPIRED, CANCELLED).
+  const skippedSignalCount = await dbF.executionLog.count({
+    where: {
+      createdAt: { gte: windowStart },
+      event: { in: ["PRE_FLIGHT_FAIL", "EXPIRED", "CANCELLED"] },
+    },
   } as unknown);
-  const skippedSignalCount = cycles.filter((c) => {
-    const actions = (c["actionsJson"] as string) ?? "[]";
-    return actions.includes('"skipped"') || actions.includes('"SKIPPED"');
-  }).length;
 
   // 5. Cause classification
   let dominantCause: DrawdownCause = "UNKNOWN";
@@ -2642,14 +2900,13 @@ async function handleCurateUniverse(): Promise<ToolResult> {
       >;
     };
     dailyQuote: {
-      findFirst: (args: unknown) => Promise<{ date: Date } | null>;
-      findMany: (args: unknown) => Promise<Array<{ volume: bigint }>>;
+      groupBy: (args: unknown) => Promise<Array<{ tickerId: number; _max: { date: Date | null }; _avg: { volume: number | null } }>>;
     };
     pendingOrder: {
-      count: (args: unknown) => Promise<number>;
+      groupBy: (args: unknown) => Promise<Array<{ ticker: string; _count: { id: number } }>>;
     };
     trade: {
-      count: (args: unknown) => Promise<number>;
+      groupBy: (args: unknown) => Promise<Array<{ ticker: string; _count: { id: number } }>>;
     };
   };
 
@@ -2661,43 +2918,52 @@ async function handleCurateUniverse(): Promise<ToolResult> {
     select: { id: true, symbol: true, sector: true, createdAt: true },
   } as unknown);
 
+  // Batch queries — 4 total instead of ~4 per ticker.
+  const tickerIds = tickers.map((t) => t.id);
+  const tickerSymbols = tickers.map((t) => t.symbol);
+
+  // 1. Latest quote date + avg volume per ticker (recent 10 handled below via _avg approximation)
+  const quoteStats = await dbU.dailyQuote.groupBy({
+    by: ["tickerId"],
+    where: { tickerId: { in: tickerIds } },
+    _max: { date: true },
+    _avg: { volume: true },
+  } as unknown);
+  const quoteStatMap = new Map(quoteStats.map((q) => [q.tickerId, q]));
+
+  // 2. Signal count per ticker in last 30 days
+  const signalCounts = await dbU.pendingOrder.groupBy({
+    by: ["ticker"],
+    where: { ticker: { in: tickerSymbols }, createdAt: { gte: thirtyDaysAgo } },
+    _count: { id: true },
+  } as unknown);
+  const signalCountMap = new Map(signalCounts.map((s) => [s.ticker, s._count.id]));
+
+  // 3. Lifetime trade count per ticker
+  const tradeCounts = await dbU.trade.groupBy({
+    by: ["ticker"],
+    where: { ticker: { in: tickerSymbols } },
+    _count: { id: true },
+  } as unknown);
+  const tradeCountMap = new Map(tradeCounts.map((t) => [t.ticker, t._count.id]));
+
   const removeCandidates: CurationCandidate[] = [];
   const reviewCandidates: CurationCandidate[] = [];
   let healthyCount = 0;
 
   for (const t of tickers) {
-    // lastQuoteAge
-    const latest = await dbU.dailyQuote.findFirst({
-      where: { tickerId: t.id },
-      orderBy: { date: "desc" },
-      select: { date: true },
-    } as unknown);
-    const lastQuoteAge = latest
-      ? Math.floor((now.getTime() - latest.date.getTime()) / 86_400_000)
+    const qs = quoteStatMap.get(t.id);
+    const lastQuoteDate = qs?._max?.date ?? null;
+    const lastQuoteAge = lastQuoteDate
+      ? Math.floor((now.getTime() - lastQuoteDate.getTime()) / 86_400_000)
       : null;
 
-    // signalCount30d
-    const signalCount30d = await dbU.pendingOrder.count({
-      where: { ticker: t.symbol, createdAt: { gte: thirtyDaysAgo } },
-    } as unknown);
+    const signalCount30d = signalCountMap.get(t.symbol) ?? 0;
+    const executionCount = tradeCountMap.get(t.symbol) ?? 0;
 
-    // executionCount (lifetime)
-    const executionCount = await dbU.trade.count({
-      where: { ticker: t.symbol },
-    } as unknown);
-
-    // avgLiquidity (last 10 daily quotes)
-    const recentQuotes = await dbU.dailyQuote.findMany({
-      where: { tickerId: t.id },
-      orderBy: { date: "desc" },
-      take: 10,
-      select: { volume: true },
-    } as unknown);
-    const avgLiquidity =
-      recentQuotes.length > 0
-        ? recentQuotes.reduce((s, q) => s + Number(q.volume), 0) /
-          recentQuotes.length
-        : null;
+    // _avg volume across all quotes is a reasonable proxy; the per-ticker
+    // "last 10 quotes" version required an individual query per ticker.
+    const avgLiquidity = qs?._avg?.volume ?? null;
 
     const ageInUniverse = Math.floor(
       (now.getTime() - t.createdAt.getTime()) / 86_400_000,
