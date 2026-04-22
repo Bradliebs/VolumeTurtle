@@ -14,6 +14,8 @@ const db = prisma as unknown as {
 const BASE_URL = config.TRADECORE_BASE_URL;
 
 async function sendTelegramSafe(message: string): Promise<void> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
     const token = process.env["DASHBOARD_TOKEN"] ?? "";
     await fetch(`${BASE_URL}/api/telegram/send`, {
@@ -23,9 +25,12 @@ async function sendTelegramSafe(message: string): Promise<void> {
         "Authorization": `Bearer ${token}`,
       },
       body: JSON.stringify({ message }),
+      signal: controller.signal,
     });
   } catch {
     console.error("[AgentFriday] Failed to send Telegram alert.");
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -35,10 +35,18 @@ function saveOffset(offset: number): void {
 
 async function getUpdates(botToken: string, offset: number): Promise<unknown[]> {
   const url = `https://api.telegram.org/bot${botToken}/getUpdates?offset=${offset}&timeout=5&allowed_updates=["message"]`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = (await res.json()) as { ok: boolean; result: unknown[] };
-  return data.ok ? data.result : [];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return [];
+    const data = (await res.json()) as { ok: boolean; result: unknown[] };
+    return data.ok ? data.result : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function processCommand(text: string, _baseUrl: string): Promise<string> {
@@ -139,11 +147,20 @@ async function processCommand(text: string, _baseUrl: string): Promise<string> {
 }
 
 async function sendReply(botToken: string, chatId: string, message: string): Promise<void> {
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text: message }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message }),
+      signal: controller.signal,
+    });
+  } catch {
+    // non-fatal
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function main(): Promise<void> {

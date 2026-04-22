@@ -19,6 +19,31 @@ function agentHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * fetch() with a hard timeout. Prevents agent cycles from hanging on stalled
+ * downstream HTTP calls (T212, Yahoo, Telegram). All internal API calls from
+ * the agent should go through this wrapper.
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  label: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const db = prisma as unknown as {
   agentHaltFlag: {
     upsert: (args: unknown) => Promise<unknown>;
@@ -430,11 +455,21 @@ async function handleRatchetStops(
   input: Record<string, unknown>,
   baseUrl: string
 ): Promise<ToolResult> {
-  const res = await fetch(`${baseUrl}/api/cruise-control/ratchet`, {
-    method: "POST",
-    headers: agentHeaders(),
-    body: JSON.stringify({ dryRun: input["dryRun"] ?? false }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${baseUrl}/api/cruise-control/ratchet`,
+      {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({ dryRun: input["dryRun"] ?? false }),
+      },
+      120_000,
+      "Ratchet",
+    );
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Ratchet failed" };
+  }
   if (!res.ok) {
     return { success: false, error: `Ratchet API error ${res.status}` };
   }
@@ -460,15 +495,25 @@ async function handleExecuteSignal(
   if (order["status"] !== "pending") {
     return { success: false, error: `Order is not pending — skipping.` };
   }
-  const res = await fetch(`${baseUrl}/api/execution/execute`, {
-    method: "POST",
-    headers: agentHeaders(),
-    body: JSON.stringify({
-      pendingOrderId: input["pendingOrderId"],
-      agentReasoning: input["reasoning"],
-      cycleId,
-    }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${baseUrl}/api/execution/execute`,
+      {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({
+          pendingOrderId: input["pendingOrderId"],
+          agentReasoning: input["reasoning"],
+          cycleId,
+        }),
+      },
+      90_000,
+      "Execute",
+    );
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Execute failed" };
+  }
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
     return { success: false, error: `Execution API error ${res.status}: ${errBody.slice(0, 300)}` };
@@ -498,11 +543,21 @@ async function handleClosePosition(
   if (trade["status"] !== "OPEN") {
     return { success: false, error: `Trade ${tradeId} is not OPEN.` };
   }
-  const res = await fetch(`${baseUrl}/api/trades/${tradeId}/close`, {
-    method: "POST",
-    headers: agentHeaders(),
-    body: JSON.stringify({ agentReasoning: input["reasoning"] }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${baseUrl}/api/trades/${tradeId}/close`,
+      {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({ agentReasoning: input["reasoning"] }),
+      },
+      90_000,
+      "Close",
+    );
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Close failed" };
+  }
   if (!res.ok) {
     return { success: false, error: `Close API error ${res.status}` };
   }
@@ -528,11 +583,21 @@ async function handleSendTelegramSummary(
   input: Record<string, unknown>,
   baseUrl: string
 ): Promise<ToolResult> {
-  const res = await fetch(`${baseUrl}/api/telegram/send`, {
-    method: "POST",
-    headers: agentHeaders(),
-    body: JSON.stringify({ message: input["summary"] }),
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${baseUrl}/api/telegram/send`,
+      {
+        method: "POST",
+        headers: agentHeaders(),
+        body: JSON.stringify({ message: input["summary"] }),
+      },
+      15_000,
+      "Telegram",
+    );
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Telegram failed" };
+  }
   if (!res.ok) {
     return { success: false, error: `Telegram API error ${res.status}` };
   }
