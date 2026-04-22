@@ -23,6 +23,7 @@ import {
   getAccountCash,
   placeMarketOrder,
   getOrderStatus,
+  cancelOrder,
   getInstruments,
   yahooToT212Ticker,
   isT212Pence,
@@ -696,22 +697,57 @@ export async function executeOrder(
     await logExecution(order.id, "SUBMITTED", `Market order placed: ${orderId}`);
 
     // ── FILL CONFIRMATION POLL ─────────────────────────────────────────
-    // Wait 5s, then poll T212 once for order status. Only proceed to stop
-    // push + DB trade creation if the order is FILLED. If not FILLED, log a
-    // warning and abort — no Trade row is created (prevents ghost positions).
-    await sleep(5000);
+    // Poll T212 for up to ~60s waiting for status FILLED. T212 frequently
+    // reports NEW for 5–30s while routing/queueing at the venue (especially
+    // for fast movers like FCEL during volume spikes). Giving up at 5s and
+    // writing nothing to the DB causes orphan positions when the order
+    // subsequently fills.
+    //
+    // If we still don't see FILLED at the deadline, attempt to cancel the
+    // order so it cannot fill silently after we've given up.
+    const FILL_POLL_INTERVAL_MS = 3_000;
+    const FILL_POLL_MAX_MS = 60_000;
+    const pollStartedAt = Date.now();
+    let confirmed = await getOrderStatus(t212Settings, marketOrder.id);
+    let confirmedStatus = (confirmed?.status ?? "").toUpperCase();
+    let pollAttempts = 1;
 
-    const confirmed = await getOrderStatus(t212Settings, marketOrder.id);
-    const confirmedStatus = (confirmed?.status ?? "").toUpperCase();
+    while (confirmedStatus !== "FILLED" && Date.now() - pollStartedAt < FILL_POLL_MAX_MS) {
+      // Terminal failure states — stop polling immediately.
+      if (confirmedStatus === "REJECTED" || confirmedStatus === "CANCELLED" || confirmedStatus === "EXPIRED") {
+        break;
+      }
+      await sleep(FILL_POLL_INTERVAL_MS);
+      confirmed = await getOrderStatus(t212Settings, marketOrder.id);
+      confirmedStatus = (confirmed?.status ?? "").toUpperCase();
+      pollAttempts++;
+    }
+
     if (confirmedStatus !== "FILLED") {
+      const elapsedSec = Math.round((Date.now() - pollStartedAt) / 1000);
       const reason = confirmed === null
-        ? "T212 order status fetch failed (null response) after 5s — fill not confirmed"
-        : `T212 order status is '${confirmed.status}' after 5s — fill not confirmed`;
-      log.warn({ ticker: order.ticker, orderId, status: confirmed?.status ?? null }, reason);
-      await logExecution(order.id, "FILL_NOT_CONFIRMED", `${reason}. No Trade row will be created. T212 order id=${orderId} may still fill later — manual reconciliation required.`);
+        ? `T212 order status fetch failed (null response) after ${elapsedSec}s — fill not confirmed`
+        : `T212 order status is '${confirmed.status}' after ${elapsedSec}s (${pollAttempts} polls) — fill not confirmed`;
+      log.warn({ ticker: order.ticker, orderId, status: confirmed?.status ?? null, elapsedSec, pollAttempts }, reason);
+
+      // Attempt to cancel the order so it can't fill silently and become an orphan.
+      let cancelNote = "";
+      if (confirmedStatus !== "REJECTED" && confirmedStatus !== "CANCELLED" && confirmedStatus !== "EXPIRED") {
+        try {
+          await cancelOrder(t212Settings, marketOrder.id);
+          cancelNote = " Cancel requested to prevent late-fill orphan.";
+          log.info({ ticker: order.ticker, orderId }, "Cancel requested for unfilled order");
+        } catch (cancelErr) {
+          const cancelMsg = cancelErr instanceof Error ? cancelErr.message : String(cancelErr);
+          cancelNote = ` Cancel attempt FAILED (${cancelMsg}) — manual reconciliation required if order fills.`;
+          log.error({ ticker: order.ticker, orderId, error: cancelMsg }, "Cancel attempt failed");
+        }
+      }
+
+      await logExecution(order.id, "FILL_NOT_CONFIRMED", `${reason}. No Trade row will be created.${cancelNote}`);
       try {
         await sendTelegram({
-          text: `<b>⚠ FILL NOT CONFIRMED</b>\n<code>${order.ticker}</code> — T212 order ${orderId} not FILLED after 5s (status: ${confirmed?.status ?? "unknown"}).\nNo DB Trade row created. Verify on T212 manually.`,
+          text: `<b>⚠ FILL NOT CONFIRMED</b>\n<code>${order.ticker}</code> — T212 order ${orderId} not FILLED after ${elapsedSec}s (status: ${confirmed?.status ?? "unknown"}).${cancelNote}`,
         });
       } catch { /* best effort */ }
       return { success: false, t212OrderId: orderId, error: reason };
