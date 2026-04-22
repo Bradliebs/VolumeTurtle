@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/db/client";
 import { config } from "@/lib/config";
-import { getUniverse, hasMinimumLiquidity } from "@/lib/universe/tickers";
+import { getUniverse, hasMinimumLiquidity, filterUniverseByMarket } from "@/lib/universe/tickers";
+import type { MarketFilter } from "@/lib/universe/tickers";
 import { fetchEODQuotes } from "@/lib/data/fetchQuotes";
 import { generateSignal, calculateAverageVolume, isVolumeSpike, isPriceConfirmed } from "@/lib/signals/volumeSignal";
 import type { VolumeSignal } from "@/lib/signals/volumeSignal";
@@ -46,6 +47,8 @@ export async function GET(request: NextRequest) {
   if (limited) return limited;
 
   const dryRun = request.nextUrl.searchParams.get("dry") === "true";
+  const marketParam = request.nextUrl.searchParams.get("market") as MarketFilter | null;
+  const market: MarketFilter = marketParam === "LSE" || marketParam === "US" || marketParam === "EU" ? marketParam : "ALL";
   const today = new Date();
   const startTime = Date.now();
   let scanRunId: number | null = null;
@@ -57,7 +60,7 @@ export async function GET(request: NextRequest) {
     // Create ScanRun record (unless dry run)
     if (!dryRun) {
       const scanRun = await prisma.scanRun.create({
-        data: { startedAt: today, status: "RUNNING", trigger: "MANUAL", market: "ALL" },
+        data: { startedAt: today, status: "RUNNING", trigger: "MANUAL", market },
       });
       scanRunId = scanRun.id;
     }
@@ -75,7 +78,7 @@ export async function GET(request: NextRequest) {
     const marketRegime = await calculateMarketRegime();
 
     // 2. Fetch EOD quotes
-    const universe = getUniverse();
+    const universe = filterUniverseByMarket(getUniverse(), market);
     const quoteMap = await fetchEODQuotes(universe);
     const fetchedTickers = Object.keys(quoteMap);
 

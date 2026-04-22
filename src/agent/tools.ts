@@ -31,6 +31,22 @@ const db = prisma as unknown as {
   };
   trade: { findUnique: (args: unknown) => Promise<Record<string, unknown> | null> };
   ticker: { findFirst: (args: unknown) => Promise<Record<string, unknown> | null> };
+  scanRun: {
+    findFirst: (args: unknown) => Promise<{ id: number; startedAt: Date; completedAt: Date | null; market: string } | null>;
+  };
+  scanResult: {
+    findMany: (args: unknown) => Promise<Array<{
+      ticker: string;
+      scanDate: Date;
+      signalFired: boolean;
+      compositeGrade: string | null;
+      compositeScore: number | null;
+      suggestedEntry: number | null;
+      hardStop: number | null;
+      shares: number | null;
+      dollarRisk: number | null;
+    }>>;
+  };
 };
 
 export const TOOL_DEFINITIONS = [
@@ -3179,63 +3195,67 @@ async function buildOpportunityFallback(reason: string): Promise<ToolResult> {
   };
 }
 
-async function handleTriggerOpportunityScan(baseUrl: string): Promise<ToolResult> {
-  // GET /api/scan runs the full universe scan. The scan API finds signals
-  // but does NOT create PendingOrders — we must create them here from the
-  // signalsFired data so the agent can execute them in this same cycle.
-  const SCAN_TIMEOUT_MS = 75_000;
+function getOpportunityScanMarket(now: Date): "LSE" | "US" | "ALL" {
+  const hour = now.getUTCHours();
+  // Prefer LSE while it is open; then prefer US in the US session.
+  if (hour >= 7 && hour < 17) return "LSE";
+  if (hour >= 13 && hour < 21) return "US";
+  return "ALL";
+}
+
+async function handleTriggerOpportunityScan(_baseUrl: string): Promise<ToolResult> {
+  // Source signals from the most recent COMPLETED scan written by the
+  // scheduled scanners (LSE/US/midday). The agent must NOT trigger a
+  // synchronous full-universe HTTP scan here — that fan-outs hundreds of
+  // Yahoo Finance requests and routinely exceeds 150s, blocking the cycle
+  // and producing the "Scan attempt timed out" warnings.
+  //
+  // If the DB has no recent scan results we degrade to existing pending
+  // orders so the agent still has something to act on.
+  const parsedMaxAge = Number.parseInt(process.env["AGENT_OPPORTUNITY_SCAN_MAX_AGE_MIN"] ?? "", 10);
+  const MAX_AGE_MIN = Number.isFinite(parsedMaxAge) && parsedMaxAge > 0 ? parsedMaxAge : 360; // default 6h
+  const cutoff = new Date(Date.now() - MAX_AGE_MIN * 60_000);
+
   try {
-    const scanUrl = new URL("/api/scan", baseUrl);
-    // Dry-run avoids DB writes and is generally faster for opportunity refresh.
-    scanUrl.searchParams.set("dry", "true");
+    const recentRun = await db.scanRun.findFirst({
+      where: { status: "COMPLETED", startedAt: { gte: cutoff } },
+      orderBy: { startedAt: "desc" },
+    } as unknown);
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-    let res: Response;
-    try {
-      res = await fetch(scanUrl.toString(), {
-        method: "GET",
-        headers: agentHeaders(),
-        signal: controller.signal,
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        return buildOpportunityFallback(`Scan timed out after ${Math.round(SCAN_TIMEOUT_MS / 1000)}s`);
-      }
-      throw err;
-    } finally {
-      clearTimeout(timeout);
+    if (!recentRun) {
+      return buildOpportunityFallback(
+        `No completed scan in the last ${MAX_AGE_MIN}m — relying on existing pending signals. Scheduled scanners (LSE/US/midday) populate this; check Task Scheduler if it stays empty.`,
+      );
     }
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      return buildOpportunityFallback(`Scan API error ${res.status}${detail ? `: ${detail.slice(0, 120)}` : ""}`);
-    }
-    const data = (await res.json()) as {
-      summary?: unknown;
-      signalsFired?: Array<{
-        ticker: string;
-        suggestedEntry: number;
-        hardStop: number;
-        volumeRatio: number;
-        rangePosition: number;
-        atr20: number;
-        compositeScore?: { grade?: string; total?: number };
-        positionSize?: { shares: number; dollarRisk: number } | null;
-      }>;
-    };
-    const summary = data.summary ?? null;
-    const signalsFired = data.signalsFired ?? [];
+    // Pull all signal-firing rows from the most recent scan date.
+    const scanDay = new Date(recentRun.startedAt);
+    scanDay.setUTCHours(0, 0, 0, 0);
+    const nextDay = new Date(scanDay.getTime() + 24 * 60 * 60_000);
 
-    // Filter to A/B grade signals with valid position sizing
-    const qualifying = signalsFired.filter((s) => {
-      const grade = s.compositeScore?.grade;
-      return (grade === "A" || grade === "B") && s.positionSize && s.positionSize.shares > 0;
-    });
+    const rows = await db.scanResult.findMany({
+      where: {
+        signalFired: true,
+        scanDate: { gte: scanDay, lt: nextDay },
+        compositeGrade: { in: ["A", "B"] },
+      },
+      orderBy: [{ compositeScore: "desc" }],
+      take: 25,
+    } as unknown);
 
-    // Create PendingOrders for qualifying signals
+    // Filter to rows that have valid sizing data
+    const qualifying = rows.filter(
+      (r) =>
+        r.suggestedEntry != null &&
+        r.hardStop != null &&
+        r.shares != null &&
+        r.shares > 0 &&
+        r.dollarRisk != null,
+    );
+
     const created: Array<Record<string, unknown>> = [];
     const windowMins = 240; // 4-hour default execution window
+
     for (const sig of qualifying.slice(0, 3)) {
       // Skip if a pending order already exists for this ticker
       const existing = await db.pendingOrder.findMany({
@@ -3251,18 +3271,17 @@ async function handleTriggerOpportunityScan(baseUrl: string): Promise<ToolResult
       } catch { /* use default */ }
 
       const cancelDeadline = new Date(Date.now() + windowMins * 60_000);
-      const grade = sig.compositeScore?.grade ?? "B";
       const order = await db.pendingOrder.create({
         data: {
           ticker: sig.ticker,
           sector,
           signalSource: "volume",
-          signalGrade: grade,
-          compositeScore: sig.compositeScore?.total ?? 0,
-          suggestedShares: sig.positionSize!.shares,
-          suggestedEntry: sig.suggestedEntry,
-          suggestedStop: sig.hardStop,
-          dollarRisk: sig.positionSize!.dollarRisk,
+          signalGrade: sig.compositeGrade ?? "B",
+          compositeScore: sig.compositeScore ?? 0,
+          suggestedShares: sig.shares!,
+          suggestedEntry: sig.suggestedEntry!,
+          suggestedStop: sig.hardStop!,
+          dollarRisk: sig.dollarRisk!,
           status: "pending",
           cancelDeadline,
           isRunner: false,
@@ -3272,14 +3291,18 @@ async function handleTriggerOpportunityScan(baseUrl: string): Promise<ToolResult
     }
 
     const signals = created.map(mapPendingOrderToAgentSignal);
+    const ageMin = Math.round((Date.now() - recentRun.startedAt.getTime()) / 60_000);
 
     return {
       success: true,
       data: {
         triggered: true,
-        scanCompletedAt: new Date().toISOString(),
-        summary,
-        totalSignalsFired: signalsFired.length,
+        sourcedFrom: "recent_scan_results",
+        scanRunId: recentRun.id,
+        scanRunMarket: recentRun.market,
+        scanAgeMinutes: ageMin,
+        marketHint: getOpportunityScanMarket(new Date()),
+        totalSignalsFired: rows.length,
         qualifyingSignals: qualifying.length,
         pendingSignals: signals,
         signalCount: signals.length,
@@ -3287,13 +3310,13 @@ async function handleTriggerOpportunityScan(baseUrl: string): Promise<ToolResult
           ? "Evaluate these signals now — call verify_ticker then execute_signal for qualifying entries. Do NOT defer to next cycle."
           : qualifying.length > 0
             ? "Qualifying signals found but PendingOrders already exist for those tickers."
-            : signalsFired.length > 0
-              ? `Scan found ${signalsFired.length} signals but none qualified (grade A/B with valid sizing required).`
-              : "Scan completed but produced no new signals.",
+            : rows.length > 0
+              ? `Recent scan found ${rows.length} signals but none qualified (grade A/B with valid sizing required).`
+              : `Most recent scan (${ageMin}m ago, market=${recentRun.market}) produced no new signals.`,
       },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    return buildOpportunityFallback(`Opportunity scan failed: ${message}`);
+    return buildOpportunityFallback(`Opportunity lookup failed: ${message}`);
   }
 }

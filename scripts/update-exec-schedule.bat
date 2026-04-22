@@ -23,9 +23,9 @@ echo === Creating Midday Scan: 12:00 UTC weekdays ===
 schtasks /query /tn "VolumeTurtle_Scan_Midday" >nul 2>nul
 if not errorlevel 1 (
     echo   Task already exists — updating...
-    schtasks /change /tn "VolumeTurtle_Scan_Midday" /st 12:00
+    schtasks /change /tn "VolumeTurtle_Scan_Midday" /st 12:00 /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%~dp0midday-scan-hidden.ps1\""
 ) else (
-    schtasks /create /tn "VolumeTurtle_Scan_Midday" /tr "cmd /c \"%~dp0midday-scan.bat\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 12:00 /it
+    schtasks /create /tn "VolumeTurtle_Scan_Midday" /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"%~dp0midday-scan-hidden.ps1\"" /sc weekly /d MON,TUE,WED,THU,FRI /st 12:00
 )
 if not errorlevel 1 (
     echo   SUCCESS

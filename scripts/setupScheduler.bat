@@ -20,7 +20,7 @@ if "!INSTALL_DIR:~-1!"=="\" set INSTALL_DIR=!INSTALL_DIR:~0,-1!
 
 REM --- LSE Scan: 17:30 weekdays ---
 schtasks /create /tn "VolumeTurtle_Scan_LSE" ^
-  /tr "cmd /c start \"\" /min \"!INSTALL_DIR!\scripts\run-scan.bat\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"!INSTALL_DIR!\scripts\run-scan-hidden.ps1\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 17:30 ^
@@ -30,7 +30,7 @@ echo   LSE scan — every weekday at 17:30
 
 REM --- US Scan: 22:00 weekdays ---
 schtasks /create /tn "VolumeTurtle_Scan_US" ^
-  /tr "cmd /c start \"\" /min \"!INSTALL_DIR!\scripts\run-scan.bat\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"!INSTALL_DIR!\scripts\run-scan-hidden.ps1\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 22:00 ^
@@ -40,7 +40,7 @@ echo   US scan  — every weekday at 22:00
 
 REM --- Cruise Control: hourly 08:00-21:00 weekdays (covers LSE + US sessions) ---
 schtasks /create /tn "VolumeTurtle_CruiseControl" ^
-  /tr "cmd /c start \"\" /min \"!INSTALL_DIR!\scripts\cruise-daemon.bat\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"!INSTALL_DIR!\scripts\cruise-daemon-hidden.ps1\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 08:00 ^
@@ -52,7 +52,7 @@ echo   Cruise control — hourly 08:00-21:00 on weekdays
 
 REM --- Execution Scheduler: every 5 min 08:00-21:00 weekdays ---
 schtasks /create /tn "VolumeTurtle_ExecutionScheduler" ^
-  /tr "powershell -NoProfile -WindowStyle Minimized -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/executionScheduler.ts\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/executionScheduler.ts\"" ^
   /sc weekly ^
   /d MON,TUE,WED,THU,FRI ^
   /st 08:00 ^
@@ -64,7 +64,7 @@ echo   Execution scheduler — every 5 min 08:00-21:00 on weekdays
 
 REM --- Universe Snapshot: Sunday 18:00 (markets closed, no live activity) ---
 schtasks /create /tn "VolumeTurtle_UniverseSnapshot" ^
-  /tr "powershell -NoProfile -WindowStyle Minimized -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/snapshotUniverse.ts\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/snapshotUniverse.ts\"" ^
   /sc weekly ^
   /d SUN ^
   /st 18:00 ^
@@ -74,7 +74,7 @@ echo   Universe snapshot — every Sunday at 18:00
 
 REM --- Auto-Tune: Sunday 19:00 (after snapshot, before Mon trading) ---
 schtasks /create /tn "VolumeTurtle_AutoTune" ^
-  /tr "powershell -NoProfile -WindowStyle Minimized -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/autoTune.ts --years 2 --notify\"" ^
+  /tr "powershell -NoProfile -WindowStyle Hidden -Command \"Set-Location -LiteralPath '!INSTALL_DIR!'; npx tsx scripts/autoTune.ts --years 2 --notify\"" ^
   /sc weekly ^
   /d SUN ^
   /st 19:00 ^
