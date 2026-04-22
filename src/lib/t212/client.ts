@@ -664,13 +664,7 @@ export async function placeMarketOrder(
   t212Ticker: string,
   quantity: number,
 ): Promise<T212Order> {
-  return t212Fetch("/equity/orders/market", settings, {
-    method: "POST",
-    body: {
-      ticker: t212Ticker,
-      quantity: Math.abs(quantity),
-    },
-  }) as Promise<T212Order>;
+  return placeMarketOrderWithPrecisionRetry(settings, t212Ticker, Math.abs(quantity));
 }
 
 /**
@@ -701,13 +695,78 @@ export async function placeMarketSellOrder(
   t212Ticker: string,
   quantity: number,
 ): Promise<T212Order> {
-  return t212Fetch("/equity/orders/market", settings, {
-    method: "POST",
-    body: {
-      ticker: t212Ticker,
-      quantity: -Math.abs(quantity),
-    },
-  }) as Promise<T212Order>;
+  return placeMarketOrderWithPrecisionRetry(settings, t212Ticker, -Math.abs(quantity));
+}
+
+function isQuantityPrecisionMismatchError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes("quantity-precision-mismatch") || msg.includes("invalid quantity precision");
+}
+
+function decimalPlaces(value: number): number {
+  const txt = value.toString();
+  const dot = txt.indexOf(".");
+  return dot >= 0 ? txt.length - dot - 1 : 0;
+}
+
+function truncateToDecimals(value: number, decimals: number): number {
+  if (!Number.isFinite(value)) return 0;
+  if (decimals <= 0) return Math.trunc(value);
+  const factor = 10 ** decimals;
+  return Math.trunc(value * factor) / factor;
+}
+
+function buildPrecisionCandidates(quantity: number): number[] {
+  const absQty = Math.abs(quantity);
+  const currentDecimals = Math.min(6, decimalPlaces(absQty));
+  const precisionOrder = [currentDecimals, 4, 3, 2, 1, 0];
+  const seen = new Set<number>();
+  const candidates: number[] = [];
+  for (const p of precisionOrder) {
+    if (p < 0 || seen.has(p)) continue;
+    seen.add(p);
+    const normalizedAbs = truncateToDecimals(absQty, p);
+    if (normalizedAbs <= 0) continue;
+    candidates.push(quantity < 0 ? -normalizedAbs : normalizedAbs);
+  }
+  return candidates;
+}
+
+async function placeMarketOrderWithPrecisionRetry(
+  settings: T212Settings,
+  t212Ticker: string,
+  signedQuantity: number,
+): Promise<T212Order> {
+  const candidates = buildPrecisionCandidates(signedQuantity);
+  let lastPrecisionErr: Error | null = null;
+
+  for (const qty of candidates) {
+    try {
+      if (qty !== signedQuantity) {
+        log.warn({ t212Ticker, requestedQty: signedQuantity, normalizedQty: qty }, "[T212] Normalizing market-order quantity precision before submit");
+      }
+      return await t212Fetch("/equity/orders/market", settings, {
+        method: "POST",
+        body: {
+          ticker: t212Ticker,
+          quantity: qty,
+        },
+      }) as T212Order;
+    } catch (err) {
+      if (!isQuantityPrecisionMismatchError(err)) {
+        throw err;
+      }
+      lastPrecisionErr = err;
+      continue;
+    }
+  }
+
+  if (lastPrecisionErr) {
+    throw new Error(`T212 rejected market order quantity precision for ${t212Ticker}. Requested ${signedQuantity}, attempted normalized quantities: ${candidates.join(", ")}. Last error: ${lastPrecisionErr.message}`);
+  }
+
+  throw new Error(`Market order quantity for ${t212Ticker} became zero after precision normalization (requested ${signedQuantity})`);
 }
 
 /**

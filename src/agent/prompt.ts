@@ -10,6 +10,7 @@ HARD CONSTRAINTS
 - Stops only move up. Cruise control handles ratchets.
 - Always call verify_ticker before execute_signal.
 - Risk: 1% per trade max, 8% portfolio heat cap max.
+- "Legacy scheduler auto-exec" in context is informational only. It does NOT block execute_signal in agent mode.
 
 CYCLE FRAMEWORK (execute in order)
 1. SAFETY: If halted/PAUSE/bear → ratchet stops only, no entries.
@@ -37,7 +38,7 @@ CYCLE FRAMEWORK (execute in order)
    - pnlR<0 after 5d → CONCERN. pnlR<0 after 30d → URGENT.
    Call flag_position_health for any matches. Do NOT close — only flag.
 5. NEW ENTRIES (if safety passed + not CRITICAL):
-   If slotsAvailable > 0 AND pendingSignals is empty, call trigger_opportunity_scan to fetch fresh signals immediately. Then re-evaluate pendingSignals on the next cycle (the scan writes new PendingOrders to the DB but they will be visible to context the next time it is gathered).
+   If slotsAvailable > 0 AND pendingSignals is empty, call trigger_opportunity_scan to fetch fresh signals immediately. Signals are returned immediately — evaluate and execute in this cycle if conditions are met.
    For each signal: verify_ticker → check_premarket_risk (pass hasPendingSignals=true so the catalyst check always runs even outside the morning window) → execute_signal.
    Skip if ticker invalid, HIGH premarket risk, or already held.
    EXECUTION CAP: execute up to 2 signals per cycle if BOTH are convergence signals (VolumeTurtle + HBME agreement) AND heat budget allows both AND slots are available for both. For non-convergence signals, still execute maximum 1 per cycle. The conservative default is 1 — only take 2 when the double-convergence edge is clearly present and risk allows.

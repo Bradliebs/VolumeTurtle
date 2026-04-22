@@ -122,7 +122,7 @@ export async function POST(req: Request) {
       const heatCapPct = heatCapEnv ? parseFloat(heatCapEnv) : NaN;
       if (Number.isFinite(heatCapPct) && heatCapPct > 0 && heatCapPct <= 0.5) {
         const snapshot = await db.accountSnapshot.findFirst({
-          orderBy: { snapshotAt: "desc" },
+          orderBy: { date: "desc" },
         } as unknown);
         if (snapshot && snapshot.balance > 0) {
           const openTrades = await db.trade.findMany({

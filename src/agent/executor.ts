@@ -4,11 +4,11 @@ import type { AgentContext } from "./context";
 import { buildSystemPrompt } from "./prompt";
 import { config } from "@/lib/config";
 
-const MAX_ITERATIONS = 12;
+const MAX_ITERATIONS = 20;
 
 // Defaults matching AiSettings seed — will be overridden if a DB read is wired later
 export const DEFAULT_MODEL = "claude-sonnet-4-20250514";
-const DEFAULT_MAX_TOKENS = 2048;
+const DEFAULT_MAX_TOKENS = 4096;
 
 export interface ExecutorResult {
   reasoning: string;
@@ -128,6 +128,14 @@ export async function runAgentCycle(
     }
 
     if (data.stop_reason === "end_turn") break;
+    if (data.stop_reason === "max_tokens") {
+      console.warn(`[AgentExecutor] Claude hit max_tokens (${DEFAULT_MAX_TOKENS}) at iteration ${iterations} — response was truncated. Continuing loop to allow recovery.`);
+      // Push the truncated assistant message and a continuation prompt.
+      // Claude will resume from where it was cut off.
+      messages.push({ role: "assistant", content: data.content });
+      messages.push({ role: "user", content: "Your previous response was truncated due to length. Continue from where you left off. Remember: you MUST call send_telegram_summary before finishing." });
+      continue;
+    }
     if (data.stop_reason !== "tool_use") break;
 
     const toolUseBlocks = data.content.filter((b) => b.type === "tool_use");
@@ -249,15 +257,16 @@ function buildContextMessage(ctx: AgentContext): string {
   } else {
     for (const s of ctx.pendingSignals) {
       const tag = s.convergence ? " | CONV" : "";
+      const overdue = s.overdueMinutes > 0 ? ` | OVERDUE ${s.overdueMinutes}m` : "";
       lines.push(
-        `  [${s.id}] ${s.ticker} | ${s.grade} | ${s.compositeScore.toFixed(2)} | ${s.entryPrice} | ${s.stopPrice} | ${s.engine}${tag}`
+        `  [${s.id}] ${s.ticker} | ${s.grade} | ${s.compositeScore.toFixed(2)} | ${s.entryPrice} | ${s.stopPrice} | ${s.engine}${tag}${overdue}`
       );
     }
   }
 
   lines.push(`\nSETTINGS`);
   lines.push(
-    `  Auto-execution: ${ctx.settings.autoExecutionEnabled ? "ON" : "OFF"}`
+    `  Legacy scheduler auto-exec: ${ctx.settings.autoExecutionEnabled ? "ON" : "OFF"}`
   );
   lines.push(`  Min grade:      ${ctx.settings.autoExecutionMinGrade}`);
   lines.push(`  Max per sector: ${ctx.settings.maxPositionsPerSector}`);

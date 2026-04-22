@@ -1,6 +1,5 @@
 import { prisma } from "@/db/client";
 import type { AgentContext } from "./context";
-import type { ShadowReport } from "./shadowEngine";
 
 const db = prisma as unknown as {
   agentDecisionLog: {
@@ -24,8 +23,6 @@ export interface CycleLogPayload {
   telegramSent: boolean;
   totalDurationMs: number;
   errorMessage?: string;
-  shadowReport?: ShadowReport | null;
-  promptVersion?: string;
 }
 
 export async function logCycle(payload: CycleLogPayload): Promise<void> {
@@ -43,8 +40,6 @@ export async function logCycle(payload: CycleLogPayload): Promise<void> {
             success: a.result.success,
             error: a.result.error ?? null,
           })),
-          shadow: payload.shadowReport ?? null,
-          promptVersion: payload.promptVersion ?? null,
         }),
         telegramSent: payload.telegramSent,
         durationMs: payload.totalDurationMs,

@@ -171,6 +171,7 @@ export interface AgentContext {
     sector: string | null;
     engine: string;
     convergence: boolean;
+    overdueMinutes: number;
   }>;
   riskBudget: {
     maxPositions: number;
@@ -308,10 +309,20 @@ export async function gatherContext(cycleId: string | null = null): Promise<Agen
     };
   }));
 
+  // Agent runs hourly; a strict cancelDeadline filter can hide legitimate
+  // pending signals between cycles. Include recent overdue orders so the
+  // agent can still decide whether to execute them this cycle.
+  const pendingGraceCutoff = new Date(now.getTime() - 6 * 60 * 60_000);
   const pending = await db.pendingOrder.findMany({
-    where: { status: "pending", cancelDeadline: { gt: now } },
-    orderBy: { compositeScore: "desc" },
-    // Top 5 only — agent needs to pick 1 slot, not evaluate 100 options.
+    where: {
+      status: "pending",
+      OR: [
+        { cancelDeadline: { gt: now } },
+        { cancelDeadline: { lte: now }, createdAt: { gte: pendingGraceCutoff } },
+      ],
+    },
+    orderBy: [{ compositeScore: "desc" }, { createdAt: "desc" }],
+    // Top 5 only — agent needs to pick 1-2 slots, not evaluate 100 options.
     take: 5,
   } as unknown);
 
@@ -332,6 +343,11 @@ export async function gatherContext(cycleId: string | null = null): Promise<Agen
     const risk = entry > 0 ? stopDistance / entry * 100 : 1;
     const dollarRisk = (p.dollarRisk as number) ?? 0;
     const shares = (p.suggestedShares as number) ?? 0;
+    const cancelDeadline = new Date(p.cancelDeadline as Date);
+    const overdueMinutes = Math.max(
+      0,
+      Math.round((now.getTime() - cancelDeadline.getTime()) / 60_000),
+    );
     return {
       id: p.id as number,
       ticker: sym,
@@ -348,6 +364,7 @@ export async function gatherContext(cycleId: string | null = null): Promise<Agen
       sector: (p.sector as string) ?? null,
       engine: (p.signalSource as string) ?? "volume",
       convergence: engines.length > 1,
+      overdueMinutes,
     };
   });
 

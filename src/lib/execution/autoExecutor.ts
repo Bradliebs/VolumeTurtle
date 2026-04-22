@@ -158,6 +158,22 @@ export interface ExecutionResult {
   stopPushError?: string | null;
 }
 
+function isIsaIneligibleErrorText(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const v = text.toLowerCase();
+  return v.includes("i-s-a-ineligible-instrument") || v.includes("isa accounts");
+}
+
+function parseIsaBlocklist(): Set<string> {
+  const raw = process.env["T212_ISA_BLOCKLIST"] ?? "";
+  return new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter((s) => s.length > 0),
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PRE-FLIGHT CHECKS — ALL must pass before any order is placed
 // ═══════════════════════════════════════════════════════════════════════════
@@ -484,6 +500,36 @@ export async function preFlightChecks(
     if (brokerSettings && brokerSettings.environment !== "live") {
       failures.push("T212_DEMO_MODE — switch to live environment to enable auto-execution");
     }
+
+    // ISA eligibility pre-check (best-effort).
+    // T212 metadata does not currently expose a reliable ISA eligibility flag,
+    // so we enforce two early guards:
+    //  1) explicit operator blocklist via T212_ISA_BLOCKLIST env var
+    //  2) previously observed ISA ineligibility for this ticker
+    const t212Settings = loadT212Settings();
+    const isaMode = t212Settings?.accountType === "isa" || t212Settings?.accountType === "both";
+    if (isaMode) {
+      const isaBlocklist = parseIsaBlocklist();
+      if (isaBlocklist.has(order.ticker.toUpperCase())) {
+        failures.push(
+          `ISA_INELIGIBLE_PRECHECK — ${order.ticker} is on T212_ISA_BLOCKLIST. Remove from blocklist or switch account type to invest.`,
+        );
+      } else {
+        const priorFail = await db.pendingOrder.findFirst({
+          where: {
+            ticker: order.ticker,
+            status: "failed",
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+        if (priorFail && isIsaIneligibleErrorText(priorFail.failureReason)) {
+          failures.push(
+            `ISA_INELIGIBLE_PRECHECK — ${order.ticker} was previously rejected by T212 for ISA eligibility. Skipping before submit.`,
+          );
+        }
+      }
+    }
   } catch (err) {
     failures.push(`T212_CHECK_FAILED — ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -751,16 +797,38 @@ export async function executeOrder(
 export async function processPendingOrder(order: PendingOrderRow, cycleId: string | null = null): Promise<void> {
   log.info({ orderId: order.id, ticker: order.ticker }, "Processing pending order");
 
-  // Safety: expire stale orders (cancelDeadline + 5 min)
+  // Safety: cancel window handling
+  // Scheduler/manual path: strict expire at cancelDeadline + 5 min.
+  // Agent path (cycleId != null): allow a bounded grace window so hourly
+  // agent cycles can still process recent pending signals.
+  const now = new Date();
   const expiryCutoff = new Date(order.cancelDeadline.getTime() + 5 * 60_000);
-  if (new Date() > expiryCutoff) {
-    await db.pendingOrder.update({
-      where: { id: order.id },
-      data: { status: "expired", failureReason: "Order expired — missed execution window" },
-    });
-    await logExecution(order.id, "EXPIRED", "Order expired — cancelDeadline + 5min exceeded");
-    log.warn({ orderId: order.id, ticker: order.ticker }, "Order expired");
-    return;
+  const isAgentExecution = cycleId != null;
+
+  if (now > expiryCutoff) {
+    if (!isAgentExecution) {
+      await db.pendingOrder.update({
+        where: { id: order.id },
+        data: { status: "expired", failureReason: "Order expired — missed execution window" },
+      });
+      await logExecution(order.id, "EXPIRED", "Order expired — cancelDeadline + 5min exceeded");
+      log.warn({ orderId: order.id, ticker: order.ticker }, "Order expired");
+      return;
+    }
+
+    const agentGraceCutoff = new Date(order.cancelDeadline.getTime() + 6 * 60 * 60_000);
+    if (now > agentGraceCutoff) {
+      await db.pendingOrder.update({
+        where: { id: order.id },
+        data: { status: "expired", failureReason: "Order expired — agent grace window exceeded" },
+      });
+      await logExecution(order.id, "EXPIRED", "Order expired — agent grace window exceeded (6h)");
+      log.warn({ orderId: order.id, ticker: order.ticker }, "Order expired after agent grace window");
+      return;
+    }
+
+    const overdueMins = Math.round((now.getTime() - order.cancelDeadline.getTime()) / 60_000);
+    await logExecution(order.id, "AGENT_DEADLINE_OVERRIDE", `Proceeding ${overdueMins}m past cancel window under agent grace policy`);
   }
 
   // Daily limit check (use UTC for consistent daily boundary)

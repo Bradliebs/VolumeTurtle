@@ -528,8 +528,12 @@ async function main() {
           } catch { /* fallback to manual */ }
         }
 
-        if (autoExecEnabled && isAutoGrade) {
-          // Check daily limit BEFORE creating pending order
+        // Always create PendingOrders — never create Trade rows directly.
+        // Trade rows are only created by the autoExecutor after T212 fill
+        // confirmation. Direct Trade creation causes ghost/orphan positions
+        // that eat up slots and loop indefinitely.
+        {
+          // Check daily limit
           const todayStart = new Date();
           todayStart.setHours(0, 0, 0, 0);
           const todayOrders = await prisma.pendingOrder.count({
@@ -542,9 +546,18 @@ async function main() {
           const maxPerDay = (appSettingsForLimit as unknown as { autoExecutionMaxPerDay?: number })?.autoExecutionMaxPerDay ?? 2;
           if (todayOrders >= maxPerDay) {
             console.log(`  [AUTO-EXEC SKIP] Daily limit reached (${todayOrders}/${maxPerDay}) — skipping ${signal.ticker}`);
-            // Fall through to standard manual trade entry below
-          } else {
-          // Create PendingOrder instead of immediate Trade entry
+            continue;
+          }
+
+          // Check for duplicate pending order
+          const existingPending = await (prisma as any).pendingOrder.findFirst({
+            where: { ticker: signal.ticker, status: "pending" },
+          });
+          if (existingPending) {
+            console.log(`  [AUTO-EXEC SKIP] Pending order already exists for ${signal.ticker} (ID: ${existingPending.id})`);
+            continue;
+          }
+
           try {
             // Determine runner eligibility
             let isRunnerCandidate = false;
@@ -571,7 +584,7 @@ async function main() {
               ticker: signal.ticker,
               sector,
               signalSource: "volume",
-              signalGrade: grade,
+              signalGrade: grade ?? "C",
               compositeScore: signal.compositeScore?.total ?? 0,
               suggestedShares: position.shares,
               suggestedEntry: signal.suggestedEntry,
@@ -579,49 +592,13 @@ async function main() {
               dollarRisk: position.dollarRisk,
               isRunner: isRunnerCandidate,
             });
-            console.log(`  [AUTO-EXEC] ${signal.ticker} — Grade ${grade} pending order created (${position.shares} shares)`);
+            console.log(`  [AUTO-EXEC] ${signal.ticker} — Grade ${grade ?? "C"} pending order created (${position.shares} shares)`);
+            ensureTickerInCsv(signal.ticker, sector);
           } catch (autoErr) {
             console.error(`  [AUTO-EXEC ERROR] ${signal.ticker} — ${autoErr instanceof Error ? autoErr.message : String(autoErr)}`);
-            // Fallback: create trade normally
-            await prisma.trade.create({
-              data: {
-                ticker: signal.ticker,
-                entryDate: today,
-                entryPrice: signal.suggestedEntry,
-                shares: position.shares,
-                hardStop: signal.hardStop,
-                trailingStop: signal.hardStop,
-                status: "OPEN",
-                volumeRatio: signal.volumeRatio,
-                rangePosition: signal.rangePosition,
-                atr20: signal.atr20,
-              },
-            });
-            ensureTickerInCsv(signal.ticker, sector);
+            // Do NOT fall back to direct Trade creation — that causes ghost positions.
+            // The signal will be picked up on the next scan cycle.
           }
-          } // end daily limit else
-        } else {
-          // Standard manual trade entry (original behavior)
-          let sector = "Unknown";
-          try {
-            const tickerRow = await prisma.ticker.findFirst({ where: { symbol: signal.ticker } });
-            if (tickerRow?.sector) sector = tickerRow.sector;
-          } catch { /* use default */ }
-          await prisma.trade.create({
-            data: {
-              ticker: signal.ticker,
-              entryDate: today,
-              entryPrice: signal.suggestedEntry,
-              shares: position.shares,
-              hardStop: signal.hardStop,
-              trailingStop: signal.hardStop,
-              status: "OPEN",
-              volumeRatio: signal.volumeRatio,
-              rangePosition: signal.rangePosition,
-              atr20: signal.atr20,
-            },
-          });
-          ensureTickerInCsv(signal.ticker, sector);
         }
 
         // ── Runner designation ────────────────────────────────────────
