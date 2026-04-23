@@ -464,7 +464,7 @@ async function handleRatchetStops(
         headers: agentHeaders(),
         body: JSON.stringify({ dryRun: input["dryRun"] ?? false }),
       },
-      120_000,
+      300_000,
       "Ratchet",
     );
   } catch (err) {
